@@ -25,9 +25,38 @@ sc_export的地方。
 == sc_port_registry
 [[api::sc_port_registry]]
 
-sc_port_registry是一个管理类，这个类管理了所有生成的sc_port_base以及继承类：当每个
-sc_port_base以及继承类构造的时候，都会将自己注册到sc_port_registry中。
+sc_port_registry是一个管理类，这个类管理了所有生成的sc_port_base以及派生类：当每个
+sc_port_base以及派生类构造的时候，都会将自己注册到sc_port_registry中。
 
+.src/sysc/communication/sc_port.cpp
+[source,cpp]
+----
+sc_port_base::sc_port_base( 
+    int max_size_, sc_port_policy policy 
+) : 
+    sc_object( sc_gen_unique_name( "port" ) ),
+    m_bind_info(NULL)
+{
+    simcontext()->get_port_registry()->insert( this ); <1>
+    m_bind_info = new sc_bind_info( max_size_, policy );
+}
+
+sc_port_base::sc_port_base( 
+    const char* name_, int max_size_, sc_port_policy policy 
+) : 
+    sc_object( name_ ),
+    m_bind_info(NULL)
+{
+    simcontext()->get_port_registry()->insert( this ); <2>
+    m_bind_info = new sc_bind_info( max_size_, policy );
+}
+----
+<1> 将构造的this指针放入port registry中进行管理
+<2> 将构造的this指针放入port registry中进行管理
+
+此外，sc_port_registry还作为管理所有port的注册表，提供了不同的simulation stage
+需要调用的函数接口，以供simc使用。
+例如，
 [[api::sc_port_registry::elaboration_done]]
 sc_port_base的<<api::sc_port_base::complete_binding, complete_binding>>函数在
 sc_port_base_registry的elaboration函数中被调用。
@@ -588,7 +617,6 @@ sc_port_b<IF>继承自sc_port_base，主要增加的实现是增加了interface�
 template <class IF>
 class sc_port_b
 : public sc_port_base
-{
 ----
 
 增加的模板参数IF，必须是sc_interface的派生类，而不能是其他的类。模板参数IF提供的信息
@@ -796,17 +824,48 @@ class sc_port
 
 sc_port<IF, N, P>相比于sc_port_b<IF>，并没有新增加其他的功能。
 
-== sc_fifo_in和sc_fifo_out
+== 几种典型的sc_port派生类
+
+=== sc_fifo_in和sc_fifo_out
 
 sc_fifo_in和sc_fifo_out是sc_port对于fifo interface的特化形式。从本质上来讲，sc_fifo_in
 和sc_fifo_out仍然是sc_port，需要绑定到具体的sc_fifo上才能够起作用。
 
-== sc_in和sc_out
+.src/sysc/communication/sc_fifo_ports.h
+[source,cpp]
+----
+template <class T>
+class sc_fifo_in
+: public sc_port<sc_fifo_in_if<T>,0,SC_ONE_OR_MORE_BOUND>
+----
+
+对于sc_fifo_in，其能够容纳的是 `sc_fifo_in_if<T>`
+类型的interface指针。 `sc_fifo_in_if<>` 模板类主要定义了 read和nb_read的接口函数。
+sc_fifo_in没有绑定数目的限制。
+
+.src/sysc/communication/sc_fifo_ports.h
+[source,cpp]
+----
+template <class T>
+class sc_fifo_out
+: public sc_port<sc_fifo_out_if<T>,0,SC_ONE_OR_MORE_BOUND>
+----
+
+sc_fifo_out所能容纳的则是 `sc_fifo_out_if<T>` 类型的inteface
+种子很。 `sc_fifo_out_if<>` 模板类主要定义了write和nb_write的接口函数。
+sc_fifo_out没有绑定数目的限制。
+
+sc_fifo_in和sc_fifo_out可以绑定到一个fifo上（fifo实现了sc_fifo_in_if<T>和
+sc_fifo_out_if<T>）。对于module而言，sc_fifo_in这个port相当于从fifo读数据，
+因此对于module来说是in。同理，sc_fifo_out这个port对于module而言相当于out。
+
+
+=== sc_in和sc_out
 
 sc_in和sc_out是sc_port对于signal interface的特化形式，从本质上来讲，sc_in和sc_out仍然是
 sc_port，需要绑定到具体的signal上才能够起作用。
 
-=== sc_in
+==== sc_in
 
 sc_in是signal类型的输入端口模型，需要绑定到signal类型上，不能绑定到fifo类型上。
 
@@ -853,7 +912,7 @@ public:
 3. `read` 返回当前值
 4. `get_data_ref` 这个主要为了tracing用，普通用户用不到
 
-=== sc_inout
+==== sc_inout
 
 介绍sc_out之前，我们先介绍一下sc_inout类型。sc_inout并不像verilog HDL那种inout类型一样，
 是双向端口类型，而更多的是一种能够读回值的输出端口。由于SystemC使用sc_interface的原因，
@@ -924,7 +983,7 @@ class sc_signal_inout_if
 正如我们之前分析的一样， `sc_signal_out_if` 其实就是 `sc_signal_inout_if` ，两者
 并没有任何区别。
 
-=== sc_out
+==== sc_out
 
 sc_out类型其实就是一个sc_inout类型。SystemC在代码里给出了定义一个新的模板类，而不是
 简单做一个typedef的原因：为了方便debug。
@@ -1026,6 +1085,199 @@ MB.EB已经完成了到 sc_interface的绑定工作。对于sc_port而言这是�
 * 能够隐式cast成sc_interface类型，因此基本可以代替sc_interface的使用，例如可以直接作为static sensitive源（存疑，文档里说不能这么做，但我发现从语法上来说应该是可以这么干的）
 * 隐藏实现细节
 * 效率更高，因为sc_export的绑定本质上就是保存sc_interface继承类指针，通过sc_export访问sc_interface继承类的接口函数更快（其实和sc_port直接访问效果是一样的）
+
+=== sc_event_queue_port
+
+sc_event_queue_port就是保存一个sc_event_queue_if指针的port:
+
+.src/sysc/communication/sc_event_queue.h
+[source,cpp]
+----
+//
+// Using event queue as a port
+//
+typedef sc_port<sc_event_queue_if,1,SC_ONE_OR_MORE_BOUND> sc_event_queue_port;
+SC_API_TEMPLATE_DECL_ sc_port<sc_event_queue_if,1,SC_ONE_OR_MORE_BOUND>;
+----
+
+而 sc_event_queue_if定义了sc_event_queue的接口函数：
+
+.src/sysc/communication/sc_event_queue.h
+[source,cpp]
+----
+// ---------------------------------------------------------------------------
+// sc_event_queue_if
+// ---------------------------------------------------------------------------
+
+class SC_API sc_event_queue_if : public virtual sc_interface
+{
+public:
+    virtual void notify (double when, sc_time_unit base) =0;
+    virtual void notify (const sc_time& when) =0;
+    virtual void cancel_all() =0;
+};
+----
+
+主要有两个接口函数需要实现：
+
+* 两种重载形式的notify
+* 一个cancel_all
+
+sc_event_queue继承并实现了sc_event_queue_if：
+
+.src/sysc/communication/sc_event_queue.h
+[source,cpp]
+----
+class SC_API sc_event_queue: 
+  public sc_event_queue_if,
+  public sc_module
+----
+
+`sc_event_queue` 实现的功能是，对于一个 `sc_event` ，可以多次notify。对于真正的
+sc_event，如果在之上调用多个notify，只会保存最近一次事件的notify请求，其他的notify
+请求全部被丢弃掉。为了提供保存时间的能力，SystemC提供了 `sc_event_queue` 这种数据结构。
+这种数据结构实现功能是，对于每一次调用notify，都会将时间记录下来，在未来事件到达的时候，
+调度相关事件。
+
+例如，对于一个sc_event_queue，我们在10ns的时候在其上notify(5ns)，在12ns的时候
+在其上notify(4ns)，那么这个sc_event_queue会在15ns（第一次notify的时候）以及
+16ns（第二次notify的时候）触发，调度阻塞在这个事件，或者设置这个事件为敏感源的process
+handle进入下一轮delta cycle的runnable列表中。
+
+为了实现这个实际功能，在sc_event_queue中，不仅保存了**一个**sc_event事件对象本身，
+还保存了需要在特定时间触发事件的时间列表：
+
+.src/sysc/communication/sc_event_queue.h
+[source,cpp]
+----
+    sc_ppq<sc_time*> m_ppq; <1>
+    sc_event m_e; <2>
+    sc_dt::uint64 m_change_stamp;
+    unsigned m_pending_delta;
+----
+<1> 保存需要通知时间的时间列表
+<2> sc_event_queue其实只有一个sc_event对象
+
+`sc_event_queue::notify` 提供了notify功能：
+
+.src/sysc/communication/sc_event_queue.h
+[source,cpp]
+----
+void sc_event_queue::notify (const sc_time& when)
+{
+    m_change_stamp = simcontext()->change_stamp();
+    sc_time* t = new sc_time( when+sc_time_stamp() );
+    if ( m_ppq.size()==0 || *t < *m_ppq.top() ) {
+	m_e.notify( when );
+    }
+    m_ppq.insert( t );
+}
+.src/sysc/communication/sc_event_queue.h
+[source,cpp]
+----
+
+`sc_event_queue::notify` 传入的时间参数是相当于现在的仿真时刻而言的。为了统一仿真时间，
+在函数实现内部，将需要的notify延迟时间和当前仿真事件加起来，得到一个绝对的时间。如果这个
+需要通知的时间小于目前保存在queue里的最近时间（queue会自动排序时间），那么就需要在
+内部事件 `m_e` 上调用notify，并提供延时时间。如果queue本身为空，也需要立即调用notify。
+之后，将这个绝对时间放入queue中。
+
+`sc_event_queue` 同时也是一个sc_module，在构造函数中：
+
+.src/sysc/communication/sc_event_queue.cpp
+[source,cpp]
+----
+sc_event_queue::sc_event_queue( sc_module_name name_ )
+    : sc_module( name_ ),
+      m_ppq( 128, sc_time_compare ),
+      m_e( sc_event::kernel_event ),
+      m_change_stamp(0),
+      m_pending_delta(0)
+{
+    SC_METHOD( fire_event );
+    sensitive << m_e;
+    dont_initialize();
+}
+----
+
+设置了一个method，句柄为 `fire_event`，设置内部的 `m_e` 为静态敏感源。这样一来，当第一次
+在给定时间上， `m_e` 被trigger的时候，也会调用 `fire_event` 成员函数：
+
+.src/sysc/communication/sc_event_queue.cpp
+[source,cpp]
+----
+void sc_event_queue::fire_event()
+{
+    if ( m_ppq.empty() ) { // event has been cancelled
+        return;
+    }
+    sc_time* t = m_ppq.extract_top();
+    sc_assert( *t==sc_time_stamp() );
+    delete t;
+
+    if ( m_ppq.size() > 0 ) {
+	m_e.notify( *m_ppq.top() - sc_time_stamp() );
+    }
+}
+----
+
+在 `fire_event` 函数内，首先检查queue是否为空，空的queue意味着没有需要notify
+的时间点了。如果非空，那么这个queue的top所保存的触发时间点必然等于当前时间点，这是因为
+在notify的时候，我们总会把离当前仿真时刻最近的时间给notify了。而queue里top的那个
+触发时间点，其实就是导致本次fire_event被调用的触发点了。
+
+将这个导致 `fire_event` 被调度的时间点删除之后，如果queue不为空，那么就意味着我们还需要
+继续在事件上notify，只不过这个notify需要指定的时间延迟是由queue里保存到时间点
+减去当前仿真时间点，共同算出来的。
+
+回到我们之前举的例子。10ns的时候notify(5ns)， `sc_event_finder` 发现此时queue为空，因此
+调用 `m_e.notify(5ns)`，设定这个内部事件在15ns的时候被触发。在12ns的时候调用notify(4ns)，
+此时queue不为空，并且算出来的触发事件16ns大于queue中保存到最近出发时间15ns，所以16ns这个触发
+的绝对时间点只是被保存在queue里。等到了15ns的时候，内部事件 `m_e` 被触发，除了调度其他线程
+以外，还会调度本 `sc_event_finder` 的 `fire_event` method。在fire_event中，首先从
+queue中挪去了导致本次事件触发的15ns触发时间点。接下来queue非空，找到最近的16ns触发时间点，然后
+得到需要的延迟时间为 16ns - 15ns，也就是1ns，所以在内部事件 `m_e` 上调用 `notify(1ns)` 。
+如此循环往复，直到queue为空。
+
+如果10ns的时候notify(5ns)，并且在 12ns的时候notify(1ns)，`sc_event_finder` 的
+notify会发现第二个设定出发的时间点13ns早于保存的最近触发时间点15ns，因此会在
+`m_e` 上调用 `notify(1ns)`。由于一个单独的 `sc_event` 只保留最近的触发时间点，因此
+在 `m_e` 上多次调用 `notify()` 是没问题的。这样一来，13ns事件触发，fire_event同时会设置
+下一次触发的时间点是 2ns以后，完成最开始 10ns时候 notify(5ns)的需求。
+
+另一个需要实现的接口函数式 `cancel_all`:
+
+.src/sysc/communication/sc_event_queue.cpp
+[source,cpp]
+----
+void sc_event_queue::cancel_all()
+{
+    m_pending_delta = 0;
+    while( m_ppq.size() > 0 )
+	delete m_ppq.extract_top();
+    m_e.cancel();
+}
+----
+
+只是简单地将所有保存的数据清空。
+
+`sc_event_finder` 作为 `sc_interface` 的派生类， `default_event` 接口函数
+返回的就是内部事件对象 `m_e` 的引用：
+
+.src/sysc/communication/sc_event_queue.h
+[source,cpp]
+----
+inline
+const sc_event& sc_event_queue::default_event() const
+{ 
+  return m_e; 
+}
+----
+
+所以如果将一个 `sc_event_queue` 作为静态敏感源，实质上等同于将这个 `m_e` 事件
+设置为敏感事件源。
+
+
 
 == event_finder
 [[api::event_finder]]

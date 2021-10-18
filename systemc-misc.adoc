@@ -145,7 +145,8 @@ sc_port_base::make_sensitive( sc_method_handle handle_,
 }
 ----
 
-这里将sc_event_finder先设置在sc_in<bool> clk中。
+sc_port_base的make_sensitive将sc_event_finder设置在sc_in<bool> clk这个sc_port的
+bind_info中，这里放置着在bind_info的thread_vec数组里。
 
 在SC_CTHREAD的情况下， `sensitive(clk.pos())` 调用的则是：
 
@@ -161,7 +162,7 @@ sc_sensitive::operator () ( sc_cthread_handle handle_,
 }
 ----
 
-最终调用的也是讲sc_event_finder设置在sc_in<bool> clk中。
+最终调用的也是讲sc_event_finder设置在sc_in<bool> clk中，效果和SC_THREAD时候一致。
 
 module构造的结果是，在 `sc_in<bool> clk` 中，保存了相应的event finder函数，主要是一个
 函数指针。因为module构造的时候，输入端口 `sc_in<bool> clk` 作为一个port还没有绑定
@@ -173,9 +174,8 @@ module构造的结果是，在 `sc_in<bool> clk` 中，保存了相应的event f
 
 在所有的hierarchy都初始化，并且port绑定到interface之后，sc_in<bool> clk即绑定到sc_clock
 上。在elaboration_done阶段，sc_port_registry调用所有port的complete_binding函数，
-同时也会调用sc_in<bool> clk的complete_binding函数。通过给的interface指针 `&clock`
-以及成员函数指针 `posedge_event`
-
+这会调用sc_in<bool> clk的complete_binding函数。
+这里event_finder主要保存的是sc_clock的成员函数指针 `posedge_event`:
 
 .src/sysc/communication/sc_signal.cpp
 [source,cpp]
@@ -219,6 +219,34 @@ sc_signal_channel::lazy_kernel_event( sc_event** ev, const char* name ) const
             p->handle->add_static_event( event );
         }
 ----
+
+`iface` 指针就是 `sc_clock clock` 指针。所以这里的 `p->event_finder->find_event(iface)`
+返回的结果是：
+
+.src/sysc/communication/sc_event_finder.h
+[source,cpp]
+----
+template <class IF>
+inline
+const sc_event&
+sc_event_finder_t<IF>::find_event( sc_interface* if_p ) const
+{
+    const IF* iface = ( if_p ) ? dynamic_cast<const IF*>( if_p ) :
+                                 dynamic_cast<const IF*>( port().get_interface() );
+    if( iface == 0 ) {
+        report_error( SC_ID_FIND_EVENT_, "port is not bound" );
+        return sc_event::none;
+    }
+    return (const_cast<IF*>( iface )->*m_event_method) ();
+}
+----
+
+传入的 `if_p` 指针是 `&clock`。这里首先通过dynamic_cast，将基类指针
+转回到派生类指针，之所以需要派生类的指针，而不能使用基类指针，是因为
+sc_event_finder需要支持那些不是sc_interface接口类定义的虚函数。
+例如这里的 `posedge_event` 就是一个sc_interface基类没有定义的函数，但是在
+派生类 `sc_clock` 中却定义了这个函数。cast回到派生类指针后，根据这个函数指针
+和注册的成员函数指针，调用函数，获得需要的event事件对象。
 
 这部分代码取得的 `event` 引用就是 `*m_posedge_event_p` 这个事件。调用
 `p->handle->add_static_event(event)` 的结果则是：
@@ -290,8 +318,8 @@ process handle内部也保存了 `*m_posedge_event_p` 的指针。
 
 === 仿真过程中
 
-在运行中，由于sc_clock的自激励，`*m_posedge_event_p` 在UPDATE PHASE，根据
-primitive channel的framework, `update` 函数被调用：
+在运行中，由于sc_clock的自激励，在UPDATE PHASE，根据
+primitive channel的framework, `*m_posedge_event_p` 的成员函数 `update` 函数被调用：
 
 .src/sysc/communication/sc_signal.cpp
 [source,cpp]
@@ -320,7 +348,7 @@ sc_signal<bool,POL>::do_update()
 }
 ----
 
-这又调用了do_update函数。在do_update函数中，除了调用基类的do_update函数外，最为重要的
+这又调用了do_update成员函数。在do_update函数中，除了调用基类的do_update函数外，最为重要的
 是 `sc_signal_channel::notify_next_delta(event_p)`。对于发生posedge信号而言：
 
 .src/sysc/communication/sc_signal.h
@@ -330,7 +358,7 @@ sc_signal<bool,POL>::do_update()
         { if( ev ) ev->notify_next_delta(); }
 ----
 
-这等同调用 `m_posedge_event_p` 的notify_next_delta函数，此时位于crunch的UPDATE PHASE。
+这等同在UPDATE PHASE调用 `m_posedge_event_p` 的notify_next_delta函数:
 
 .src/sysc/kernel/sc_event.h
 [source,cpp]
@@ -352,3 +380,5 @@ sc_event::notify_next_delta()
 放入simc的delta event列表中。这样一来，在NOTIFICATION PHASE，所有被注册到
 simc delta event列表中的事件都会调度其trigger函数，从而调度process handle的trigger_static
 函数，将这个process handle放入下一个delta cycle的runnable列表中。
+
+至此，sc_clock的pos()完成了将所有对这个事件敏感的process handle的调度工作。
