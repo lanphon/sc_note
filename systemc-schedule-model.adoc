@@ -57,13 +57,13 @@ Method可以使用<<api::next_trigger, next_trigger>> 来动态设置下一次�
 如果在Method内部多次使用 `next_trigger` 设置动态调度条件，那么只有最后一次有效的 `next_trigger` 设置上，之前的
 `next_trigger` 都会被忽略掉。
 
-所谓的调度条件，指的是何时Method线程会被再次执行。所以在仿真器运行过程中，一个Method线程会被多次执行。
+所谓的调度条件，指的是何时Method线程会被再次执行。所以在仿真器运行过程中，一个Method线程可以被多次执行。
 
 === ( C )Thread线程
 [[concept::c_thread]]
 
 Thread线程在SystemC中一般用来建模时序逻辑。相比于Method线程，Thread线程的特点是**阻塞式**的，在仿真器运行过程中，每个Thread
-线程只会执行一次。一个设计良好的Thread线程应当内部包括一个 `while(true) {}` 的循环体，以保证函数体永远不会返回。
+线程**只会执行一次**。一个设计良好的Thread线程应当内部包括一个 `while(true) {}` 的循环体，以保证函数体永远不会返回。
 
 仿真器使用一种协作式线程，即协程的方式，来调度所有注册的Thread线程（包括CThread线程）。在Thread线程实现内部，可以直接或者间接
 调用<<api::wait, wait>> 来让出执行权footnote:[实际上调用了<<api::suspend_me, suspend_me>>函数]，以使得其他Thread线程获得执行权。
@@ -126,7 +126,7 @@ CThread是Thread的一种特殊形式。在之后讨论中，如非必要，我�
         static_cast<sc_core::SC_ENTRY_FUNC>(&callback_tag::func)
 ----
 
-如果编译器不支持成员函数形式，或者有其他理由无法使用，Systemc在 `sc_process.h` 里还提供了非成员函数形式的包装，这里我们就不再介绍了。
+如果编译器不支持成员函数形式，或者有其他理由无法使用，SystemC在 `sc_process.h` 里还提供了非成员函数形式的包装，这里我们就不再介绍了。
 
 从这里可以看出，所有的成员函数都会cast成一个 `(sc_process_host::*)()` 类型的指针。 `sc_process_host` 是SystemC内部的一个类， `sc_module` 继承
 自 `sc_process_host`, 因此这个cast是安全的。
@@ -1494,8 +1494,10 @@ DELTA EVENT的trigger效果等同于将所有阻塞在本DELTA EVENT上的线程
 
 <<phase::update, UPDATE>>阶段可能产生DELTA EVENT的有：
 
-* 调用 `sc_fifo::update()` 函数，将EVALUATE阶段阻塞在本事件上的线程放入runnable列表
-* 通过 `sc_signal` 调用了 `sc_event::notify_next_delta()`
+* 调用 `sc_fifo::update()` 函数，将EVALUATE阶段阻塞在本事件上的线程放入runnable列表，
+例如，通过 `sc_signal` update，调用do_update,最终调用了 `sc_event::notify_next_delta()`
+
+<<phase::notification, NOTIFICATION>>阶段不会产生DELTA EVENT（存疑）。
 
 === 不带时间参数的notify
 
@@ -1526,7 +1528,7 @@ sc_event::notify()
 
 这种叫做**立即notification**，在用户写的仿真代码中用的很少。不带参数的 `notify()` 会立即调用
 `trigger` 函数，这就潜在地带来了竞争：如果本应该 `next_trigger/wait` 在这个event上的Method/Thread线程
-还没来得及执行，那么这个notification等同于丢失，因为 `notify()` 之后立马调用了应当在
+还没来得及执行，那么这个notification等同于丢失，因为 `notify()` 之后立马调用了本应当在
 <<phase::notification, NOTIFICATION>>阶段调用的 `trigger` 函数，将pending在此event
 身上的线程加入 `simc` runnable列表。由于这些 `next_trigger/wait` 还没来得及执行，因此
 这个event也就没有与之关联的线程。
@@ -1546,11 +1548,13 @@ sc_event::notify()
 2. SystemC内部的prim_channel的update
 3. SystemC内部的phase callback
 
+除了SystemC内部以外，不建议在用户代码中使用不带参数的notify。
+
 ====
 
-替代不带参数的 `notify()` 的形式是 `notify(SC_ZERO_TIME)` ，这在<<phase::evaluate, EVALUATE>>阶段会设定事件为一个DELTA类型的
+对于用户代码而言，替代不带参数的 `notify()` 功能的形式是 `notify(SC_ZERO_TIME)` ，这在<<phase::evaluate, EVALUATE>>阶段会设定事件为一个DELTA类型的
 event，注册到 `simc` 的 `m_delta_events` 成员变量中。等全部的线程都完成一轮调度之后，再
-执行此event对应的 `trigger()` ，保证了顺序。
+执行此event对应的 `trigger()` ，这就天然保证了顺序。
 
 == 仿真调度
 

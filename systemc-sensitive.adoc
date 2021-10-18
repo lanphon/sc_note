@@ -125,8 +125,8 @@ sc_sensitive::operator << ( const sc_event& event_ )
 ----
 
 从中我们也可以看出，对于SC_METHOD和SC_THREAD而言，主要调用的就是process handle
-的add_static_event成员函数，而对于SC_CTHREAD而言，不能用这种方式设置静态
-敏感事件。
+的add_static_event成员函数，而对于SC_CTHREAD而言，m_mode等同于SC_THREAD，因此
+被当做SC_THREAD来处理。
 
 === sc_interface作为敏感源设置
 
@@ -161,7 +161,6 @@ sc_sensitive::operator << ( const sc_interface& interface_ )
 
 从这个函数的实现我们可以看出，将一个sc_interface派生类作为敏感源设置，其效果等同于
 将这个sc_interface的 `default_event` 成员函数返回的时间对象作为敏感源设置。
-同样，这种方式无法为SC_CTHREAD设置静态敏感源。
 
 sc_signal，sc_fifo，sc_buffer, sc_clock等是sc_interface派生类，这些都可以借助这个函数，将
 default_event作为静态敏感源设置进来。
@@ -231,8 +230,6 @@ sc_sensitive::operator << ( const sc_port_base& port_ )
 sc_port_base未来所绑定的**所有**的sc_interface的default_event()返回的事件对象，
 作为静态敏感对象。
 
-同样，SC_CTHREAD无法使用这种方式设置sc_port_base派生类为静态敏感源。
-
 sc_in, sc_out, sc_fifo_in, sc_fifo_out等都是sc_port_base的派生类，这些都可以借助
 这个函数，设置静态敏感源。
 
@@ -280,8 +277,6 @@ sc_sensitive::operator << ( sc_event_finder& event_finder_ )
 elaboration_done阶段被调用的<<usage::sc_port_base::complete_binding, comptete_binding>>的时候会被使用，以返回与之关联的事件对象（而不是
 调用default_event()返回事件对象）。
 
-sc_event_finder同样无法为SC_CTHREAD设置静态敏感源。
-
 === 静态成员函数make_static_sensitivity
 
 除了这8个重载的operator以外，sc_sensitive中还设计了四个具有不同重载形式的静态函数
@@ -296,7 +291,7 @@ make_static_sensitivity，以满足在dynamic process时候设置静态敏感源
     static void make_static_sensitivity( sc_process_b*, sc_event_finder& );
 ----
 
-其中，前三种重载形式并无特殊之初，而第四种，也就是使用sc_event_finder作为静态敏感源：
+其中，前三种重载形式并无特殊之处，而第四种，也就是使用sc_event_finder作为静态敏感源：
 
 .src/sysc/kernel/sc_sensitive.cpp
 [source,cpp]
@@ -332,11 +327,9 @@ sc_event_finder作为静态敏感源设置，那么将永远不会有时机决�
 === 为SC_CTHREAD准备的静态敏感源函数
 
 如前所述， `operator<<` 以及废弃形式的 `operator()`，还有静态成员函数make_static_sensitivity
-都无法为SC_CTHREAD设置静态敏感源。从<<usage::sc_module::set_process_handle，这里>>我们也
-能看出，无法使用sc_sensitive_pos/sc_sensitive_neg为SC_CTHREAD设置静安源，这是因为sc_cthread_handle
-根本就没有保存到sc_sensitive_pos和sc_sensitive_neg的地方。
+都可以为SC_CTHREAD设置静态敏感源。
 
-为了支持SC_CTHREAD的功能，sc_sensitive特意提供了如下几个重载了 `operator()`
+除此之外，为了支持SC_CTHREAD的功能，sc_sensitive还提供了如下几个重载了 `operator()`
 的方式，设置静态敏感源。
 
 .src/sysc/kernel/sc_sensitive.h
@@ -476,7 +469,7 @@ sc_sensitive::operator () ( sc_cthread_handle handle_,
     }
 ----
 
-所以效果等同于调用了这些port的 pos() 成员函数，返回一个**上升沿**的sc_event_finder，作为
+所以效果等同于调用了这些port的 `pos()` 成员函数，返回一个**上升沿**的sc_event_finder，作为
 SC_CTHRAD的静态敏感事件，被设置进去。这也就意味着无法使用这种方式为SC_CTHREAD设置
 下降沿作为静态敏感事件。
 
