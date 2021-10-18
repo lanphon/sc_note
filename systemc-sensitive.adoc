@@ -19,3 +19,473 @@ SystemC中的sensitive，指的是3个sc_module的成员变量：
 
 这三个sensitive变量都是用来为process handle设置静态敏感事件的。三个变量的访问权限是PROTECTED，所以
 派生类可以直接访问这三个成员变量。
+
+这三个成员变量主要提供了语法糖的形式，来为process handle和相应的sc_event设置静态触发的关系。
+这三个成员变量本身并不保存其他信息。
+
+在使用过程中，无需指定具体的process handle，而是在使用SC_METHOD/SC_THREAD/SC_CTHREAD之后，立马
+使用sensitive即可。SC_METHOD/SC_THREAD/SC_CTHREAD的宏定义中，已经使用相关API，将create出来的
+handle设置到sensitive内部了：
+[[usage::sc_module::set_process_handle]]
+
+.src/sysc/kernel/sc_module.h
+[source,cpp]
+----
+#define declare_method_process(handle, name, host_tag, func)        \
+    {		                                                    \
+        ::sc_core::sc_process_handle handle =                      \
+	    sc_core::sc_get_curr_simcontext()->create_method_process( \
+		name,  false, SC_MAKE_FUNC_PTR( host_tag, func ), \
+		this, 0 ); \
+        this->sensitive << handle;                                        \
+        this->sensitive_pos << handle;                                    \
+        this->sensitive_neg << handle;                                    \
+    }
+
+#define declare_thread_process(handle, name, host_tag, func)        \
+    {                                                               \
+        ::sc_core::sc_process_handle handle =                      \
+	     sc_core::sc_get_curr_simcontext()->create_thread_process( \
+                 name,  false,           \
+                 SC_MAKE_FUNC_PTR( host_tag, func ), this, 0 ); \
+        this->sensitive << handle;                                        \
+        this->sensitive_pos << handle;                                    \
+        this->sensitive_neg << handle;                                    \
+    }
+
+#define declare_cthread_process(handle, name, host_tag, func, edge) \
+    {                                                               \
+        ::sc_core::sc_process_handle handle =                     \
+	     sc_core::sc_get_curr_simcontext()->create_cthread_process( \
+            name,  false,          \
+                     SC_MAKE_FUNC_PTR( host_tag, func ), this, 0 ); \
+        this->sensitive.operator() ( handle, edge );\
+    }
+----
+
+从这里我们也可以看出，对于SC_METHOD和SC_THERAD而言，可以使用sensitive/sensitive_pos/sensitive_reg
+设置静态敏感事件。但是对于SC_CTHREAD而言，只能使用sensitive设置敏感事件，这是因为
+SC_CHTERAD是一个clock驱动的THREAD，edge信息在创建的时候就已经设置好了。
+
+在取得process handle之后，sensitive主要的目标和用途就是如何获取与之关联的sc_event对象了。
+
+== sc_sensitive
+
+sc_sensitive是个独立设计的类，没有继承自其他类。
+
+对于sc_sensitive，SystemC提供两种形式重载的 `operator` ，用以为四种不同的对象设置
+敏感信息：
+
+.src/sysc/kernel/sc_sensitive.h
+[source,cpp]
+----
+    sc_sensitive& operator () ( const sc_event& );
+    sc_sensitive& operator () ( const sc_interface& );
+    sc_sensitive& operator () ( const sc_port_base& );
+    sc_sensitive& operator () ( sc_event_finder& );
+
+    sc_sensitive& operator << ( const sc_event& );
+    sc_sensitive& operator << ( const sc_interface& );
+    sc_sensitive& operator << ( const sc_port_base& );
+    sc_sensitive& operator << ( sc_event_finder& );
+----
+
+其中， `operator()` 形式的重载方式全都标记为deprecated，后续我们应当只使用 `operator<<` 形式
+的重载方式。
+
+=== sc_event作为敏感源设置
+
+如果将一个sc_event事件对象作为静态敏感源直接设置，那么调用的就是以下这个函数：
+
+.src/sysc/kernel/sc_sensitive.cpp
+[source,cpp]
+----
+sc_sensitive&
+sc_sensitive::operator << ( const sc_event& event_ )
+{
+    // check
+    if( sc_is_running() ) {
+	SC_REPORT_ERROR( SC_ID_MAKE_SENSITIVE_, "simulation running" );
+    }
+
+    // make sensitive
+    switch( m_mode ) {
+    case SC_METHOD_:
+    case SC_THREAD_: {
+	m_handle->add_static_event( event_ );
+	break;
+    }
+    case SC_NONE_:
+        /* do nothing */
+        break;
+    }
+
+    return *this;
+}
+----
+
+从中我们也可以看出，对于SC_METHOD和SC_THREAD而言，主要调用的就是process handle
+的add_static_event成员函数，而对于SC_CTHREAD而言，不能用这种方式设置静态
+敏感事件。
+
+=== sc_interface作为敏感源设置
+
+如果将一个sc_interface派生类作为敏感源设置进来，那么调用的则是这个函数：
+
+.src/sysc/kernel/sc_sensitive.cpp
+[source,cpp]
+----
+sc_sensitive&
+sc_sensitive::operator << ( const sc_interface& interface_ )
+{
+    // check
+    if( sc_is_running() ) {
+	SC_REPORT_ERROR( SC_ID_MAKE_SENSITIVE_, "simulation running" );
+    }
+
+    // make sensitive
+    switch( m_mode ) {
+    case SC_METHOD_:
+    case SC_THREAD_: {
+	m_handle->add_static_event( interface_.default_event() );
+	break;
+    }
+    case SC_NONE_:
+        /* do nothing */
+        break;
+    }
+
+    return *this;
+}
+----
+
+从这个函数的实现我们可以看出，将一个sc_interface派生类作为敏感源设置，其效果等同于
+将这个sc_interface的 `default_event` 成员函数返回的时间对象作为敏感源设置。
+同样，这种方式无法为SC_CTHREAD设置静态敏感源。
+
+sc_signal，sc_fifo，sc_buffer, sc_clock等是sc_interface派生类，这些都可以借助这个函数，将
+default_event作为静态敏感源设置进来。
+
+=== sc_port_base作为敏感源设置
+
+如果将一个sc_port_base派生类作为敏感源设置进来，那么调用的则是这个函数：
+
+.src/sysc/kernel/sc_sensitive.cpp
+[source,cpp]
+----
+sc_sensitive&
+sc_sensitive::operator << ( const sc_port_base& port_ )
+{
+    // check
+    if( sc_is_running() ) {
+	SC_REPORT_ERROR( SC_ID_MAKE_SENSITIVE_, "simulation running" );
+    }
+
+    // make sensitive
+    switch( m_mode ) {
+    case SC_METHOD_: {
+	port_.make_sensitive( as_method_handle( m_handle ) );
+	break;
+    }
+    case SC_THREAD_: {
+	port_.make_sensitive( as_thread_handle( m_handle ) );
+	break;
+    }
+    case SC_NONE_:
+        /* do nothing */
+        break;
+    }
+
+    return *this;
+}
+----
+
+这里调用了sc_port_base的make_sensitive成员函数，将process handle，连同一个空的event_finder
+设置到port中。这个port在elaboration done阶段，被调用的complete_binding函数里：
+[[usage::sc_port_base::complete_binding]]
+
+.src/sysc/communication/sc_port.cpp
+[source,cpp]
+----
+        // complete static sensitivity for methods
+        size = m_bind_info->method_vec.size();
+        for( int k = 0; k < size; ++ k ) {
+            sc_bind_ef* p = m_bind_info->method_vec[k];
+            const sc_event& event = ( p->event_finder != 0 )
+                                  ? p->event_finder->find_event(iface)
+                                  : iface->default_event();
+            p->handle->add_static_event( event );
+        }
+
+        // complete static sensitivity for threads
+        size = m_bind_info->thread_vec.size();
+        for( int k = 0; k < size; ++ k ) {
+            sc_bind_ef* p = m_bind_info->thread_vec[k];
+            const sc_event& event = ( p->event_finder != 0 )
+                                  ? p->event_finder->find_event(iface)
+                                  : iface->default_event();
+            p->handle->add_static_event( event );
+----
+
+在这种情况下，这里的 `p->event_finder` 都为空。所以，实际上效果等同于设置这个
+sc_port_base未来所绑定的**所有**的sc_interface的default_event()返回的事件对象，
+作为静态敏感对象。
+
+同样，SC_CTHREAD无法使用这种方式设置sc_port_base派生类为静态敏感源。
+
+sc_in, sc_out, sc_fifo_in, sc_fifo_out等都是sc_port_base的派生类，这些都可以借助
+这个函数，设置静态敏感源。
+
+=== sc_event_finder作为敏感源设置
+
+如果将一个sc_event_finder派生类作为敏感源设置进来，那么调用的则是这个函数：
+
+.src/sysc/kernel/sc_sensitive.cpp
+[source,cpp]
+----
+sc_sensitive&
+sc_sensitive::operator << ( sc_event_finder& event_finder_ )
+{
+    // check
+    if( sc_is_running() ) {
+	SC_REPORT_ERROR( SC_ID_MAKE_SENSITIVE_, "simulation running" );
+    }
+
+    // make sensitive
+    switch( m_mode ) {
+    case SC_METHOD_: {
+	event_finder_.port().make_sensitive( as_method_handle( m_handle ),
+					     &event_finder_ );
+	break;
+    }
+    case SC_THREAD_: {
+	event_finder_.port().make_sensitive( as_thread_handle( m_handle ),
+					     &event_finder_ );
+	break;
+    }
+    case SC_NONE_:
+        /* do nothing */
+        break;
+    }
+
+    return *this;
+}
+----
+
+因为 sc_event_finder构造的时候必须给定一个 `sc_port_base` 的指针，保存在 `sc_event_finder`
+内部，所以这里直接用 `sc_event_finder` 的成员函数 `port()` 获得这个 `sc_port_base` 的引用。
+
+将一个sc_event_finder设置为静态敏感源，效果等同于将这个sc_event_finder关联的sc_port_base
+设置为敏感源，同时提供一个非空的sc_event_finder指针。这个非空的sc_event_finder指针在
+elaboration_done阶段被调用的<<usage::sc_port_base::complete_binding, comptete_binding>>的时候会被使用，以返回与之关联的事件对象（而不是
+调用default_event()返回事件对象）。
+
+sc_event_finder同样无法为SC_CTHREAD设置静态敏感源。
+
+=== 静态成员函数make_static_sensitivity
+
+除了这8个重载的operator以外，sc_sensitive中还设计了四个具有不同重载形式的静态函数
+make_static_sensitivity，以满足在dynamic process时候设置静态敏感源：
+
+.src/sysc/kernel/sc_sensitive.h
+[source,cpp]
+----
+    static void make_static_sensitivity( sc_process_b*, const sc_event& );
+    static void make_static_sensitivity( sc_process_b*, const sc_interface& );
+    static void make_static_sensitivity( sc_process_b*, const sc_port_base&);
+    static void make_static_sensitivity( sc_process_b*, sc_event_finder& );
+----
+
+其中，前三种重载形式并无特殊之初，而第四种，也就是使用sc_event_finder作为静态敏感源：
+
+.src/sysc/kernel/sc_sensitive.cpp
+[source,cpp]
+----
+void
+sc_sensitive::make_static_sensitivity(
+    sc_process_b* handle_, sc_event_finder& event_finder_)
+{
+    if (sc_is_running()) {
+      handle_->add_static_event( event_finder_.find_event() );
+    } else {
+	sc_method_handle handle_m = as_method_handle( handle_ );
+	if ( handle_m ) {
+	    event_finder_.port().make_sensitive( handle_m, &event_finder_ );
+	    return;
+        }
+	sc_thread_handle handle_t = as_thread_handle( handle_ );
+	// sc_assert(handle_t);
+	event_finder_.port().make_sensitive( handle_t, &event_finder_);
+    }
+}
+----
+
+则检查当前simulation是否已经开始。如果simulation已经开始，那么就直接调用
+event_finder的 `find_event()` 成员函数，获得事件对象，因为仿真开始的时候
+port必然已经绑定了interface。如果仿真没有开始，那么就如同普通的sc_event_finder
+作为静态敏感源一样，设置进去。
+
+之所以这么做，是因为当仿真开始的时候，elaboration阶段已经过去。如果此时如同普通的
+sc_event_finder作为静态敏感源设置，那么将永远不会有时机决议出真正作为静态
+铭感源的事件对象了。
+
+=== 为SC_CTHREAD准备的静态敏感源函数
+
+如前所述， `operator<<` 以及废弃形式的 `operator()`，还有静态成员函数make_static_sensitivity
+都无法为SC_CTHREAD设置静态敏感源。从<<usage::sc_module::set_process_handle，这里>>我们也
+能看出，无法使用sc_sensitive_pos/sc_sensitive_neg为SC_CTHREAD设置静安源，这是因为sc_cthread_handle
+根本就没有保存到sc_sensitive_pos和sc_sensitive_neg的地方。
+
+为了支持SC_CTHREAD的功能，sc_sensitive特意提供了如下几个重载了 `operator()`
+的方式，设置静态敏感源。
+
+.src/sysc/kernel/sc_sensitive.h
+[source,cpp]
+----
+    sc_sensitive& operator () ( sc_cthread_handle, sc_event_finder& );
+    sc_sensitive& operator () ( sc_cthread_handle, const in_if_b_type& );
+    sc_sensitive& operator () ( sc_cthread_handle, const in_if_l_type& );
+    sc_sensitive& operator () ( sc_cthread_handle, const in_port_b_type& );
+    sc_sensitive& operator () ( sc_cthread_handle, const in_port_l_type& );
+    sc_sensitive& operator () ( sc_cthread_handle, const inout_port_b_type& );
+    sc_sensitive& operator () ( sc_cthread_handle, const inout_port_l_type& );
+----
+
+这些重载形式第一个参数都是一个sc_cthread_handle，主要的区别在于第二个参数的类型。
+
+==== 使用sc_event_finder为SC_CTHREAD设置静态敏感源
+
+如果使用sc_event_finder为SC_CTHREAD设置静态敏感源，那么实现如下：
+
+.src/sysc/kernel/sc_sensitive.cpp
+[source,cpp]
+----
+sc_sensitive&
+sc_sensitive::operator () ( sc_cthread_handle handle_,
+			    sc_event_finder& event_finder_ )
+{
+    event_finder_.port().make_sensitive( handle_, &event_finder_ );
+    return *this;
+}
+----
+
+从这里可以看出，这是简单地取出event_finder带的sc_port_base，然后调用其make_sensitive
+成员函数，将sc_cthread_handle和event_finder设置进去。这么做的效果和
+为普通的SC_METHOD/SC_THREAD设置sc_event_finder作为静态敏感源是一样的。
+
+==== 使用in_if_b_type/in_if_l_type为SC_CTHREAD设置静态敏感源
+
+in_if_b_type和in_if_l_type的定义是：
+
+.src/sysc/kernel/sc_sensitive.h
+[source,cpp]
+----
+    typedef sc_signal_in_if<bool>            in_if_b_type;
+    typedef sc_signal_in_if<sc_dt::sc_logic> in_if_l_type;
+----
+
+所以这里等同于为两个特殊重载形式的sc_interface（传输的类型为bool和sc_logic）做了特殊处理。
+我们在signal部分也讲过，对于sc_signal而言，如果模板参数为bool或者sc_logic，SystemC提供
+了模板偏特化处理，为这两种类型增加了特殊的功能。如果使用着两种类型的sc_interface作为
+SC_CTHREAD的敏感源，则调用：
+
+.src/sysc/kernel/sc_sensitive.cpp
+[source,cpp]
+----
+sc_sensitive&
+sc_sensitive::operator () ( sc_cthread_handle handle_,
+			    const in_if_b_type& interface_ )
+{
+    handle_->add_static_event( interface_.posedge_event() );
+    return *this;
+}
+
+sc_sensitive&
+sc_sensitive::operator () ( sc_cthread_handle handle_,
+			    const in_if_l_type& interface_ )
+{
+    handle_->add_static_event( interface_.posedge_event() );
+    return *this;
+}
+----
+
+实际效果等同于将这两种sc_interface的 `posedge_event` 成员函数返回的事件对象
+设置为process handle的静态敏感事件。
+
+==== 使用in_port_b_type/in_port_l_type/inout_port_b_type/inout_port_l_type为SC_CTHREAD设置静态敏感源
+
+in_port_b_type, in_port_l_type, inout_port_b_type, inout_port_l_type的定义分别是：
+
+.src/sysc/kernel/sc_sensitive.h
+[source,cpp]
+----
+    typedef sc_in<bool>                      in_port_b_type;
+    typedef sc_in<sc_dt::sc_logic>           in_port_l_type;
+    typedef sc_inout<bool>                   inout_port_b_type;
+    typedef sc_inout<sc_dt::sc_logic>        inout_port_l_type;
+----
+
+这同样是为 `bool` 和 `sc_logic` 特化的sc_in/sc_inout类型。当使用这四种类型
+作为SC_CTHREAD的静态敏感事件的时候，调用的是：
+
+.src/sysc/kernel/sc_sensitive.cpp
+[source,cpp]
+----
+sc_sensitive&
+sc_sensitive::operator () ( sc_cthread_handle handle_,
+			    const in_port_b_type& port_ )
+{
+    port_.make_sensitive( handle_, &port_.pos() );
+    return *this;
+}
+
+sc_sensitive&
+sc_sensitive::operator () ( sc_cthread_handle handle_,
+			    const in_port_l_type& port_ )
+{
+    port_.make_sensitive( handle_, &port_.pos() );
+    return *this;
+}
+
+sc_sensitive&
+sc_sensitive::operator () ( sc_cthread_handle handle_,
+			    const inout_port_b_type& port_ )
+{
+    port_.make_sensitive( handle_, &port_.pos() );
+    return *this;
+}
+
+sc_sensitive&
+sc_sensitive::operator () ( sc_cthread_handle handle_,
+			    const inout_port_l_type& port_ )
+{
+    port_.make_sensitive( handle_, &port_.pos() );
+    return *this;
+}
+----
+
+对于这四种类型的port，都有pos成员函数，实现基本上为：
+
+.src/sysc/communication/sc_signal_ports.h
+[source,cpp]
+----
+    sc_event_finder& pos() const
+    {
+        return sc_event_finder::cached_create
+                ( m_pos_finder_p, *this, &in_if_type::posedge_event );
+    }
+----
+
+所以效果等同于调用了这些port的 pos() 成员函数，返回一个**上升沿**的sc_event_finder，作为
+SC_CTHRAD的静态敏感事件，被设置进去。这也就意味着无法使用这种方式为SC_CTHREAD设置
+下降沿作为静态敏感事件。
+
+== sc_sensitive_pos和sc_sensitive_neg
+
+sc_sensitive_pos和sc_sensitive_neg都被废弃掉了，因为这两个类的功能都可以被sc_sensitive
+覆盖。
+
+个人猜测应该是在没有引入sc_event_finder的时候，需要使用sc_sensitive_pos和sc_sensitive_neg
+为上升沿和下降沿设置相应的静态敏感列表。现在有了sc_event_finder，根据相关sc_port的
+pos/neg成员函数，结合sc_event_finder，就可以完成这两个独立设计的类的工作。因此，在最新的
+SystemC 2.3.3中，sc_sensitive_pos和sc_sensitive_neg已经废弃，不再需要学习和使用了。
