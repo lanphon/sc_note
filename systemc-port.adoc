@@ -1245,6 +1245,11 @@ notify会发现第二个设定出发的时间点13ns早于保存的最近触发�
 在 `m_e` 上多次调用 `notify()` 是没问题的。这样一来，13ns事件触发，fire_event同时会设置
 下一次触发的时间点是 2ns以后，完成最开始 10ns时候 notify(5ns)的需求。
 
+此外， `sc_event_queue` 的另一个特点就是，如果在同一时刻累计了多个notification，那么
+这些notification会在同一个时间点，在不同的delta cycle多次trigger，trigger的次数等同于
+设定的次数。第一个notification trigger的时刻和timed event trigger时刻一致。我们在代码中
+能够意识到这一点，因为并没有关于时间点的去重处理操作(queue里只做排序，没有去重)。
+
 另一个需要实现的接口函数式 `cancel_all`:
 
 .src/sysc/communication/sc_event_queue.cpp
@@ -1277,6 +1282,18 @@ const sc_event& sc_event_queue::default_event() const
 所以如果将一个 `sc_event_queue` 作为静态敏感源，实质上等同于将这个 `m_e` 事件
 设置为敏感事件源。
 
+=== sc_clock相关的port
+
+clock相关的port分别为 `sc_in_clk`, `sc_inout_clk` 和 `sc_out_clk` 。SystemC在
+代码注释里明确这部分只是为了提供兼容性：
+
+.src/sysc/communication/sc_clock_ports.h
+[source,cpp]
+----
+typedef sc_in<bool>    sc_in_clk;
+typedef sc_inout<bool> sc_inout_clk;
+typedef sc_out<bool>   sc_out_clk;
+----
 
 
 == event_finder
@@ -1390,5 +1407,12 @@ default_event接口类不满足需求的情况下（例如，对于sc_clock，�
 使用default_event获取关联event对象，这一大多数情况下都符合假定的设计模式的一个补充：当
 少部分情况下不符合这个设计模式的时候，使用sc_event_finder仍然能够达到目的。
 
-
 ====
+
+== 小结
+
+sc_port和sc_export是作为module之间互联而提出的数据结构，这两个数据结构大多数
+情况下在elaboration done之前阶段起作用，elaboration done之后，就转变成了
+sc_port/sc_export所代表的的interface指针，以及一些与之关联的event起主要作用了。
+
+sc_port和sc_export更多的是为SystemC中module提供更好的封装特性。

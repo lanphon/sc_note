@@ -2,7 +2,7 @@
 
 :toc: left
 
-SystemC中的其他组件
+SystemC中的其他组件和用例分析
 
 == sc_interface
 

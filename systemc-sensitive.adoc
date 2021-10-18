@@ -1,0 +1,21 @@
+:source-highlighter: coderay
+
+:toc: left
+
+SystemC中的sensitive
+
+== 引言
+
+SystemC中的sensitive，指的是3个sc_module的成员变量：
+
+.src/sysc/kernel/sc_module.h
+[source,cpp]
+----
+    // These are protected so that user derived classes can refer to them.
+    sc_sensitive     sensitive;
+    sc_sensitive_pos sensitive_pos;
+    sc_sensitive_neg sensitive_neg;
+----
+
+这三个sensitive变量都是用来为process handle设置静态敏感事件的。三个变量的访问权限是PROTECTED，所以
+派生类可以直接访问这三个成员变量。
