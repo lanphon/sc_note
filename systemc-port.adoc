@@ -1,0 +1,1142 @@
+:source-highlighter: coderay
+
+:toc: left
+
+SystemC中的Port和Export
+
+== 引言
+
+SystemC的Port，抽象的是物理设计中，划分不同模块后，每个模块对外的接口信息，包括输入和输出端口。
+A port
+is a pointer to a channel outside the module. An export is a pointer to a channel inside
+another module.
+
+所以一个port一定和interface结合在一起使用，因为一个sc_signal/sc_fifo间接继承自sc_interface.
+a port is an interface pointer to a channel that implements the interface.
+所以port是个模板类，模板参数就是interface类型信息。port可以是read/write的，可以通过一定的设计，
+将port局限为只能read或者只能write。
+
+sc_port和sc_export两者是为了方便SystemC模块互联，且提供良好封装特性，所设计出来的数据结构。
+sc_port和sc_export底层仍然是SystemC核心的event, prim channel的概念。这一点从SystemC
+的核心调度函数crunch就可以看出：EVALUATE PHASE处理的的process handle，UPDATE PHASE
+处理的是primitive channel，NOTIFICATION PHASE处理的则是event。在crunch中，没有sc_port和
+sc_export的地方。
+
+== sc_port_registry
+[[api::sc_port_registry]]
+
+sc_port_registry是一个管理类，这个类管理了所有生成的sc_port_base以及继承类：当每个
+sc_port_base以及继承类构造的时候，都会将自己注册到sc_port_registry中。
+
+[[api::sc_port_registry::elaboration_done]]
+sc_port_base的<<api::sc_port_base::complete_binding, complete_binding>>函数在
+sc_port_base_registry的elaboration函数中被调用。
+这样就保证了当我们试图替换所有
+sc_port为具体的sc_interface，并resolve相关static sensitive的时候，hierarchy
+已经建立起来。
+随后sc_poret_base_registry的elaboration_done调用了所有sc_port_base的elaboration_done，释放了
+sc_bind_info相应的资源。
+
+sc_port_registry和sc_port的关系，就像sc_prim_channel_registry和sc_prim_channel的关系
+一样：注册表提供了管理所有对象的能力。
+
+
+== sc_port_base
+[[api::sc_port_base]]
+
+sc_port_base是一个继承自sc_object的接口类，并且不是一个模板类，所以sc_port_base是不包括
+任何模板信息的。这么设计的原因，是为了保证在一些需要使用sc_port的场合，可以直接将参数设置为
+`sc_port_base*` ，这样就可以使用接口类定义的接口函数，而无需提供模板参数了。
+
+=== Port和Interface之间的绑定
+
+Port和Interface之间的绑定，可以分为两种：
+
+* Port绑定Port
+* Port绑定Interface
+
+从本质上来讲, Port绑定Port，等同于Port绑定另一个Port所有的Interface。例如，PA绑定PB，其效果等同于PA
+绑定PB最后全部的Interface，而不管PB绑定IC/ID/IE的时机在PA绑定PB之前还是之后。这是因为在Systemc中，
+PA绑定PB的时候，Systemc内部只会暂时将这个信息记录下来。等到elaboration done阶段的时候，SystemC会
+检查PA的binding情况，如果发现binding的对象是一个Port而不是Interface，那么就会将被绑定的Port替换为
+被绑定Port的Interface。
+
+
+=== 接口函数
+
+sc_port_base定义了如下几个接口函数：
+
+* `get_interface` 包括const类型的重载形式，用已返回一个sc_interface指针。根据其后的实现，这里
+返回的是第一个绑定的interface的指针。
+* `get_interface_type` 用以做类型识别，这部分在具体的模板继承中，需要根据模板参数的类型，返回不同的
+类型信息
+* `add_interface` 将一个interface加入到自己保存的列表中
+* `interface_count` 返回现有的interface数目
+* `vbind` 包括sc_interface和sc_port_base两种引用参数的重载形式，用以完成绑定，一般内部使用
+
+=== 实现函数
+
+sc_port_base除了定义接口函数以外，还实现了一些非常有用的函数，用来帮助继承类完成相关工作。
+其中，有一个非常重要的保存绑定信息的私有类，sc_bind_info，需要着重介绍。
+
+==== sc_bind_info私有类
+[[api::sc_bind_info]]
+
+sc_bind_info是一个私有类：
+
+.src/sysc/communication/sc_port.cpp
+[source,cpp]
+----
+struct sc_bind_info
+{
+    typedef std::vector<sc_bind_ef*> ef_vector;
+
+    // constructor
+    explicit sc_bind_info( int max_size_, 
+	sc_port_policy policy_=SC_ONE_OR_MORE_BOUND );
+
+    // destructor
+    ~sc_bind_info();
+
+    int            max_size() const;
+    sc_port_policy policy() const; 
+    int            size() const;
+
+    int                        m_max_size;
+    sc_port_policy             m_policy;
+    std::vector<sc_bind_elem*> vec;
+    bool                       has_parent;
+    int                        last_add;
+    bool                       is_leaf;
+    bool                       complete;
+
+    ef_vector                  thread_vec;
+    ef_vector                  method_vec;
+};
+----
+
+这个类具体定义在sc_port.cpp中，这也就意味着除了SystemC之外，其他部分是无法见到
+这个类的，这也是这个类设计的初衷。
+
+sc_bind_info保存的是 **elaboration阶段之前** 的绑定信息。在仿真开始之前，需要
+建立hierarchy绑定等，sc_bind_info主要在这个阶段工作。在elaboration done的对应
+函数实现中，每个sc_port_base里保存的sc_bind_info指针会被clear掉。
+
+sc_bind_info中有非常重要的两个布尔型变量，has_parent和is_leaf，决定了本sc_port_base
+的绑定逻辑。我们知道，sc_port不仅仅可以绑定到具体的sc_interface上，还可以绑定到另一个
+sc_port上。当一个sc_port有能力绑定到另一个sc_port上的时候，这就会带来一个问题，那就是绑定
+变成了单向的，可能有环的图。为了解决这个问题，以及为了在最后真正实现将被绑定的sc_port替换为
+具体的sc_interface的工作，在sc_bind_info中，设计了has_parent和is_leaf两个布尔值，来
+标识一个sc_port可能的四种状态：
+
+* has_parent为false, is_leaf为true。这是默认状态，此时一个sc_port只绑定sc_interface，并且没有被其他sc_port绑定
+* has_parent为true，is_leaf为true。此时sc_port除了绑定sc_interface以外，还绑定了其他的sc_port。但是没有被其他sc_port绑定
+* has_parent为false，is_leaf为false。此时sc_port除了绑定sc_interface以外，还被其他sc_port绑定，但并没有绑定其他sc_port
+* has_parent为true，is_leaf为false。此时sc_port除了绑定sc_interface以外，还被其他sc_port绑定，并且绑定了其他的sc_port
+
+对于两个Port PA和PB，当调用形如 `PA.bind(PB)` 的时候，我们说PA绑定了PB，PB被PA绑定，并且PB是PA的
+parent。
+
+
+==== bind
+[[api::sc_port_base::bind]]
+
+bind包括两种形式的绑定。第一种，绑定一个具体的sc_interface：
+[[api::sc_port_base::bind::interface]]
+
+.src/sysc/communication/sc_port.cpp
+[source,cpp]
+----
+void
+sc_port_base::bind( sc_interface& interface_ )
+{
+    if( m_bind_info == 0 ) {
+        // cannot bind an interface after elaboration
+        report_error( SC_ID_BIND_IF_TO_PORT_, "simulation running" );
+        return;
+    }
+
+    m_bind_info->vec.push_back( new sc_bind_elem( &interface_ ) );
+    
+    if( ! m_bind_info->has_parent ) {
+	// add (cache) the interface
+	add_interface( &interface_ );
+	m_bind_info->last_add ++;
+    }
+}
+----
+
+绑定一个sc_interface的处理是比较简单的。这里将绑定信息放入m_bind_info中。同时，如果
+has_parent为false，也就是这个sc_port没有绑定过其他的sc_port，那么这个sc_port目前的所有
+绑定都是sc_interface。这种情况下，调用接口函数add_interface，将interface加入其中（具体实现
+由继承类来完成），并且将last_add计数器增加。这里SystemC做了一个小小的优化，对于bind的时候已经调用过
+add_interface的sc_interface，使用last_add记录下位置。在未来完成绑定的时候，这些已经调用过
+add_interface就不需要在处理一遍了。
+
+第二种形式的绑定是绑定一个sc_port_base类（函数里是this_type，实际上就是sc_port_base）:
+[[api::sc_port_base::bind::port]]
+
+.src/sysc/communication/sc_port.cpp
+[source,cpp]
+----
+void
+sc_port_base::bind( this_type& parent_ )
+{
+    if( m_bind_info == 0 ) {
+        // cannot bind a parent port after elaboration
+        report_error( SC_ID_BIND_PORT_TO_PORT_, "simulation running" );
+        return;
+    }
+
+    if( &parent_ == this ) {
+        report_error( SC_ID_BIND_PORT_TO_PORT_, "same port" );
+        return;
+    }
+
+    // check if parent port is already bound to this port
+#if 0
+    for( int i = m_bind_info->size() - 1; i >= 0; -- i ) {
+        if( &parent_ == m_bind_info->vec[i]->parent ) {
+            report_error( SC_ID_BIND_PORT_TO_PORT_, "already bound" );
+            return;
+        }
+    }
+#endif // 
+
+    m_bind_info->vec.push_back( new sc_bind_elem( &parent_ ) );
+    m_bind_info->has_parent = true;
+    parent_.m_bind_info->is_leaf = false;
+}
+----
+
+这里除了将sc_port的信息放入sc_bind_info中以外，另一项就是根据这个bind行为设置两个sc_port
+的状态了。如果调用形如 `PA.bind(PB)` ，那么PB作为PA的parent，设置PA的has_parent为true。
+并且由于PB有了子绑定，所以设置PB的is_leaf为false。我们称之为PA绑定了PB，PB成为PA的父port，而
+PA则是PB的子Port。
+
+注意如果 `PA.bind(PB)` ，PA的is_leaf状态不会改变。并且PB的has_parent状态也不会改变。
+只有调用了 `PB.bind(PC)`，PB的has_parent状态才会被设置为true。
+
+这里有个疑问，SystemC是如何解决类似于 `PA.bind(PB); PB.bind(PA);` 这种循环绑定的？
+
+==== pbind
+[[api::sc_port_base::pbind]]
+
+pbind实现的功能看起来和bind基本一致，实际上pbind最后调用了vbind，而接口的vbind在继承类
+中的实现主要还是调用了sc_port_base的bind。多出来的功能，主要是一些类型检查的东西，以及
+根据类型检查的结果返回不同的状态值，以方便调用方处理的代码。
+
+API介绍说这是positional bind，主要用于和sc_module模块的positional_bind函数。我看了下，
+sc_module里用到这个函数的地方基本都deprecated了。
+
+pbind的特点，从代码里看，是必须作为sc_port的第一个绑定点才能绑定。
+
+==== make_sensitive
+[[api::sc_port_base::make_sensitive]]
+
+make_sensitive这个函数，主要实现的功能是为了在static sensitive设置的时候，将
+sc_port作为设置对象。这里存在的主要的设计问题在于，static sensitive设置的时候，sc_port
+的继承类还没有绑定到具体的interface上，这是因为static sensitive一般在相应的
+sc_module构造的时候设置，而sc_port到sc_interface的绑定，发生在sc_module构造以后，由
+外部代码完成。
+
+为了能让sc_port作为static sensitive的源，这里使用了<<api::event_finder, event_finder>>来作为占位符，将
+具体的event的设置延迟到了elaboration阶段。
+
+一个sc_port作为static sensitive的源，其本质就是所有绑定在这个sc_port上的
+sc_interface的default event，按照或的形式，设置为敏感源。只要绑定在这个sc_port上的
+一个sc_interface有事件发生，static sensitive就会被trigger起来。
+
+
+.src/sysc/communication/sc_port.cpp
+[source,cpp]
+----
+void
+sc_port_base::make_sensitive( sc_thread_handle handle_,
+			      sc_event_finder* event_finder_ ) const
+{
+    sc_assert( m_bind_info != 0 );
+    m_bind_info->thread_vec.push_back( 
+	new sc_bind_ef( (sc_process_b*)handle_, event_finder_ ) );
+}
+
+void
+sc_port_base::make_sensitive( sc_method_handle handle_,
+			      sc_event_finder* event_finder_ ) const
+{
+    sc_assert( m_bind_info != 0 );
+    m_bind_info->method_vec.push_back( 
+	new sc_bind_ef( (sc_process_b*)handle_, event_finder_ ) );
+}
+----
+
+sc_port_base的make_sensitive只是将需要绑定的handle和<<api::event_finder, event_finder>>放入一个
+vector中。这里的event_finder指针可能为空，表明自己不需要一个成员函数指针就能够找到event。在
+event_finder指针为空的情况下，SystemC总是调用interface的default_event函数（这是个接口函数）
+来获取与之关联的event事件对象。
+
+==== add_static_event
+[[api::sc_port_base::add_static_event]]
+
+sc_port_base的add_static_event成员函数，只是为了避免VC6.0的一个bug而做的workaround。
+其本质在于在合适的地方，调用process handle的add_static_event，将一个event事件
+加入到一个process handle的静态敏感表中：
+
+.src/sysc/communication/sc_port.cpp
+[source,cpp]
+----
+// This method exists to get around a problem in VCC 6.0 where you cannot
+// have  a friend class that is templated. So sc_port_b<IF> calls this class
+// instead of sc_process_b::add_static_event. 
+
+void sc_port_base::add_static_event(
+    sc_method_handle process_p, const sc_event& event ) const
+{
+    process_p->add_static_event( event );
+}
+
+void sc_port_base::add_static_event(
+    sc_thread_handle process_p, const sc_event& event ) const
+{
+    process_p->add_static_event( event );
+}
+----
+
+SystemC这段代码写得很清楚了。对于sc_method_handle和sc_thread_handle来说，成员函数
+add_static_event是PROTECTED/PRIVATE的，如果想要直接调用，那么需要将所有的sc_port_b<IF>
+设定为sc_method_handle/sc_thread_handle的友元类。然而在VC6.0中，模板类无法作为一个类的友元类。为了做work around，
+不包含模板信息的sc_port_base提供了add_static_event函数，可以被继承的、带有模板信息的
+派生类所调用。这样一来，只需要将sc_port_base设定为sc_method_handle/sc_thread_handle的友元类
+即可，从而绕过这个问题。
+
+==== first_parent和insert_parent
+[[api::sc_port_base::first_parent]]
+
+.src/sysc/communication/sc_port.cpp
+[source,cpp]
+----
+int
+sc_port_base::first_parent()
+{
+    for( int i = 0; i < m_bind_info->size(); ++ i ) {
+	if( m_bind_info->vec[i]->parent != 0 ) {
+	    return i;
+	}
+    }
+    return -1;
+}
+----
+
+first_parent函数在m_bind_info中查找第一个parent指针不为空的节点，并返回其索引值。实际上，parent
+指针不为空的节点，正是绑定一个sc_port_base的地方。所以，first_parent的作用就是寻找
+第一个绑定类型为sc_port_base，而不是sc_interface的节点。
+
+first_parent要和insert_parent函数辅助起来使用。相比于first_parent，insert_parent的实现
+略微有些复杂：
+[[api::sc_port_base::insert_parent]]
+
+.src/sysc/communication/sc_port.cpp
+[source,cpp]
+----
+void
+sc_port_base::insert_parent( int i )
+{
+    std::vector<sc_bind_elem*>& vec = m_bind_info->vec;
+
+    this_type* parent = vec[i]->parent;
+
+
+    // IF OUR PARENT HAS NO BINDING THEN IGNORE IT:
+    //
+    // Note that the zeroing of the parent pointer must occur before this
+    // test
+
+    vec[i]->parent = 0;
+    if ( parent->m_bind_info->vec.size() == 0 ) return;
+
+    vec[i]->iface = parent->m_bind_info->vec[0]->iface;
+    int n = parent->m_bind_info->size() - 1;
+    if( n > 0 ) {
+	// resize the bind vector (by adding new elements)
+	for( int k = 0; k < n; ++ k ) {
+	    vec.push_back( new sc_bind_elem() );
+	}
+	// move elements in the bind vector
+	for( int k = m_bind_info->size() - n - 1; k > i; -- k ) {
+	    vec[k + n]->iface = vec[k]->iface;
+	    vec[k + n]->parent = vec[k]->parent;
+	}
+	// insert parent interfaces into the bind vector
+	for( int k = i + 1; k <= i + n; ++ k ) {
+	    vec[k]->iface = parent->m_bind_info->vec[k - i]->iface;
+	    vec[k]->parent = 0;
+	}
+    }
+}
+----
+
+虽然insert_parent的代码实现比较复杂，但是仔细阅读代码后，会发现这个函数实现的功能还是
+比较简单的。insert_parent将给定节点的sc_port_base指针替换为这个指针所指向的所有绑定
+信息。例如，原先PA绑定的可能是ia, ib, PB, ic, id, ie，并且PB绑定的是if, ig, ih, PC。
+那么PA调用insert_parent(2)之后，位于节点位置2的PB会被替换为期绑定的所有信息。这样
+依赖，PA的绑定就变成了ia, ib, if, ig, ih, PC, ic, id, ie。至于PB还绑定了另一个
+sc_port_base PC，如何替换PC，就需要和find_parent结合起来循环使用了。
+
+==== complete_binding
+[[api::sc_port_base::complete_binding]]
+
+这是一个非常重要的函数实现，可以说这个函数实现的才是sc_port的核心功能。也正是这个函数的实现，包括
+实现的细节以及实现的地方，才使得sc_port区别于<<api::sc_export, sc_export>>，拥有更多的能力。
+
+complete_binding，如同名字所暗示的，是完成绑定的动作。实际上sc_port_base的bind函数只是提供了
+一些占位符，因为port可以绑定port，所以在bind的时候是无法完成解析所有bind关系的。在complete_binding
+函数里，完成了绑定关系的解析，使得sc_port_base的绑定列表里只有sc_interface。
+
+.src/sysc/communication/sc_port.cpp
+[source,cpp]
+----
+    // IF BINDING HAS ALREADY BEEN COMPLETED IGNORE THIS CALL:
+
+    sc_assert( m_bind_info != 0 );
+    if( m_bind_info->complete ) {
+        return;
+    }
+----
+
+首先是判断绑定是否已经完成，接下来是把所有的sc_port_base替换为相应的sc_interface:
+
+.src/sysc/communication/sc_port.cpp
+[source,cpp]
+----
+    // COMPLETE BINDING OF OUR PARENT PORTS SO THAT WE CAN USE THAT INFORMATION:
+
+    int i = first_parent();
+    while( i >= 0 ) {
+        m_bind_info->vec[i]->parent->complete_binding();
+        insert_parent( i );
+        i = first_parent();
+    }
+----
+
+这里循环使用了<<api::sc_port_base::first_parent, first_parent>>和<<api::sc_port_base::insert_parent>>，
+将绑定信息中所有的sc_port_base都替换为最终的sc_interface。注意这里调用了别的sc_port_base
+的complete_binding。这是否意味着不能存在循环绑定，PA绑定PB，PB再绑定PA，那么在这里会
+陷入死循环的。
+
+到这一步位置，sc_bind_info中所保存的绑定信息全部都是sc_interface，不再有sc_port_base了。
+
+接下来，loop所有绑定的sc_interface。对于每一个interface:
+
+.src/sysc/communication/sc_port.cpp
+[source,cpp]
+----
+	// add (cache) the interface
+        if( j > m_bind_info->last_add ) {
+            add_interface( iface );
+        }
+----
+
+调用add_interface，将之加入进去。这里用到了last_add变量，如我们在
+<<api::sc_port_base::bind::interface, bind interface>>部分介绍的
+那样，这里是一个小小的优化。
+
+.src/sysc/communication/sc_port.cpp
+[source,cpp]
+----
+        // complete static sensitivity for methods
+        size = m_bind_info->method_vec.size();
+        for( int k = 0; k < size; ++ k ) {
+            sc_bind_ef* p = m_bind_info->method_vec[k];
+            const sc_event& event = ( p->event_finder != 0 )
+                                  ? p->event_finder->find_event(iface)
+                                  : iface->default_event();
+            p->handle->add_static_event( event );
+        }
+
+        // complete static sensitivity for threads
+        size = m_bind_info->thread_vec.size();
+        for( int k = 0; k < size; ++ k ) {
+            sc_bind_ef* p = m_bind_info->thread_vec[k];
+            const sc_event& event = ( p->event_finder != 0 )
+                                  ? p->event_finder->find_event(iface)
+                                  : iface->default_event();
+            p->handle->add_static_event( event );
+        }
+----
+
+这一步完成了对static sensitive在本sc_port_base上的process handle的处理。这里
+主要调用了<<api::event_finder, event_finder>>部分的功能，我们在event_finder
+部分再介绍。这里核心的部分是在于寻找如何寻找sc_event: 要么是event_finder寻找到的
+sc_event，要么是这个interface的default event。
+
+完成对每个interface的绑定之后，接下来就是检查绑定的数目是否符合模板要求，以及绑定策略
+要求部分了。
+
+.src/sysc/communication/sc_port.cpp
+[source,cpp]
+----
+    // MAKE SURE THE PROPER NUMBER OF BINDINGS OCCURRED:
+    //
+    // Make sure there are enough bindings, and not too many.
+
+    int actual_binds = interface_count();
+
+    if ( actual_binds > m_bind_info->max_size() )
+    {
+        std::stringstream msg;
+        msg << actual_binds << " binds exceeds maximum of "
+            << m_bind_info->max_size() << " allowed";
+        report_error( SC_ID_COMPLETE_BINDING_, msg.str().c_str() );
+        // may continue, if suppressed
+    }
+----
+
+首先检查实际的绑定interface数目。这里的interface_count是个接口函数，实际上调用
+的是sc_port_b<IF>的size函数，返回的是绑定的sc_interface数目。而m_bind_info所
+返回的最大绑定数目的实现，则是：
+
+.src/sysc/communication/sc_port.cpp
+[source,cpp]
+----
+int
+sc_bind_info::max_size() const
+{
+    return m_max_size ? m_max_size : (int) vec.size();
+}
+----
+
+这里设置的sc_bind_info的m_max_size，来源自模板参数里的绑定数目。可以看出，如果m_max_size
+设置为0，那么永远返回实际的interface数目（这里的vec已经是替换为所有sc_interface以后的vec了）。
+这样一来，如果绑定数目为0，那么永远不会出现绑定数目超出设定数目的情况。所以，如果将绑定数目
+设置为0，实质上设定的是无限制的绑定。
+
+接下来是对绑定策略的检查了：
+
+.src/sysc/communication/sc_port.cpp
+[source,cpp]
+----
+    switch ( m_bind_info->policy() )
+    {
+      case SC_ONE_OR_MORE_BOUND:
+        if ( actual_binds < 1 ) {
+            report_error( SC_ID_COMPLETE_BINDING_, "port not bound" );
+            // may continue, if suppressed
+        }
+        break;
+      case SC_ALL_BOUND:
+        if ( actual_binds < m_bind_info->max_size() || actual_binds < 1 ) {
+            std::stringstream msg;
+            msg << actual_binds << " actual binds is less than required "
+                << m_bind_info->max_size();
+            report_error( SC_ID_COMPLETE_BINDING_, msg.str().c_str() );
+            // may continue, if suppressed
+        }
+        break;
+      default:  // SC_ZERO_OR_MORE_BOUND:
+        break;
+    }
+----
+
+如果设定的绑定策略是SC_ONE_OR_MORE_BOUND，那么如果实际绑定数目小于1，即只绑定了0个，就会报
+ERROR。这意味着设定了SC_ONE_OR_MORE_BOUND，就至少要绑定一个。
+如果设定的是SC_ALL_BOUND，那么没有绑定，或者实际绑定的数目小于设定的绑定数目的时候，就会报
+ERROR。这意味着如果设定为SC_ALL_BOUND，那么必须精确地符合设定的绑定数目。
+另一种策略，SC_ZERO_OR_MORE_BOUND，实际上不作任何检查。
+
+在complete_binding的最后，调用free_binding释放相应的资源（主要是为static sensitive而
+分配到资源），并设置bind info的complete为true:
+
+.src/sysc/communication/sc_port.cpp
+[source,cpp]
+----
+    // CLEAN UP: FREE BINDING STORAGE:
+
+    free_binding();
+
+    m_bind_info->complete = true;
+----
+
+complete_binding是sc_port_base非常重要的一个函数，理解complete_binding，是理解sc_port
+核心逻辑的基础。
+
+==== 其他在simulation不同stage调用的函数
+
+sc_port_base还实现了一系列在simulation不同的stage调度的函数(继承自sc_object的函数)。这些函数绝大多数都是空函数，不需要
+做具体的动作。这些函数包括
+
+* before_end_of_elaboration
+* end_of_elaboration
+* start_of_simulation
+* end_of_simulation
+* construction_done
+* elaboration_done
+* start_simulation
+* simulation_done
+
+在elaboration_done阶段sc_bind_info的指针被重置为0，释放了相应的资源。
+这样就保证了当我们试图替换所有
+sc_port为具体的sc_interface，并resolve相关static sensitive的时候，hierarchy
+已经建立起来。
+
+== sc_port_b<IF>
+
+sc_port_b<IF>继承自sc_port_base，主要增加的实现是增加了interface的模板信息：
+
+.src/sysc/communication/sc_port.h
+[source,cpp]
+----
+template <class IF>
+class sc_port_b
+: public sc_port_base
+{
+----
+
+增加的模板参数IF，必须是sc_interface的派生类，而不能是其他的类。模板参数IF提供的信息
+决定了这个sc_port_b<IF>所能提供的能力。例如，对于sc_fifo而言，是可读(read)可写(write)
+的。如果我们自定义一个派生自sc_interface的类，只定义了write作为接口函数，命名为
+sc_fifo_outonly_if，那么对于sc_port_b<sc_fifo_outonly_if>而言（以及继承类sc_port<sc_fifo_outonly_if>)，只能访问这个write函数，而无法访问本身sc_fifo就能
+提供的read函数。这也是sc_port提出来的意义所在：限制通过port进行的访问，从而提供更加
+具体的抽象。
+
+=== 成员变量
+
+sc_port_b<IF>的核心成员主要有两个：
+
+.src/sysc/communication/sc_port.h
+[source,cpp]
+----
+    IF*              m_interface;	// first interface in interface vec
+    std::vector<IF*> m_interface_vec;
+----
+
+一个IF的指针m_interface，另一个是保存一系列IF指针的数组m_interface_vec。其中m_interface实际
+就是m_interface_vec的第一个元素。
+
+sc_port_b<IF>的成员变量也是理解sc_port的重要途径。对于sc_port这个概念而言，唯一起到作用的
+就是这两个成员变量了：sc_port_base的sc_bind_info指针在simulation过程中为空，而sc_port虽然
+继承自sc_port_b<IF>，但没有增加任何的成员变量。
+
+=== 绑定函数
+
+相比于sc_port_base，sc_port_b<IF>还提供了一些辅助函数，帮助更好地使用sc_port_b<IF>。例如
+除了函数形式的绑定以外，sc_port_b<IF>还重载了 `operator()`
+
+.src/sysc/communication/sc_port.h
+[source,cpp]
+----
+    // bind an interface of type IF to this port
+
+    SC_VIRTUAL_ void bind( IF& interface_ )
+	{ base_type::bind( interface_ ); }
+
+    void operator () ( IF& interface_ )
+	{ this->bind( interface_ ); }
+
+
+    // bind a parent port with type IF to this port
+
+    SC_VIRTUAL_ void bind( port_type& parent_ )
+	{ base_type::bind( parent_ ); }
+
+    void operator () ( port_type& parent_ )
+	{ this->bind( parent_ ); }
+
+----
+
+=== 获取sc_interface指针的函数
+
+sc_port_b<IF>重载了 `operator->`，可以用指针调用的方式，调用 **第一个** 绑定的interface
+的成员函数。为了在绑定多个interface的时候索引其他interface，sc_port_b<IF>还重载了
+`operator[]` ，来提供类似于数组小标的索引方式。
+
+.src/sysc/communication/sc_port.h
+[source,cpp]
+----
+    // allow to call methods provided by the first interface
+    IF* operator -> ();
+    const IF* operator -> () const;
+
+
+    // allow to call methods provided by interface at index
+    inline const IF* get_interface( int iface_i ) const;
+    inline IF* get_interface( int iface_i );
+    IF* operator [] ( int index_ )
+        { return get_interface( index_ ); }
+    const IF* operator [] ( int index_ ) const
+        { return get_interface( index_ ); }
+
+
+    // get the first interface without checking for nil
+
+    virtual sc_interface* get_interface()
+        { return m_interface; }
+
+    virtual const sc_interface* get_interface() const
+        { return m_interface; }
+----
+
+=== add_interface
+
+在sc_port_base的<<api::sc_port_base::bind, bind interface>>以及<<api::sc_port_base::complete_binding,  complete_binding>>
+函数中，都会调用add_interface，将interface指针加进来。对于sc_port_base而言，
+add_interface是个接口函数。在sc_port_b<IF>中，add_interface的实现如下：
+
+.src/sysc/communication/sc_port.h
+[source,cpp]
+----
+template <class IF>
+inline
+void
+sc_port_b<IF>::add_interface( sc_interface* interface_ )
+{
+    IF* iface = dynamic_cast<IF*>( interface_ );
+    sc_assert( iface != 0 );
+
+    // make sure that the interface is not already bound:
+
+    int if_n = size();
+    for ( int i = 0; i < if_n; i++ )
+    {
+        if ( iface == m_interface_vec[i] )
+        {
+            report_error( SC_ID_BIND_IF_TO_PORT_,
+                          "interface already bound to port" );
+            // may continue, if suppressed
+        }
+    }
+
+    // "bind" the interface and make sure our short cut for 0 is set up.
+
+    m_interface_vec.push_back( iface );
+    m_interface = m_interface_vec[0];
+}
+----
+
+这里的add_interface已经带有模板信息了，所以一开始用dynamic_cast的方式，将
+没有带模板信息的基类指针sc_interface指针 cast为派生类指针。如果基类指针
+的确是一个派生类指针蜕化的，那么dynamic_cast可以成功cast回来，否则cast
+得到的结果为空指针。接下来检查是否已经存在部分，只检查代码，不实现其他逻辑。
+核心部分是将这个指针放入存放的interface vector中，并设置m_interface的值
+为interface vector中的第一个元素的值。
+
+
+=== make_sensitive
+
+sc_port_b<IF>也实现了make_sensitive函数：
+
+.src/sysc/communication/sc_port.h
+[source,cpp]
+----
+template <class IF>
+void
+sc_port_b<IF>::make_sensitive( sc_thread_handle handle_p,
+                  sc_event_finder* event_finder_ ) const
+{
+    if ( m_bind_info == 0 )
+    {
+        int if_n = size();
+        for ( int if_i = 0; if_i < if_n; if_i++ )
+	{
+	    IF* iface_p = m_interface_vec[if_i];
+	    sc_assert( iface_p != 0 );
+	    add_static_event( handle_p, iface_p->default_event() );
+	}
+    }
+    else
+    {
+        sc_port_base::make_sensitive( handle_p, event_finder_ );
+    }
+}
+
+template <class IF>
+void
+sc_port_b<IF>::make_sensitive( sc_method_handle handle_p,
+                  sc_event_finder* event_finder_ ) const
+{
+    if ( m_bind_info == 0 )
+    {
+        int if_n = size();
+        for ( int if_i = 0; if_i < if_n; if_i++ )
+	{
+	    IF* iface_p = m_interface_vec[if_i];
+	    sc_assert( iface_p != 0 );
+	    add_static_event( handle_p, iface_p->default_event() );
+	}
+    }
+    else
+    {
+        sc_port_base::make_sensitive( handle_p, event_finder_ );
+    }
+}
+----
+
+如果m_bind_info指针非空，那么调用的就是基类sc_port_base的<<api::sc_port_base::make_sensitive, make_sensitive>> 函数。
+如果m_bind_info指针为空，也就是elaboration之后再用sc_port做staitc sensitive，那么
+这里就直接调用每一个保存到sc_interface，将每一个sc_interface的default event，通过
+<<api::sc_port_base::add_static_event, add_static_event>>加入为
+相关process handle的static event列表。
+
+m_bind_info指针为空，只会发生在elaboration done之后。这种时候再设置static elaboration，
+是为数不多的应用场景，可能与动态的thread机制有关。这种机制一般是不可综合的，我们在这里
+也不用深究这部分的实现。
+
+== sc_port
+
+sc_port继承自sc_port_b<IF>，同时增加了更多的模板参数和功能：
+
+.src/sysc/communication/sc_port.h
+[source,cpp]
+----
+template <class IF, int N = 1, sc_port_policy P=SC_ONE_OR_MORE_BOUND>
+class sc_port
+: public sc_port_b<IF>
+----
+
+主要增加了绑定的数目模板参数N，默认值为1，以及绑定策略，默认为SC_ONE_OR_MORE_BOUND。
+
+sc_port<IF, N, P>相比于sc_port_b<IF>，并没有新增加其他的功能。
+
+== sc_fifo_in和sc_fifo_out
+
+sc_fifo_in和sc_fifo_out是sc_port对于fifo interface的特化形式。从本质上来讲，sc_fifo_in
+和sc_fifo_out仍然是sc_port，需要绑定到具体的sc_fifo上才能够起作用。
+
+== sc_in和sc_out
+
+sc_in和sc_out是sc_port对于signal interface的特化形式，从本质上来讲，sc_in和sc_out仍然是
+sc_port，需要绑定到具体的signal上才能够起作用。
+
+=== sc_in
+
+sc_in是signal类型的输入端口模型，需要绑定到signal类型上，不能绑定到fifo类型上。
+
+.src/sysc/communication/sc_signal_ports.cpp
+[source,cpp]
+----
+template <class T>
+class sc_in
+: public sc_port<sc_signal_in_if<T>,1,SC_ONE_OR_MORE_BOUND>
+{
+----
+
+sc_in是继承了模板参数为 `sc_signal_in_if<T>` , 且绑定数目精确地为一个的sc_port。
+而 `sc_signal_in_if` 模板类是sc_interface的继承类，并且是一个接口类：
+
+.src/sysc/communication/sc_signal_ifs.cpp
+[source,cpp]
+----
+template <class T>
+class sc_signal_in_if
+: virtual public sc_interface
+{
+public:
+
+    // get the value changed event
+    virtual const sc_event& value_changed_event() const = 0;
+
+
+    // read the current value
+    virtual const T& read() const = 0;
+
+    // get a reference to the current value (for tracing)
+    virtual const T& get_data_ref() const = 0;
+
+
+    // was there a value changed event?
+    virtual bool event() const = 0;
+----
+
+主要定义了四个接口函数（需要实现的虚函数）：
+
+1. `value_changed_event` 返回sc_event引用，以用来做静态或者动态的事件调度
+2. `event` 是否有一个值改变了的事件发生
+3. `read` 返回当前值
+4. `get_data_ref` 这个主要为了tracing用，普通用户用不到
+
+=== sc_inout
+
+介绍sc_out之前，我们先介绍一下sc_inout类型。sc_inout并不像verilog HDL那种inout类型一样，
+是双向端口类型，而更多的是一种能够读回值的输出端口。由于SystemC使用sc_interface的原因，
+单纯的sc_signal_out_if是无法读取写入的值的（如果相关的interface没有read函数接口的话），这对于熟悉HDL的人来说会感到很惊讶：写出去的值
+居然无法读取回来。鉴于此，SystemC定义了sc_signal_inout_if模板类的interface类型，并据此定义了
+sc_inout类型。sc_out类型同时继承sc_inout类型，这样一来，对于输出端口，我们也有能力读到值了。
+
+.src/sysc/communication/sc_signal_ports.cpp
+[source,cpp]
+----
+template <class T>
+class sc_inout
+: public sc_port<sc_signal_inout_if<T>,1,SC_ONE_OR_MORE_BOUND>
+{
+----
+
+sc_inout类型也是一个保存了 `sc_signal_inout_if<T>` interface指针，并且精确保存
+一个的sc_port继承类。而关于这个 sc_signal_inout_if，则
+
+.src/sysc/communication/sc_signal_ifs.cpp
+[source,cpp]
+----
+template< typename T >
+class sc_signal_write_if : public virtual sc_interface
+{
+public:
+    sc_signal_write_if() {}
+    // write the new value
+    virtual void write( const T& ) = 0;
+    virtual sc_writer_policy get_writer_policy() const
+        { return SC_DEFAULT_WRITER_POLICY; }
+private:
+    // disabled
+    sc_signal_write_if( const sc_signal_write_if<T>& );
+    sc_signal_write_if<T>& operator = ( const sc_signal_write_if<T>& );
+};
+
+
+// ----------------------------------------------------------------------------
+//  CLASS : sc_signal_inout_if<T>
+//
+//  The sc_signal<T> input/output interface class.
+// ----------------------------------------------------------------------------
+
+template <class T>
+class sc_signal_inout_if
+: public sc_signal_in_if<T>, public sc_signal_write_if<T>
+{
+
+----
+
+注意，为了避免误解，在这里SystemC中并没有使用 `sc_signal_out_if` 的，取而代之的是一个
+`sc_signal_write_if` 模板类，而 `sc_signal_inout_if` 同时继承了输入的interface
+和写出的interface，这就符合我们对输出端口的直觉印象了：输出端口既可以写出，也可以读回数据。
+
+为了完整起见，SystemC还是提供了 `sc_signal_out_if` 的定义：
+
+
+.src/sysc/communication/sc_signal_ifs.cpp
+[source,cpp]
+----
+// sc_signal_out_if can also be read from, hence no difference with
+// sc_signal_inout_if.
+
+#define sc_signal_out_if sc_signal_inout_if
+----
+
+正如我们之前分析的一样， `sc_signal_out_if` 其实就是 `sc_signal_inout_if` ，两者
+并没有任何区别。
+
+=== sc_out
+
+sc_out类型其实就是一个sc_inout类型。SystemC在代码里给出了定义一个新的模板类，而不是
+简单做一个typedef的原因：为了方便debug。
+
+.src/sysc/communication/sc_signal_ports.cpp
+[source,cpp]
+----
+// sc_out can also read from its port, hence no difference with sc_inout.
+// For debugging reasons, a class is provided instead of a define.
+
+template <class T>
+class sc_out
+: public sc_inout<T>
+{
+----
+
+sc_out 相关函数的实现基本都是转交给了基类，也就是 `sc_inout` 来做的。
+
+== sc_export
+[[api::sc_export]]
+
+对于只有sc_port和sc_interface（例如sc_signal或者sc_fifo）的体系而言，模块之间互联是这样的。模块MA
+内部有一个sc_port PA，模块B内部有另一个sc_port PB。如果需要从PA传递信息到PB，我们需要在TOP模块中
+实例化一个sc_interface的继承类，例如sc_signal或者sc_fifo，然后将PA绑定到这个sc_interface上，并
+将PB绑定在这个sc_interface上，这就实现了一个双端口的连接。
+
+这么做的坏处是，需要在TOP模块中额外初始化一个sc_interface继承类。如果不在TOP模块中初始化一个sc_interface
+继承类，另一个可选的方法是将sc_interface继承类直接在MB模块中初始化，然后模块MA的PA直接绑定到
+PB中的这个sc_interface继承类上。对于模块PB，不再需要多余的sc_port PB，只需要直接从自己内部
+的sc_interface继承类中读取数据即可。
+
+这么做省去了TOP模块中的连线问题，然而带来的另一个问题是访问权问题。这种做法要求PB模块中的
+这个sc_interface继承类对于模块PA是可见的。对于一些隐藏了实现细节的IP设计而言，可能并不
+希望外界能够看到内部到底使用一个sc_signal直连，还是通过一个具有一定深度的sc_fifo来
+缓冲数据。为了隐藏这种实现细节，SystemC提供了一个新的模板类， `sc_export<T>` 。
+
+使用sc_export的应用场景和上边的第二种情况差不多。所不同的是，此时PB声明自己有一个public的
+sc_export，模板参数是sc_interface类（类似于sc_port）。PB内部的sc_interface继承类
+的实例可以是私有的，只需要PB自己在构造函数中将sc_export绑定这个sc_interface继承类的实例
+即可。对于PA而言，PB暴露出来的只是一个sc_export接口而已，PA可以将自己的PA绑定到这个
+暴露出来的sc_export上。
+
+sc_export<IF>模板类提供了隐式转换功能，可以将自己转成一个 `IF&` 或者 `const IF&`
+
+.src/sysc/communication/sc_export.cpp
+[source,cpp]
+----
+    operator IF& ()
+    {
+        if ( m_interface_p == 0 )
+        {
+            SC_REPORT_ERROR(SC_ID_SC_EXPORT_HAS_NO_INTERFACE_,name());
+            sc_abort(); // can't recover from here
+        }
+        return *m_interface_p;
+    }
+    operator const IF&() const
+        { return *const_cast<this_type*>(this); }
+----
+
+这意味着在绝大多数使用 `sc_interface` 的场合，都可以使用一个 `sc_export<sc_interface>` 来代替，
+{CPP} 编译器会自动完成隐式的转换工作。
+
+例如， `sc_export<IF>` 只提供了以下几种bind函数：
+
+.src/sysc/communication/sc_export.cpp
+[source,cpp]
+----
+    SC_VIRTUAL_ void bind( IF& interface_ )
+    {
+        if ( m_interface_p )
+        {
+            SC_REPORT_ERROR(SC_ID_SC_EXPORT_ALREADY_BOUND_,name());
+            return;
+        }
+        m_interface_p = &interface_;
+    }
+
+    void operator () ( IF& interface_ )
+    {
+        this->bind(interface_);
+    }
+----
+
+然而，由于一个 `sc_export<IF>` 可以被隐式转换为 `IF&` ，所以实际上我们是可以将一个sc_export
+直接绑定到另一个sc_export上去的。例如， `EA.bind(MB.EB)` ，这种绑定效果等同于EA获取了
+MB.EB内部保存的 `m_interface_p` 指针的值。能够这么做的一个前提就是在 `EA.bind(MB.EB)` 之前，
+MB.EB已经完成了到 sc_interface的绑定工作。对于sc_port而言这是无法保证的，因为sc_port绑定
+的sc_interface在模块**之外**，无法保证初始化的顺序。而对于sc_export而言，其需要绑定的sc_interface
+位于自己内部，或者更下层次的模块，绑定的顺序是可控的。
+
+
+相比于sc_port，sc_export的缺点有：
+
+* 无法做到一对多绑定，只能一对一，也即一个sc_export只能bind一个interface。只能提供一对一的绑定，这是由于sc_export具有隐式转换的能力决定的。如果sc_export能够绑定多个interface，那么隐式转换应当转换成为哪个interface，就成为了一个非常棘手的设计模式问题了。为了避免这种问题的出现，sc_export被设计为只能做一对一的绑定。
+
+优点则有：
+
+* 能够隐式cast成sc_interface类型，因此基本可以代替sc_interface的使用，例如可以直接作为static sensitive源（存疑，文档里说不能这么做，但我发现从语法上来说应该是可以这么干的）
+* 隐藏实现细节
+* 效率更高，因为sc_export的绑定本质上就是保存sc_interface继承类指针，通过sc_export访问sc_interface继承类的接口函数更快（其实和sc_port直接访问效果是一样的）
+
+== event_finder
+[[api::event_finder]]
+
+sc_event_finder数据结构的主要作用，就是为sc_port作为static sensitive源的时候，解决
+此时sc_port没有绑定具体的interface，因此无法指定sc_event的问题。sc_event_finder
+主要作用是提供一个占位符，能够在sc_port作为static sensitive的时候，设置一个未来要绑定
+的interface的成员函数，这个成员函数应当返回一个sc_event的指针。
+
+sc_event_finder在构造的时候只需要保存成员函数指针，而不需要保存interface自己的指针，这是
+因为此时没有绑定具体的interface，无法给出这个指针。在<<api::sc_port_registry::elaboration_done, sc_port_registry的elaboration_done>>
+时候，所有的hierarchy体系全都被建立起来，此时elaboration_done函数调度每个注册的
+sc_port_base的<<api::sc_port_base::complete_binding, complete_binding>>函数，在
+complete_binding中，SystemC结合所设置的sc_event_finder，以及interface指针，调度
+给成interface对象的给定成员函数，获得sc_event引用。
+
+sc_event_finder的数据结构有两个，作为接口类，并且不带具体interface模板参数的sc_event_finder，
+以及作为模板类，继承自sc_event_finder，带具体interface模板参数的sc_event_finder_t<IF>。
+在sc_event_finder中，成员函数cached_create作为一个模板函数，可以将模板信息带入函数内部，
+创建一个sc_event_finder_t<IF>，并返回其基类指针sc_event_finder。这样一来，返回值就不带有
+模板信息了。这相当于我们从一个带有模板信息的函数参数，创建了一个不带有模板信息的返回值(基类引用）。这个返回值
+在未来可以尝试用dynamic_cast转回带有模板信息的继承类，并用cast回来的指针判断是否cast成功。这也是
+在SystemC中广泛使用的一种设计模式。
+
+
+.src/sysc/communication/sc_event_finder.h
+[source,cpp]
+----
+template <class IF>
+inline
+sc_event_finder&
+sc_event_finder::cached_create( sc_event_finder*& cache_p
+                              , const sc_port_base& port_
+                              , const sc_event& (IF::*ef_p)() const )
+{
+    if( !cache_p ) {
+        cache_p = new sc_event_finder_t<IF>( port_, ef_p );
+    }
+    sc_assert( &port_ == &cache_p->port() );
+    return *cache_p;
+}
+----
+
+从 `sc_event_finder::cached_create` 函数，我们也可以看出这段代码中，唯一用到
+interface模板参数IF的函数参数，是成员函数指针 `ef_p` 。创建一个sc_event_finder_t<IF>
+还需要一个具体的sc_port_base引用。
+
+下边是对cached_create函数的具体应用。对于sc_fifo_in类型而言，其需要提供一个data_written
+时候的相关sc_event，但是在sc_fifo_in作为一个static sensitive的时候，它是没有绑定具体的
+interface的。为了解决这个问题，sc_fifo_in的data_written返回的不是一个sc_event引用，而是
+一个sc_event_finder。这个sc_event_finder只需要在未来的某个时刻（具体来说，就是sc_fifo_in
+的complete_binding的时候），传入一个具体的 `in_if_type` 作为对象指针，就可以调用注册的
+成员函数，获取一个sc_event的引用，来作为真正用来建立event和process handle相互联系调度的基础。
+
+.src/sysc/communication/sc_fifo_ports.h
+[source,cpp]
+----
+    sc_event_finder& data_written() const
+    {
+        return sc_event_finder::cached_create
+                ( m_written_finder_p, *this,  &in_if_type::data_written_event );
+    }
+----
+
+现在不清楚的问题在于，sc_event_finder是一个基础类，那么这个data_written在什么
+地方可能用到？目前看到的情况是，其他的例如pos/neg等在sc_sensitive.cpp中会被用到。例如：
+
+.src/sysc/kernel/sc_sensitive.h
+[source,cpp]
+----
+sc_sensitive&
+sc_sensitive::operator () ( sc_cthread_handle handle_,
+			    const in_port_b_type& port_ )
+{
+    port_.make_sensitive( handle_, &port_.pos() );
+    return *this;
+}
+----
+
+其中 `in_port_b_type` 是 `sc_in<bool>` 的typedef.
+在这里调用port基类的make_sensitive函数，传入的参数出了sc_cthread_handle的handle
+以外，还有port的pos()函数返回值的指针：
+
+.src/sysc/communication/sc_signal_ports.h
+[source,cpp]
+----
+    sc_event_finder& pos() const
+    {
+        return sc_event_finder::cached_create
+                ( m_pos_finder_p, *this, &in_if_type::posedge_event );
+    }
+----
+
+而对于 `sc_in<bool>` 来说，pos成员函数返回的则是一个sc_event_finder引用。这个
+sc_event_finder里指定了一个成员函数指针 `&in_if_type::posedge_event` ，对于任何
+一个继承自 `in_if_type`，也就是 `sc_signal_in_if<bool>` 的interface，都需要实现这个函数，因为这个
+是函数接口的一部分。当 `sc_in<bool>` 绑定到一个实现了 `sc_signal_in_if<bool>::posedge_event`
+的interface上之后，就可以调用这个interface的posedge_event成员函数，
+获得真正的sc_event，用来作为 `sc_cthread_handle` 的static event事件。
+
+[NOTE]
+====
+
+对于每一个继承自sc_interface的派生类而言，接口函数default_event能够返回一个event是事件。这个
+default_event返回的event事件能够参与到SystemC内部，用以静态或者动态触发进程的调度（在SystemC
+的EVALUATE-UPDATE-NOTIFICATION框架中实现具体功能）。sc_event_finder的提出，则是在这个
+default_event接口类不满足需求的情况下（例如，对于sc_clock，即需要上升沿的事件，
+也需要下降沿的事件），提供的一种占位框架：sc_event_finder可以在构造的时候只保存成员函数指针，
+而将解引用过程**延迟**到能够得到对象指针的时候。换言之，sc_event_finder只不过是对默认
+使用default_event获取关联event对象，这一大多数情况下都符合假定的设计模式的一个补充：当
+少部分情况下不符合这个设计模式的时候，使用sc_event_finder仍然能够达到目的。
+
+
+====

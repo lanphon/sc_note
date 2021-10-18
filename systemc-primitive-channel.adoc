@@ -1,0 +1,1065 @@
+:source-highlighter: coderay
+
+:toc: left
+
+SystemC内的Primitive Channel
+
+== 引言
+
+在 `simc` 的 `crunch` 函数中，UPDATE PHASE只有一个函数调用，就是primitive channel registry的 `perform_update()` 函数。
+primitie channel registry是所有的primitive channel，包括 `sc_signal`, `sc_fifo`, `sc_clock`, `sc_buffer` 等
+继承自 `sc_prim_channel` 的所有对象注册表。
+
+== Primitive Channel框架
+
+Primitive Channel有两个类组成，一个负责管理所有注册的primitive channel的 `sc_prim_channel_registry`, 另一个则是所有primitive channel
+的基类 `sc_prim_channel`.
+
+=== `sc_prim_channel_registry`
+
+`sc_prim_channel_registry` 中，保存了一个需要在UPDATE PHASE执行
+<<api::sc_prim_channel::update, update>>函数的所有 `sc_prim_channel`
+对象的指针， `sc_prim_channel` 中有一个指向下一个 `sc_prim_channel` 的指针，
+从而组成一条链表。
+
+==== request_update
+
+`sc_prim_channel_registry` 的 `request_update` 函数接受一个 `sc_prim_channel`
+对象的引用，然后将此对象加入到注册表的链表中：
+
+.src/sysc/communication/sc_prim_channel.h
+[source,cpp]
+----
+inline
+void
+sc_prim_channel_registry::request_update( sc_prim_channel& prim_channel_ )
+{
+    prim_channel_.m_update_next_p = m_update_list_p;
+    m_update_list_p = &prim_channel_;
+}
+----
+
+这部分就是将传入的primitive channel对象加到链表的最开始的地方。
+
+`sc_prim_channel_registry::request_update` 函数应当在EVALUATE PHASE调用。
+
+==== perform_update
+[[api::sc_prim_channel_registry::perform_update]]
+
+`sc_prim_channel_registry` 的 `perform_update` 函数，主要是遍历链表中的每一个节点，
+然后调用 <<api::sc_prim_channel::perform_update, `sc_prim_channel` 的 `perform_update`>>
+函数:
+
+.src/sysc/communication/sc_prim_channel.cpp
+[source,cpp]
+----
+void
+sc_prim_channel_registry::perform_update()
+{
+    // Update the values for the primitive channels set external to the
+    // simulator.
+
+#ifndef SC_DISABLE_ASYNC_UPDATES
+    if( m_async_update_list_p->pending() ) <1>
+	m_async_update_list_p->accept_updates();
+#endif
+
+    sc_prim_channel* next_p; // Next update to perform.
+    sc_prim_channel* now_p;  // Update now performing.
+
+    // Update the values for the primitive channels in the simulator's list.
+
+    now_p = m_update_list_p;
+    m_update_list_p = (sc_prim_channel*)sc_prim_channel::list_end;
+    for ( ; now_p != (sc_prim_channel*)sc_prim_channel::list_end;
+	now_p = next_p )
+    {
+	next_p = now_p->m_update_next_p;
+	now_p->perform_update(); <2>
+    }
+}
+----
+<1> 在<<concept::primitive::async, 异步>>部分我们会介绍这部分代码的目的
+<2> 最核心的部分实质性每一个注册了的prim channel的 
+<<api::sc_prim_channel::perform_update, `perform_update`>> 函数
+
+`crunch` 的UPDATE PHASE唯一一个函数调用就是 `sc_prim_channel_registry::perform_update` 。
+
+
+=== `sc_prim_channel`
+
+`sc_prim_channel` 是所有channel的基类。
+
+==== request_update
+[[api::sc_prim_channel::request_update]]
+
+`sc_prim_channel::request_update` 函数会将自己放入 `sc_prim_channel_registry`
+中的链表：
+
+.src/sysc/communication/sc_prim_channel.h
+[source,cpp]
+----
+inline
+void
+sc_prim_channel::request_update()
+{
+    if( ! m_update_next_p ) { <1>
+	m_registry->request_update( *this );
+    }
+}
+----
+<1> 如果 `m_update_next_p` 有非零值，说明本primitive channel已经存在于registry的链表中了
+
+`sc_prim_channel::request_update` 可能被多次调用。
+
+`sc_prim_channel::request_update` 函数应当在EVALUATE PHASE调用。
+
+==== perform_update
+[[api::sc_prim_channel::perform_update]]
+
+对于 `sc_prim_channel` 的 `perform_update` 函数，只是简单地调用 <<api::sc_prim_channel::update, update成员函数>>， 然后将本节点中保存
+的下一个节点赋值为空，从 `sc_prim_channel_registry` 链表中挪去此节点：
+
+.src/sysc/communication/sc_prim_channel.h
+[source,cpp]
+----
+inline
+void
+sc_prim_channel::perform_update()
+{
+    update(); <1>
+    m_update_next_p = 0;
+}
+----
+<1> 核心部分就是这个可以被重载的 `update` 函数
+
+`sc_prim_channel::perform_update` 应当在UPDATE PHASE调用。从这里我们能看出，
+`sc_prim_channel::perform_update`的核心就是那个可以被重载的 `update` 函数。每一个
+继承自 `sc_prim_channel` 的类都可以实现自己的 `update` 函数，从而保证需要的动作
+能够在 `crunch` 的UPDATE PHASE最终调用到。这些需要在UPDATE PHASE实现的功能和动作
+一般有：
+
+* 更新相关的值到内部存储区域
+* 调度安排阻塞在特定事件（写/读事件发生，值改变，上升沿，下降沿等）上的线程
+
+我们在后续能够看到不同 `update` 的具体实现，这些都是根据具体的primitive channel功能
+而定制的。
+
+==== update函数
+[[api::sc_prim_channel::update]]
+
+`sc_prim_channel::update()` 函数是一个虚函数。对于 `sc_prim_channel` 而言，update函数没有
+实现任何具体的功能：
+
+.src/sysc/communication/sc_prim_channel.cpp
+[source,cpp]
+----
+void
+sc_prim_channel::update()
+{}
+----
+
+所有继承 `sc_prim_channel` 的类都应当事先自己的 `update` 函数。此函数会在UPDATE PHASE被 `simc`
+间接调用。
+
+=== 小结
+
+`sc_prim_channel_registry` 和 `sc_prim_channel` 组成了SystemC中的primitive channel
+机制的基石。
+
+在EVALUATE PHASE，有需要的 `sc_prim_channel` 需要调用 <<api::sc_prim_channel::request_update, `sc_prim_channel::request_update`>>
+函数，将自己注册到 `sc_prim_channel_registry` 的update链表中。
+
+在UPDATE PHASE， `simc` 调用<<api::sc_prim_channel_registry::perform_update,  `sc_prim_channel_registry::perform_update()`>>
+函数，从而间接调用到了每个注册在primitive channel registry中的primitive channel
+的 <<api::sc_prim_channel::update, `sc_prim_channel::update()`>> 函数。
+
+每个继承 `sc_prim_channel` 的类都需要实现自己的 `update` 函数，完成本primitive channel
+在UPDATE PHASE的工作。这些类可以用 `sc_prim_channel::request_update` ，来和
+primitive channel registry通信。
+
+== 几种Primitive Channel
+
+这里我们尝试探索几种类型的primitive channel，研究一下这些类是如何
+使用SystemC的primitive channel框架来实现相应的功能的。
+
+=== `sc_fifo`
+
+==== 使用request_update的地方
+
+对于sc_fifo，如果非阻塞的读或者写成功的话，就会调用 `request_update` 成员函数，将自己
+注册到primitive channel registry的update链表中：
+
+.src/sysc/communication/sc_fifo.h
+[source,cpp]
+----
+template <class T>
+inline
+bool
+sc_fifo<T>::nb_read( T& val_ )
+{
+    if( num_available() == 0 ) {
+	return false;
+    }
+    bool read_success = buf_read( val_ );
+    if( SC_LIKELY_(read_success) ) {
+        m_num_read ++;
+        request_update();
+    }
+    return read_success;
+}
+
+template <class T>
+inline
+bool
+sc_fifo<T>::nb_write( const T& val_ )
+{
+    if( num_free() == 0 ) {
+	return false;
+    }
+    bool write_success = buf_write( val_ );
+    if( SC_LIKELY_(write_success) ) {
+        m_num_written ++;
+        request_update();
+    }
+    return write_success;
+}
+----
+
+同时，阻塞版本的读/写则在无法读或者写的时候，等待相对应的event:
+
+* 如果无法读数据，那就等待写事件发生，这样就有足够的数据可以读取
+* 如果无法写数据，那就等待读事件发生，这样就有足够的空间可以写入
+
+.src/sysc/communication/sc_fifo.h
+[source,cpp]
+----
+// blocking read
+
+template <class T>
+inline
+void
+sc_fifo<T>::read( T& val_ )
+{
+    while( num_available() == 0 ) {
+	sc_core::wait( m_data_written_event );
+    }
+    bool read_success = sc_fifo<T>::nb_read(val_); <1>
+    sc_assert( read_success );
+}
+
+// blocking write
+
+template <class T>
+inline
+void
+sc_fifo<T>::write( const T& val_ )
+{
+    while( num_free() == 0 ) {
+	sc_core::wait( m_data_read_event );
+    }
+    bool write_success = sc_fifo<T>::nb_write(val_); <2>
+    sc_assert( write_success );
+}
+----
+<1> 调用非阻塞版本的读
+<2> 调用非阻塞版本的写
+
+==== update函数的实现
+
+sc_fifo的update函数主要实现了读和写时间的通知：
+
+.src/sysc/communication/sc_fifo.h
+[source,cpp]
+----
+template <class T>
+inline
+void
+sc_fifo<T>::update()
+{
+    if( m_num_read > 0 ) {
+	m_data_read_event.notify(SC_ZERO_TIME);
+    }
+
+    if( m_num_written > 0 ) {
+	m_data_written_event.notify(SC_ZERO_TIME);
+    }
+
+    m_num_readable = m_size - m_free;
+    m_num_read = 0;
+    m_num_written = 0;
+}
+----
+
+这里读和写时间都使用了 `notify(SC_ZERO_TIME)` ，在UPDATE阶段将阻塞在这两个事件的
+线程重新放入runnable列表。根据 `request_update` 部分，只有阻塞的读和写才会阻塞在
+这两个事件上。因此：
+
+* 对于阻塞读
+ - 如果没有足够读取的数据，本delta cycle被调度出去，直到一个写事件发生的下一个delta cycle才会被调度回来重新执行
+ - 如果有足够读取的数据，本delta cycle即可读取数据，并且将本fifo放入到prim channel registry的update链表中
+* 对于阻塞写
+ - 如果没有足够的空间来写入，本delta cycle被调度出去，直到一个读时间发生的下一个delta cycle才会被调度回来重新执行
+ - 如果有足够的空间写入，本delta cycle即完成写入动作，并将本fifo放入prim channel registry的update表中
+
+由于读或者写成功进行，request_update被调用，导致本sc_fifo会被放入prim channel registry的update链表中。
+在UPDATE PHASE，读或者写事件的 `trigger()` 可以将可能pending在本时间上的线程纳入调度队列，在下一个
+delta cycle恢复相应的线程。
+
+==== 场景分析
+
+我们这里尝试分析几种读写的场景，来加深理解sc_fifo的行为。本部分我们用RT表示读线程, Read Thread，WT表示写线程，Write Thread. 读写均采用阻塞读写方法。
+
+''''
+
+初始时fifo为空，读写在同一个clock cycle发生。
+
+在这种情况下，EVALUATE PHASE, 如果先调度执行阻塞写的线程WT，再调度执行阻塞读的线程RT，则阻塞写的线程WT由于有足够
+的空间写入（fifo为空），顺利完成写入，并且执行了request_update将本fifo放入registry的update
+链表中。RT线程执行的时候，由于fifo中已经有写入的数据，所以也不会阻塞，直接读取数据，同样调用
+request_update将本fifo放入registry的update链表。在UPDATE阶段， `update` 函数被调用，读和写
+事件都有发生，因此会调用读和写事件的 `notify(SC_ZERO_TIME)`  ，尝试将阻塞在读写事件上的线程放入
+runnable列表。由于没有线程实际阻塞在读写事件上，因此 `notify(SC_ZERO_TIME)` 实际上没有
+为下一个delta cycle调度添加任何线程。在这种情况下，读和写发生在一个clock，准确地说，在同一个delta cycle
+内完成。
+
+如果EVALUATE PHASE，先调度RT，再调度WT。RT由于没有足够读取的数据，会阻塞在写事件上。
+WT运行的时候，有足够的空间写入，所以可以直接写进去，并调用request_update将本fifo放入registry
+的update链表。在UPDATE阶段， `update` 被调用，只有写事件发生，没有读事件发生。写事件
+调用 `notify(SC_ZERO_TIME)` ，将阻塞在写事件上的线程，也就是这里的RT，重新放入runnable链表中。
+在下一个delta cycle，RT会被重新调度执行。此时fifo中有足够的数据读取，因此读事件发生，调用
+`request_update` 将本fifo放入registry的update链表。在UPDATE阶段， `update` 被调用，
+将阻塞在读事件上的线程放入runnable链表，这里没有阻塞在读事件上的线程，因此没有为下一个delta cycle
+调度添加任何线程。在这种情况下，读和写发生在一个clock内，但分属两个不同的delta cycle。
+
+''''
+
+初始时fifo为满，读写在同一个clock cycle发生。
+
+在这种情况下，EVALUATE PHASE如果先调度执行阻塞写的线程WT，再调度阻塞读的线程RT。
+由于阻塞写的线程没有足够的空间写入，WT会阻塞在读事件上。RT运行的时候，有足够的数据可以读取，
+因此可以直接读取数据，并调用 `request_update` 将本fifo放入registry
+的update链表。在UPDATE阶段， `update` 被调用，由于只有读事件发生，读事件会调用
+`notify(SC_ZERO_TIME)` 将阻塞在读事件上的线程，也就是WT，重新放入runnable链表中。
+在下一个delta cycle，WT会被重新调度执行。此时fifo有足够的空间写入，因此写事件发生，调用
+`request_update` 将本fifo放入registry的update链表。在UPDATE阶段， `update` 被调用，将阻塞
+在写事件上的线程放入runnable链表。这里没有阻塞在写事件上的线程，因此没有为下一个delta cycle调度
+添加任何线程。在这种情况下，读和写发生在一个clock内，但分属两个不同的delta cycle。
+
+如果EVALUATE PHASE先调度RT，再调度WT。RT和WT都能够顺利完成。在UPDATE阶段，由于没有
+阻塞在读和写事件上的线程，因此不会为runnable链表增加任何线程。这种情况下，读和写发生在
+一个clock内，并且发生在同一个delta cycle内。
+
+''''
+
+初始时fifo非满非空，读写在同一个clock cycle发生。
+
+在这种情况下，无论EVALUATE PHASE先调度RT，再调度WT，还是反过来先调度WT再调度RT，两个线程
+都能顺利完成。在UPDATE阶段，由于没有阻塞在读写事件上的线程，因此 `update` 函数不会为
+runnable链表增加任何下一个delta cycle调度的线程。这种情况下，读和写发生在一个clock内，并且
+发生在同一个delta cycle内。
+
+''''
+
+初始时fifo空，读写发生在不同的clock cycle.
+
+如果读发生在clock t1, 写发生在clock t2,  `t1 < t2` 。由于FIFO初始为空，RT将会被阻塞。在t1的
+clock cycle，由于RT等待的写事件一直没有发生，所以在t1时刻RT一直被阻塞。
+在t2时刻的第一个delta cycle，EVALUATE阶段WT发生，并且调用 `request_update` 将本iffo注册
+到registry的update链表。在UPDATE阶段， `update` 函数根据写事件，将阻塞在该事件上的
+线程，也就是RT，放入runnable链表中。在t2时刻第二个delta cycle的EVALUATE阶段，RT被重新调度。
+此时由于FIFO中已经有WT在第一个delta cycle写入的数据，所以RT将会获取数据，然后执行 `request_update`
+将本fifo注册到registry的update链表。在第二个delta cycle的UPDATE阶段， `update` 函数根据
+读事件的发生，将阻塞在该事件上的线程放入runnable链表，但目前没有阻塞在该事件上的线程，所以没有
+加入到runnable的线程。在这种情况下，t1时刻的RT会在t2时刻的WT完成后的下一个delta cycle调度完成，也即
+在之前clock cycle被堵塞的读线程会在写线程的同一个clock cycle，但不同的delta cycle完成。
+
+如果写发生在clock t1, 读发生在clock t2, `t1 < t2` 。由于FIFO初始为空，t1时刻的WT能够顺利写入。
+因为没有阻塞在写事件上的线程，所以t1时刻的执行结束。在t2时刻，RT在第一个得到调度的delta cycle得到执行。同样由于没有阻塞在读事件上的线程，所以t2时刻执行结束。在这种情况下，t1时刻的WT和t2时刻的RT
+都能够顺利完成。
+
+''''
+
+初始时fifo为满，读写发生在不同的clock cycle.
+
+如果读发生在clock t1, 写发生在clock t2, `t1 < t2`. 由于FIFO初始为满，所以t1时刻的RT能够顺利
+完成。在t2时刻，由于FIFO已经不再满，WT能够顺利完成。在这种情况下，t1的RT和t2的WT都能够顺利完成。
+
+如果写发生在clock t1, 读发生在clock t2, `t1 < t2`. 由于FIFO初始为满，所以t1时刻的WT
+会被阻塞。在t1的所有delta cycle，阻塞WT的读事件一直没有发生，所以t1时刻WT一直阻塞。
+在t2时刻的第一个delta cycle的EVALUAT阶段，RT被调度，并且调用 `request_update` 将本
+fifo注册到registry的update链表中，在UPDATE阶段， `update` 函数根据读事件，将阻塞在
+该事件上的线程，也就是WT，重新放入runnable链表中。在下一个delta cycle的EVALUATE阶段，
+WT被重新调度，完成写入动作，并在 `update` 阶段将阻塞在写事件上的线程重新放入runnable链表。由于
+此时没有阻塞在写事件上的线程，不会更新runnable链表。在栽种情况下，t1时刻的WT会在t2时刻RT完成后
+的下一个delta cycle调度完成，也即在之前clock cycle被阻塞的写线程会在读线程
+的同一个clock cycle，但不同的delta cycle完成。
+
+''''
+
+初始时fifo非空非满，读写发生在不同的clock cycle。
+
+在这种情况下，无论读写发生的顺序，RT和WT都能够在被调度的clock cycle完成。
+
+==== 行为描述
+
+`sc_fifo` 令人比较困惑的一点在于，在FIFO为空的情况下，如果读写发生在同一个clock cycle，那么
+读在本clock cycle能够读到写入的数据。这对于一个正常的FIFO来说是错误的行为：数据起码要先进入
+FlipFlop，在下一个clock cycle才能够被读回来。对于特殊设计的FIFO而言，发生在同一个clock
+cycle的读写绕过FlipFlop，直接将数据透传过去的行为是存在的，只不过这么做就失去了FIFO的非常
+重要的一个功能：打断双向的时延，已提供更好的timing能力。
+
+读写不在同一个clock cycle时，在FIFO为空的情况下，如果读先发生，
+那么阻塞的读会在写的cycle立即唤醒并读到写入的值，这一点的行为也非常令人惊讶。
+
+`sc_fifo` 在使用过程中是否有特殊要求，以避免出现这样的情况，从源代码分析还暂时不得而知。
+后续会补充。
+
+==== 其他
+
+sc_fifo不仅是一个sc_prim_channel，同时也是一个sc_interface，实现了 `register_port`
+功能，将一个 `sc_port_base` 对象注册为自己的reader或者write(根据类型信息来判断是读还是写)。
+
+=== `sc_signal`
+
+不同于 `sc_fifo` 建模一个具有一定深度的先进先出队列以hide住latency, `sc_signal` 建模的
+则是各个模块之间的物理连线。从直觉上来说， `sc_signal` 没有任何的延时：从一个模块的输出
+经过sc_signal，就能立马被下游模块的输入看到。
+
+与sc_fifo迥异的地方还在于，sc_signal是一系列有着复杂继承体系的类。这种复杂继承体系，目的
+是为了让sc_signal有着不同的逾期行为：是否可以被多个线程同时赋值（MANY WRITER），是否
+强制做检查，诸如此类。我们这里主要分析的是如下模板类：
+
+.src/sysc/communication/sc_signal.h
+[source,cpp]
+----
+template< class T, sc_writer_policy POL >
+class sc_signal_t
+  : public    sc_signal_inout_if<T>
+  , public    sc_signal_channel
+  , protected sc_writer_policy_check<POL>
+{
+};
+----
+
+`sc_signal_t<>` 继承自 `sc_signal_channel`, 而:
+
+.src/sysc/communication/sc_signal.h
+[source,cpp]
+----
+class SC_API sc_signal_channel
+  : public sc_prim_channel
+{
+};
+----
+
+所以， `sc_signal_t<>` 也是一个primitive channel.
+
+对于 `sc_signal_channel` 最重要的实现是其 `do_update` 函数:
+
+[[api::sc_signal_channel::do_update]]
+.src/sysc/communication/sc_signal.cpp
+[source,cpp]
+----
+// do the generic update actions
+void
+sc_signal_channel::do_update()
+{
+    notify_next_delta( m_change_event_p ); <1>
+    m_change_stamp = simcontext()->change_stamp(); <2>
+}
+----
+<1> 这里用notify_next_delta，允许在UPDATE PHASE注册阻塞在 m_change_event_p事件
+上的线程，在NOTIFICATION PHASE计入runnable链表中
+<2> 获取当前delta cycle的时间戳，每个delta cycle的时间戳都不一样
+
+
+相比于 `sc_signal_channel`, `sc_signal_t` 增加了两个非常重要的成员变量：
+
+.src/sysc/communication/sc_signal.h
+[source,cpp]
+----
+    T m_cur_val;         // current value of object.
+    T m_new_val;         // next value of object.
+----
+
+当前值 `m_cur_val` 和 下一个值 `m_new_val` 。这两个值在每个delta cycle开始的EVALUATE阶段之前
+都是一致的footnote:[我们后续在<<concept::cur_and_new, cur和new的取值>>中证明这一点]。
+
+==== 使用request_update的地方
+
+对于 `sc_signal_t<>` ，只有成员函数 `write` 使用到了 `request_update`:
+
+[[api::sc_signal_t::write]]
+.src/sysc/communication/sc_signal.h
+[source,cpp]
+----
+template< class T, sc_writer_policy POL >
+inline
+void
+sc_signal_t<T,POL>::write( const T& value_ )
+{
+    // first write per eval phase: m_new_val == m_cur_val
+    bool value_changed = !( m_new_val == value_ );
+    if ( !policy_type::check_write(this, value_changed) )
+        return;
+
+    m_new_val = value_;
+    if( value_changed || policy_type::needs_update() ) {
+        request_update();
+    }
+}
+----
+
+让我们先暂时忽略掉策略中的 `check_write` 和 `needs_update`, 那么这个写的行为就很简单了：
+在EVALUATE PHASE如果写入的值和当前保持的下一个值不一样，那么就调用 `request_update` 将本primitive channel
+注册到registry的update链表。这里之所以与 `m_new_val` 相比较，而不是和 `m_cur_val` 相
+比较，是因为在EVALUATE阶段，write可能被多次调用。
+
+同时也需要注意，这里的比较使用的是 `m_new_val == value_` 然后对结果取反，而不是直接用
+`m_new_val != value_` ，这是因为sc_signal_t是个模板类，为了放松对模板参数的要求，这里
+只要求类型数据T实现相等判断即可，而不需要实现不相等判断。
+
+==== update函数实现
+
+被注册到registry的update链表中的 `sc_signal_t<>` 会在UPDATE阶段回调自己的
+`update` 函数，而这里的update函数的实现主要是：
+
+[[api::sc_signal_t::update]]
+[[api::sc_signal_t::do_update]]
+.src/sysc/communication/sc_signal.h
+[source,cpp]
+----
+template< class T, sc_writer_policy POL >
+void
+sc_signal_t<T,POL>::update()
+{
+    policy_type::update(); <1>
+    if( !( m_new_val == m_cur_val ) ) {
+        do_update();
+    }
+}
+
+template< class T, sc_writer_policy POL >
+inline void
+sc_signal_t<T,POL>::do_update()
+{
+    base_type::do_update(); <2>
+    m_cur_val = m_new_val; <3>
+}
+----
+<1> policy类的update函数只会做一件事情，那就是重置保存的writer线程指针，根据不同的
+策略，可能重置，也可能不充值
+<2> base类，也就是<<api::sc_signal_channel::do_update, sc_signal_channel的 `do_update`>> 会调用 `notify_next_delta`
+<3> 这里完成了赋值动作
+
+如果EVALUATE阶段最终设置下来的 `m_new_val` footnote:[因为EVALUATE阶段可能会多次赋值]
+和当前值不同，那么就调用 `base_type::do_update()` ，也就是 `sc_signal_channel::do_update()`
+
+[[api::sc_signal_channel::do_update]]
+.src/sysc/communication/sc_signal.cpp
+[source,cpp]
+----
+// do the generic update actions
+void
+sc_signal_channel::do_update()
+{
+    notify_next_delta( m_change_event_p );
+    m_change_stamp = simcontext()->change_stamp();
+}
+----
+
+这里调用了 `notify_next_delta` 将阻塞在 `m_change_event_p` 事件上的线程放入runnable链表，等待
+下一个delta cycle的EVALUATE PHASE执行。
+
+==== cur和new的取值
+[[concept::cur_and_new]]
+
+在初始化的时候，当前值 `m_cur_val` 和下一个取值 `m_new_val` 是一致的。这种一致保持到
+第一个delta cycle开始的EVALUATE PHASE之前。在EVALUATE PHASE中， `m_new_val` 可能
+在<<api::sc_signal_t::write, `write`>>调用中被赋予其他值。
+
+一旦EVALUATE PHASE中 `m_new_val` 发生改变，而不管到EVALUATE PHASE最后 `m_new_val`
+值如何（可能多次写之后会变回来），都会将本signal channel注册到registry的update链表
+中。在本delta cycle的UPDATE阶段，<<api::sc_signal_t::update, `update`>>
+函数被调用，最终将 `m_new_val` 赋值给了 `m_cur_val`. 这样，在下一个delta cycle
+开始之前，cur值和new值又保持一致了。
+
+从这里边我们也可以看出，signal channel的当前值 `m_cur_val` 在EVALUATE PHASE
+不会改变。任何线程对 signal channel的写入动作，都只会把值写到 `m_new_val` 中。
+只有到了UPDATE PHASE， `simc` 才会更新signal channel的当前值 `m_cur_val`
+为EVALUATE PHASE最终的写入值（因为可能有多次写入）。这种设计也保证了
+在EVALUATE PHASE，无论线程的调度顺序如何，所有的线程看到的signal channel的值
+都是固定，不会因其他线程调度的先后而发生改变。
+
+而倘若一个线程需要获取signal channel的最新值，那么就需要对signal channel的
+`m_change_event_p` 事件敏感。这对外表现为:
+
+[[api::sc_signal_t::default_event]]
+.src/sysc/communication/sc_signal.h
+[source,cpp]
+----
+    // get the default event
+    virtual const sc_event& default_event() const <1>
+      { return value_changed_event(); }
+
+    // get the value changed event
+    virtual const sc_event& value_changed_event() const
+        { return base_type::value_changed_event(); } <2>
+----
+<1> sc_signal同时也间接继承自 `sc_interface` ，因此需要实现 `default_event` 接口
+<2> base类的value_changed_event返回 `m_changed_event_p` 事件的引用
+
+也就是 `sc_signal_t<>::default_event()`。如果一个线程静态地依赖
+`sc_signal_t<>::default_event()` 或者动态地依赖(next_trigger或者wait在
+这个event上)，那么一旦sc_signal_t的取值发生变化，这些线程就会在下一个delta
+cycle中被唤醒，并且用 `sc_signal_t<>::read()` 读回最新的值。
+
+[[api::sc_signal_t::read]]
+.src/sysc/communication/sc_signal.h
+[source,cpp]
+----
+    // read the current value
+    virtual const T& read() const
+	{ return m_cur_val; }
+----
+
+==== 特化版本的sc_signal
+
+`sc_signal_t` 是 `sc_signal` 的唯一基类，这么做更像是为 `sc_signal_t<>` 取了
+一个别名 `sc_signal<>` 。然而 `sc_signal<>` 的引入主要是为了两种特化形式
+的模板。
+
+对于 `sc_signal` ，当其中的数据类型为 `bool` 或者 `sc_dt::logic` 时，需要为这两种
+数据类型准备特化形式的类实现。相比非特化版本的类，主要增加了为
+继承的基类 `sc_signal_in_if<>` 对两种数据类型特化的虚接口的实现，主要有：
+
+* 上升沿事件引用 `posedge_event()`
+* 下降沿事件引用 `negedge_event()`
+* 当前delta cycle是否发生上升沿事件 `posedge()`
+* 当前delta cycle是否发生下降沿事件 `negedge()`
+
+数据类型为 `bool/sc_dt::logic` 主要用于建模时钟信号和复位信号。其中， `bool` 类型的
+`sc_signal` 可用于建模时钟信号或者复位信号，而 `sc_dt::logic` 类型的 `sc_signal` 则
+用于建模时钟信号。
+
+.src/sysc/communication/sc_clock.h
+[source,cpp]
+----
+class SC_API sc_clock
+  : public sc_signal<bool,SC_ONE_WRITER> <1>
+  {};
+----
+<1> 时钟信号sc_clock就是 `sc_signal<bool>` 特化类型
+
+相比于其他类型的非特化版本，特化版本的 `sc_signal` 实现上的主要区别在于 `update` 函数，
+也就是在UPDATE PHASE的动作。例如，对于 `bool` 类型的特化形式，UPDATE阶段的动作
+则是：
+[[api::sc_signal_bool::update]]
+
+.src/sysc/communication/sc_signal.cpp
+[source,cpp]
+----
+template< sc_writer_policy POL >
+void
+sc_signal<bool,POL>::update()
+{
+    policy_type::update();
+    if( !( base_type::m_new_val == base_type::m_cur_val ) ) {
+        do_update();
+    }
+}
+
+template< sc_writer_policy POL >
+void
+sc_signal<bool,POL>::do_update()
+{
+    // order of execution below is important, the notify_processes() call
+    // must come after the update of m_cur_val for things to work properly!
+    base_type::do_update(); <1>
+    if ( m_reset_p ) m_reset_p->notify_processes(); <2>
+
+    sc_event* event_p = this->m_cur_val ? m_posedge_event_p : m_negedge_event_p; <3>
+    sc_signal_channel::notify_next_delta( event_p ); <4>
+}
+----
+<1> 这里的base_type基类指的是 `sc_signal_t<bool, POL>`, 所以调用的实际是
+<<api::sc_signal_t::do_update, `sc_signal_t::do_update()`>>，已经完成了
+阻塞在基类上的 m_changed_event_p事件的线程调度安排
+<2> 处理reset相关
+<3> 如果当前值已经为1，则是从0到1，为上升沿，反之，则为下降沿
+<4> 处理沿事件相关的线程调度
+
+`bool` 类型特化版本的 `sc_signal` 可以用 `posedge_event()` 或者 `negedge_event()`
+获取上升沿事件或者下降沿事件的引用，使用动态或者静态以来的方式阻塞在此事件上。这样，等到事件发生
+的时候（从0到1，或者从1到0），阻塞的事件会在下一个delta cycle的EVALUATE PHASE恢复调度执行。
+
+=== `sc_buffer`
+
+sc_buffer继承自sc_signal:
+
+.src/sysc/communication/sc_buffer.h
+[source,cpp]
+----
+template< typename T, sc_writer_policy POL = SC_DEFAULT_WRITER_POLICY >
+class sc_buffer
+: public sc_signal<T,POL>
+{
+public:
+
+    // typedefs
+
+    typedef sc_buffer<T,POL> this_type;
+    typedef sc_signal<T,POL> base_type;
+    typedef T                value_type;
+};
+----
+
+sc_buffer根据自己需要，重写了sc_signal中的write和update函数。
+
+==== 调用request_update的地方
+
+相比于<<api::sc_signal_t::write, `sc_signal_t::write`>>, sc_buffer的write
+不去检查值是否改变。只要有写入动作，在更新值之后，就调用 `request_update`:
+
+.src/sysc/communication/sc_buffer.h
+[source,cpp]
+----
+template< typename T, sc_writer_policy POL >
+inline
+void
+sc_buffer<T,POL>::write( const T& value_ )
+{
+    if( !base_type::policy_type::check_write(this,true) )
+      return;
+
+    this->m_new_val = value_;
+    this->request_update();
+}
+----
+
+从这里我们也可以总结出sc_buffer相比于sc_signal的区别：sc_buffer对值本身不敏感，而对
+写入的动作敏感。对于sc_signal，可能写入多次，但最终值没改变，就不会产生任何结果（因为
+sc_signal的do_update等地方都会检查值最终是否改变）。而对于sc_buffer而言，可能写入的
+值没改变，但是每一次写入都会调度相关线程。
+
+==== update函数实现
+
+.src/sysc/communication/sc_buffer.h
+[source,cpp]
+----
+template< typename T, sc_writer_policy POL >
+inline
+void
+sc_buffer<T,POL>::update()
+{
+    base_type::policy_type::update();
+    base_type::do_update(); <1>
+}
+----
+<1> 这里的base_type是 `sc_signal`, 所以调用了<<api::sc_signal_t::do_update, `sc_signal_t::do_update`>>函数，实际上是跳过了值的相等性检查的
+
+sc_buffer的 `update` 函数实际上跳过了值的相等性检查。这样一来，就算sc_buffer写入的值
+和一开始的值一样，只要有写入的动作发生，所有阻塞在本sc_buffer上的线程都会在下一个
+delta cycle调度执行.
+
+=== `sc_signal_resolved`
+
+`sc_signal_resolved` 建模的是一种可以被多个源同时写入的signal，这个signal是个典型的
+四值信号，有着 '0', '1', 'X', 'Z' 四个取值。 `sc_signal_resolved` 也会根据多个
+源的写入，最终决议(resolved)出信号本身的值。
+
+.src/sysc/communication/sc_signal_resolved.h
+[source,cpp]
+----
+class SC_API sc_signal_resolved
+: public sc_signal<sc_dt::sc_logic,SC_MANY_WRITERS>
+----
+
+以上是 `sc_signal_resolved` 的类型信息。可以看出 `sc_signal_resolved` 已经是一个完全类，
+不是类模板了。
+
+==== 调用`request_update`的地方
+
+在 `sc_signal_resolved::write()` 中，根据最终的值是否改变，来决定是否调用 `request_update`
+将自己注册到registry的update链表中：
+
+.src/sysc/communication/sc_signal_resolved.cpp
+[source,cpp]
+----
+void
+sc_signal_resolved::write( const value_type& value_ )
+{
+    sc_process_b* cur_proc = sc_get_current_process_b();
+
+    bool value_changed = false;
+    bool found = false;
+    
+    for( int i = m_proc_vec.size() - 1; i >= 0; -- i ) {
+	if( cur_proc == m_proc_vec[i] ) {
+	    if( value_ != m_val_vec[i] ) {
+		m_val_vec[i] = value_;
+		value_changed = true;
+	    }
+	    found = true;
+	    break;
+	}
+    }
+    
+    if( ! found ) {
+	m_proc_vec.push_back( cur_proc );
+	m_val_vec.push_back( value_ );
+	value_changed = true;
+    }
+    
+    if( value_changed ) {
+	request_update();
+    }
+}
+----
+
+从这段代码我们也能看出， `sc_signal_resolved` 的多个输入来源应当是来自不同的线程。如果
+来自同一个线程，那么多次写入将会被替换掉。
+
+==== `update` 实现
+
+`sc_signal_resolved` 在UPDATE阶段， `update` 函数被调用：
+
+.src/sysc/communication/sc_signal_resolved.cpp
+[source,cpp]
+----
+void
+sc_signal_resolved::update()
+{
+    sc_logic_resolve( m_new_val, m_val_vec );
+    base_type::update();
+}
+----
+
+可以看出实现主要是先决议出最终的值，然后再调用基类，也就是 `sc_signal<>` 的 `update`
+函数。决议最终值的过程由函数 `sc_logic_resolve`
+完成，这个函数主要根据一个四值表来进行决议，这里就不再展示了。关于事件相关的调度
+工作，在这里实际上是委派给了基类的相关实现来完成的。
+
+与 `sc_signal_resolved` 类似的还有 `sc_signal_rv` ，是一种vector形式的
+四值信号决议，其代码整体和 `sc_signal_resolved` 一致，这里就不再详述了。
+
+=== `sc_clock`
+
+`sc_clock` 继承自特化版本的 `sc_signal` :
+
+.src/sysc/communication/sc_clock.h
+[source,cpp]
+----
+class SC_API sc_clock
+  : public sc_signal<bool,SC_ONE_WRITER>
+----
+
+==== `update` 的实现
+
+sc_clock的update函数没有实现额外的功能，与<<api::sc_signal_bool::update, 特化版本的sc_signal的update函数实现>>
+保持一致。
+
+
+== Primitive Channel的异步框架
+[[concept::primitive::async]]
+
+SystemC的primitive channel框架不仅仅有同步部分，还存在异步部分。所谓的同步，指的是
+所有的事件或对象等都在Systemc内部发生。而异步，就意味着可能有来自于SystemC托管
+之外的事件发生，来和SystemC内部的对象事件等进行交互。
+
+我们在
+<<api::sc_prim_channel_registry::perform_update, `sc_prim_channel_registry::perform_update()`>>
+函数的实现中，能看到在处理update链表之前，registry先处理了异步相关的部分，这就是
+异步框架的组成部分。先处理异步相关的部分，保证如果异步代码需要更新update链表时，整个代码
+也能正常工作。
+
+对于一个继承自 `sc_prim_channel` 的类来说，异步相关的API有如下几个：
+
+* `async_request_update`, public成员函数，这是异步API最核心的一个，相当于同步版本的 `request_update`
+只不过调用来源来自异步的OS线程，因此不能保证在EVALUATE PHASE调用
+* `async_attach_suspending`
+* `async_detach_suspending`
+
+这三个API都是通过调度registry的同名API来完成的。第一个API是最为广泛使用的，我们这了
+主要讨论这个API。 `async_attach_suspending` 和 `async_detach_suspending`
+主要和异步阻塞有关，后续我们有空再讨论。
+
+=== async_request_update
+
+.src/sysc/communication/sc_prim_channel.cpp
+[source,cpp]
+----
+void
+sc_prim_channel_registry::async_request_update( sc_prim_channel& prim_channel_ )
+{
+#ifndef SC_DISABLE_ASYNC_UPDATES
+    m_async_update_list_p->append( prim_channel_ );
+#else
+    SC_REPORT_ERROR( SC_ID_NO_ASYNC_UPDATE_, prim_channel_.name() );
+#endif
+}
+----
+
+registry的 `async_request_update` 调用了 `async_update_list::append` 函数：
+
+.src/sysc/communication/sc_prim_channel.cpp
+[source,cpp]
+----
+    void append( sc_prim_channel& prim_channel_ )
+    {
+        sc_scoped_lock lock( m_mutex );
+        m_push_queue.push_back( &prim_channel_ );
+        m_suspend_semaphore.post();
+        // return releases the mutex
+    }
+----
+
+而这个 `append` 函数的实现就是简单将primitive channel的指针放到async_update_list的push queue中。
+注意，所有访问push queue的动作都需要用锁来保护，这样就不会破坏共享的数据结构了。
+
+由于来自 `sc_prim_channel::async_request_update` 的调度是异步的，因此这个 `append`
+函数发生的时机可以在任何阶段：EVALUATE, UPDATE, NOTIIFCATION，或者其他阶段。
+`simc`
+
+.src/sysc/communication/sc_prim_channel.cpp
+[source,cpp]
+----
+    void accept_updates()
+    {
+	sc_assert( ! m_pop_queue.size() );
+	{
+	    sc_scoped_lock lock( m_mutex );
+	    m_push_queue.swap( m_pop_queue ); <1>
+	    // leaving the block releases the mutex
+	}
+
+	std::vector< sc_prim_channel* >::const_iterator
+	    it = m_pop_queue.begin(), end = m_pop_queue.end();
+	while( it!= end )
+	{
+	    // we use request_update instead of perform_update
+	    // to skip duplicates
+	    (*it++)->request_update();
+	    int sem_trywait = m_suspend_semaphore.trywait(); // this must never block !
+	    sc_assert( sem_trywait == 0 );
+	}
+	m_pop_queue.clear();
+    }
+----
+<1> 在锁的保护下，取出push queue
+
+只要发生在 `m_push_queue.swap(m_pop_queue)` 之前的 `async_request_update` 都会在
+随后被调度其 `request_update()` 成员函数，将之加入到registry的update链表中。而发生在这之后
+的 `async_request_update` 就只能等待下一个delta cycle了。
+
+
+=== 一个例子
+
+Async的primitive channel提供了一个框架，用以让非SystemC的线程将自己的行为
+注册到SystemC的不同stage。这种能力不局限于primitive channel才可以。例如，在
+https://stackoverflow.com/questions/49814756/async-request-update-example-in-systemc
+就有一个使用primitive channel的async update能力，制造一个跨系统线程的自定义
+event。
+
+这个例子只使用了primitive channel的async_request_update函数，在非SystemC线程执行
+中，将本primitive channel注册到registry中。这最终会调用到 `async_update_list::append()`
+函数，而这个函数是线程安全的：使用一个mutex来保护跨线程使用的数据。在UPDATE阶段，自定义event的
+update虚函数被调用，这时候才真正调用了内部保存的 `sc_event::notify()` 。由于此时还是
+UPDATE PHASE，还来得及把与之相关的delta event加入 `simc` 的 delta event链表。
+
+这个例子中，异步体现在：自定义event的notify的发生，对于SystemC是完全不可预知的，因为两个
+运行在不同的OS线程上。
+
+[source,cpp]
+----
+#include <systemc>
+#include <pthread.h>
+#include <unistd.h>
+
+using namespace sc_core;
+
+class ThreadSafeEventIf : public sc_interface {
+    virtual void notify(sc_time delay = SC_ZERO_TIME) = 0;
+    virtual const sc_event &default_event(void) const = 0;
+protected:
+    virtual void update(void) = 0;
+};
+
+class ThreadSafeEvent : public sc_prim_channel, public ThreadSafeEventIf {
+public:
+    ThreadSafeEvent(const char *name = ""): event(name) {}
+
+    void notify(sc_time delay = SC_ZERO_TIME) {
+        this->delay = delay;
+        async_request_update(); <1>
+    }
+
+    const sc_event &default_event(void) const { <2>
+        return event;
+    }
+protected:
+    virtual void update(void) {
+        event.notify(delay); <3>
+    }
+    sc_event event; <4>
+    sc_time delay;
+};
+
+SC_MODULE(Foo)
+{
+public:
+    SC_CTOR(Foo)
+    {
+        SC_THREAD(main);
+
+        SC_METHOD(eventTriggered);
+        sensitive << event; <5>
+        dont_initialize();
+    }
+private:
+    void main() {
+        usleep(5 * 1000 * 1000); // Just for the example, event is added to pending events during this sleep
+        wait(SC_ZERO_TIME); // Schedule (event is evaluated here)
+        usleep(1 * 1000 * 1000); // Just for the example
+        std::cout << "Done" << std::endl;
+    }
+
+    void eventTriggered() {
+        std::cout << "Got event" << std::endl;
+    }
+
+public:
+    ThreadSafeEvent event;
+};
+
+void *externalHostThread(void *arg) {
+    usleep(2 * 1000 * 1000); // Just for the example
+    Foo* foo = (Foo*)(arg);
+    foo->event.notify(); <6>
+    std::cout << "Event notified from an external host thread" << std::endl;
+}
+
+int sc_main(int argc, char *argv[])
+{
+    Foo foo("foo");
+
+    pthread_t thread;
+    pthread_create(&thread, NULL, externalHostThread, &foo);
+
+    sc_start();
+
+    return 0;
+}
+----
+<1> async_request_update调用
+<2> 实现了sc_interface需要的default_event接口
+<3> 在update()函数里，真正调用sc_event的notify，因为UPDATE阶段已经在SystemC内部了
+<4> 实际上内部还是保存了一个sc_event
+<5> 敏感信号除了可以设置sc_event，还可以设置sc_interface，这里自定义的event实现了sc_interface的接口
+<6> 自定义event的notify来自另外一个不同的线程
+
+这么做的效果相当于把异步线程的动作强制同步到SystemC的UPDATE阶段，更准确地说，是UPDATE阶段最开始
+的地方。这样异步部分只需要在update函数中实现代码，即可保证这种同步效果。
+
+当然，除了这种使用方式以外，primitive channel还提供了其他的异步接口，以供其他方式的使用。

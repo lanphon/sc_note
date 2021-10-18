@@ -1,0 +1,319 @@
+:source-highlighter: coderay
+
+:toc: left
+
+SystemC中的协程以及应用
+
+== 协程原理
+
+所谓的协程，指的是协作式线程。不同股普通的线程，协程的重点突出在一个**协作**上。
+
+对于一个普通的线程而言，线程的调度由操作系统完成。多个线程可以看作是独立的执行流，类比于多个进程，只不过
+线程共享相同的内存空间等其他资源。
+
+对于协程，情况就不一样了。协程的调度由用户自己完成，也即，协程在运行过程中，需要自己让渡出CPU的执行权，
+以使得其他协程能够获得执行的机会。如果一个协程由于某种原因无法让独处执行权，整个程序就会卡死在这个
+协程上。
+
+SystemC的Thread/CThread线程就是使用协程的最佳场合。每一个Thread/Cthread线程依次执行，直到
+被直接或者间接的 `wait` 调用阻塞。一个线程被阻塞之后， `simc` 会调度执行下一个线程，以此类推，
+直到所有的线程都执行一遍。
+
+SystemC中提供了三种协程的实现方案：
+
+* fiber，这种实现框架仅适用于windows平台
+* pthread模拟协程，使用pthread模拟协程的方案，这种方案有着较为严重的性能损失，一般仅适用于linux
+* quickthread，使用一个简单的库来实现协程，这也是我们推荐的在linux上的协程实现方案
+
+== SystemC中的协程
+
+协程的管理器在 `simc` 中，在 `sc_simcontext::prepare_to_simulate` 的时候被创建：
+
+.src/sysc/kernel/sc_thread_process.cpp
+[source,cpp]
+----
+void
+sc_simcontext::prepare_to_simulate()
+{
+    sc_method_handle  method_p;  // Pointer to method process accessing.
+    sc_thread_handle  thread_p;  // Pointer to thread process accessing.
+
+    if( m_ready_to_simulate || sim_status() != SC_SIM_OK ) {
+        return;
+    }
+
+    // instantiate the coroutine package
+    m_cor_pkg = new sc_cor_pkg_t( this ); <1>
+    m_cor = m_cor_pkg->get_main(); <2>
+----
+<1> 这里创建了一个协程的管理器对象
+<2> 获取主线程的协程参数，这样一来当所有注册Thread线程执行完毕之后，才能将反悔权返回给主线程
+
+
+
+=== 协程的建立
+
+对于一个Thread/Cthread而言，所需要的协程参数在 `sc_thread_process::prepare_for_simulation` 时候
+完成：
+
+.src/sysc/kernel/sc_thread_process.cpp
+[source,cpp]
+----
+void sc_thread_process::prepare_for_simulation()
+{
+    m_cor_p = simcontext()->cor_pkg()->create( m_stack_size,
+                         sc_thread_cor_fn, this );
+    m_cor_p->stack_protect( true );
+}
+----
+
+这里设置的协程入口函数是 `sc_thread_cor_fn` ，传入一个 `this` 指针。协程管理器创建的协程对象
+就是这里的 `m_cor_p` 。
+
+[[api::sc_thread_cor_fn]]
+.src/sysc/kernel/sc_thread_process.cpp
+[source,cpp]
+----
+void sc_thread_cor_fn( void* arg )
+{
+    sc_simcontext*   simc_p = sc_get_curr_simcontext();
+    sc_thread_handle thread_h = reinterpret_cast<sc_thread_handle>( arg ); <1>
+
+    // PROCESS THE THREAD AND PROCESS ANY EXCEPTIONS THAT ARE THROWN:
+
+    while( true ) {
+
+        try {
+            thread_h->semantics(); <2>
+        }
+        catch( sc_user ) {
+            continue;
+        }
+        catch( sc_halt ) {
+            ::std::cout << "Terminating process "
+                      << thread_h->name() << ::std::endl;
+        }
+        catch( const sc_unwind_exception& ex ) {
+	    ex.clear();
+            if ( ex.is_reset() ) continue;
+        }
+        catch( ... ) {
+            sc_report* err_p = sc_handle_exception();
+            thread_h->simcontext()->set_error( err_p );
+        }
+        break;
+    }
+
+    sc_process_b*    active_p = sc_get_current_process_b();
+
+    // REMOVE ALL TRACES OF OUR THREAD FROM THE SIMULATORS DATA STRUCTURES:
+
+    thread_h->disconnect_process();
+
+    // IF WE AREN'T ACTIVE MAKE SURE WE WON'T EXECUTE:
+
+    if ( thread_h->next_runnable() != 0 )
+    {
+	simc_p->remove_runnable_thread(thread_h);
+    }
+
+    // IF WE ARE THE ACTIVE PROCESS ABORT OUR EXECUTION:
+
+
+    if ( active_p == (sc_process_b*)thread_h )
+    {
+
+        sc_core::sc_cor* x = simc_p->next_cor();
+	simc_p->cor_pkg()->abort( x );
+    }
+
+}
+----
+<1> 这里将传入的 `args` cast成 `sc_thread_process*` 指针，因为在协程建立的时候，提供的参数就是 `this` 指针
+<2> `sc_process_b::semantic()` 函数会实际调用线程的主体部分代码，理论上协程函数执行到这里之后就
+永远不会返回
+
+这里的处理主要是考虑协程抛出异常，或者意外退出的时候，我们需要保证整个仿真器的工作正常.
+
+[[api::semantic]]
+在 `sc_process_b::semantic()` 函数的视线里，最核心的就是以下几行语句：
+
+.src/sysc/kernel/sc_process.h
+[source,cpp]
+----
+#   ifndef SC_USE_MEMBER_FUNC_PTR
+        m_semantics_method_p->invoke( m_semantics_host_p );
+#   else
+        (m_semantics_host_p->*m_semantics_method_p)(); <1>
+#   endif
+----
+<1> 调用保存的成员函数
+
+在创建Method/Thread/Cthread线程的时候，`m_semantics_host_p` 被赋值为线程主对象的指针，
+`m_semantics_method_p` 赋值为线程成员函数的指针:
+
+.src/sysc/kernel/sc_process.cpp
+[source,cpp]
+----
+sc_process_b::sc_process_b( const char* name_p, bool is_thread, bool free_host,
+     SC_ENTRY_FUNC method_p, sc_process_host* host_p,
+     const sc_spawn_options* /* opt_p  */
+) :
+    sc_object( name_p ),
+    file(0),
+    lineno(0),
+    proc_id( simcontext()->next_proc_id()),
+    m_active_areset_n(0),
+    m_active_reset_n(0),
+    m_dont_init( false ),
+    m_dynamic_proc(),
+    m_event_p(0),
+    m_event_count(0),
+    m_event_list_p(0),
+    m_exist_p(0),
+    m_free_host( free_host ),
+    m_has_reset_signal( false ),
+    m_has_stack(false),
+    m_is_thread(is_thread),
+    m_last_report_p(0),
+    m_name_gen_p(0),
+    m_process_kind(SC_NO_PROC_),
+    m_references_n(1),
+    m_resets(),
+    m_reset_event_p(0),
+    m_resume_event_p(0),
+    m_runnable_p(0),
+    m_semantics_host_p( host_p ), <1>
+    m_semantics_method_p ( method_p ), <2>
+
+----
+<1> 设置线程主对象的指针
+<2> 设置成员函数指针
+
+[NOTE]
+====
+Method类型的线程是不需要 <<api::sc_thread_cor_fn, `sc_thread_cor_fn`>>的。对于一个
+Method线程而言，每次启动都相当于调用一次 <<api::semantic, `semantic`>>成员函数。
+====
+
+至此，我们已经可以为一个Thread/CThread线程建立完整的协程参数。这个协程的启动顺序为:
+
+----
+// 协程内部调度堆栈
+-> sc_thread_cor_fn()
+-> sc_process_b::semantic()
+-> 调用sc_process_b保存的 ((sc_module*)->*func)()
+-> 用户自定义的线程成员函数，一般为一个永不返回的函数
+----
+
+=== 协程的调度
+
+每个 `sc_thread_process` 都有一个 `m_cor_p` 的成员变量，保存着与这个thread线程关联的
+协程的信息，包括但不限于
+
+* 协程堆栈的地址
+* 协程上次suspend时PC值
+
+在thread线程执行过程中，直接或者间接执行 `wait` 后，此线程即被阻塞，让渡出CPU的执行权给
+下一个协程。准确的来说， `sc_thread_process::suspend_me()` 部分真正实现了协程的切换：
+
+.src/sysc/kernel/sc_thread_process.cpp
+[source,cpp]
+----
+inline void sc_thread_process::suspend_me()
+{
+    // remember, if we're currently unwinding
+    bool unwinding_preempted = m_unwinding;
+
+    sc_simcontext* simc_p = simcontext();
+    sc_cor*         cor_p = simc_p->next_cor(); <1>
+
+    // do not switch, if we're about to execute next (e.g. suicide)
+
+    if( m_cor_p != cor_p )
+    {
+        DEBUG_MSG( DEBUG_NAME , this, "suspending thread");
+        simc_p->cor_pkg()->yield( cor_p ); <2>
+        DEBUG_MSG( DEBUG_NAME , this, "resuming thread");
+    }
+
+----
+<1> 这里获取下一个协程的信息
+<2> 让渡出CPU控制权，让下一个协程能够执行
+
+比较难以理解的就是 `yield` 函数的执行。当 `yield` 执行的时候，CPU的执行权立马转入下一个
+协程。只有当当前协程再次被调度的时候， `yield` 函数才会返回。
+
+`simc` 的 `next_cor` 的实现如下：
+
+.src/sysc/kernel/sc_simcontext.cpp
+[source,cpp]
+----
+sc_cor*
+sc_simcontext::next_cor()
+{
+    if( m_error ) {
+	return m_cor; <1>
+    }
+
+    sc_thread_handle thread_h = pop_runnable_thread();
+    while( thread_h != 0 ) {
+	if ( thread_h->m_cor_p != NULL ) break;
+	thread_h = pop_runnable_thread(); <2>
+    }
+
+    if( thread_h != 0 ) {
+	return thread_h->m_cor_p;
+    } else {
+	return m_cor; <3>
+    }
+}
+----
+<1> 如果发生了错误，则立马转而执行主线程
+<2> 搜索一个 `m_cor_p` 不为空的协程
+<3> 如果没有找到可以有效执行的协程，那么转而执行主线程
+
+现在我们已经清楚了协程时如何切换的：当一个协程由于各种原因执行 `suspend_me` 的时候， `suspend_me` 
+会从 `simc` 获取下一个协程的执行信息，转而执行下一个协程。在 `simc` 中，可执行的Thread线程组成
+一个链表。这样一来，链表上的每一个节点所代表的的thread线程都得到执行，直到阻塞（直到执行到
+`suspend_me` 的 `yield` 处）为止。
+
+`crunch` 函数中，执行Thread线程的部分代码如下：
+
+.src/sysc/kernel/sc_simcontext.cpp
+[source,cpp]
+----
+	    // execute (c)thread processes
+
+	    m_runnable->toggle_threads();
+	    sc_thread_handle thread_h = pop_runnable_thread();
+	    while( thread_h != 0 ) {
+                if ( thread_h->m_cor_p != NULL ) break;
+		thread_h = pop_runnable_thread();
+	    }
+
+	    if( thread_h != 0 ) {
+	        empty_eval_phase = false;
+		m_cor_pkg->yield( thread_h->m_cor_p ); <1>
+	    }
+----
+<1> 主线程将CPU控制权转交给第一个线程
+
+不同于Method线程，每一个都是单独拿出来由 `crunch` 中调用，Thread线程的执行
+不是由 `crunch` 单独执行的。在 `crunch` 中，在EVALUATE阶段，主线程只会找到第一个
+可执行的线程，然后将CPU控制权通过 `yield` 转交过去。当主线程中的 `yield` 返回
+的时候，所有可执行的线程就都已经执行完毕了。
+
+
+=== 协程的销毁
+
+对于一个设计良好的协程而言， <<api::sc_thread_cor_fn, `sc_thread_cor_fn`>>中的
+`semantic` 函数永远不应该返回。只有如下几种情况， `semantic` 才会返回：
+
+* 抛出一个 `sc_user` 异常，处理完之后，从最开始重新执行 `semantic`
+* 抛出一个 `sc_halt` 异常，此协程即结束
+* 抛出一个 `sc_unwind_exception` 异常，如果是 `is_reset()` 类型，处理完毕之后从最开始重新执行 `semantic` ，否则结束此协程
+* 其他类型的异常，结束此协程
+* semantic自己返回，结束此协程
+
+在仿真结束时，所有分配出来的资源都会释放掉。

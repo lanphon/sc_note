@@ -1,0 +1,354 @@
+:source-highlighter: coderay
+
+:toc: left
+
+SystemC中的其他组件
+
+== sc_interface
+
+sc_interface是一个抽象基类，提供了带interface能力类的接口信息。
+
+sc_interface提供的接口包括：
+
+* `register_port` 将port注册到本interface内
+* `default_event` 返回本interface相关的默认事件引用，当敏感信息设置为一个sc_interface类，而不是
+直接的sc_event的时候，调用的就是 `default_event` 返回一个事件引用
+
+.src/sysc/kernel/sc_sensitive.cpp
+[source,cpp]
+----
+sc_sensitive&
+sc_sensitive::operator << ( const sc_interface& interface_ )
+{
+    // check
+    if( sc_is_running() ) {
+	SC_REPORT_ERROR( SC_ID_MAKE_SENSITIVE_, "simulation running" );
+    }
+
+    // make sensitive
+    switch( m_mode ) {
+    case SC_METHOD_:
+    case SC_THREAD_: {
+	m_handle->add_static_event( interface_.default_event() ); <1>
+	break;
+    }
+    case SC_NONE_:
+        /* do nothing */
+        break;
+    }
+
+    return *this;
+}
+----
+<1> 使用sc_interface作为敏感源，其本质就是要使用sc_interface的默认事件作为敏感事件
+
+sc_interface的概念非常重要，是连接sc_fifo/sc_signal等primitive channel和sc_port/sc_export接口的重要桥梁。
+简单来说，sc_port/sc_export的模板参数必须是一个sc_interface类，或者继承sc_interface的类。而在
+sc_port/sc_export中，也只保存指向这些sc_interface或者sc_interface子类的指针。sc_port/sc_export
+表现为指向primitive channel的指针，但本质上表象的更多的像是指向sc_interface或子类的指针，只使用
+这些sc_interface或者子类提供的接口函数。而primitive channel则需要继承sc_interface或者子类，并
+实现这些具体的接口函数。这样一来，从概念上，sc_port/sc_export就可以调用pirmitive channel的
+接口函数了。
+
+== sc_clock是如何工作的
+
+sc_clock是一个sc_signal<bool, SC_ONE_WRITER>的继承类，所以sc_clock可以被sc_in<bool>
+绑定：
+
+.src/sysc/communication/sc_clock.h
+[source,cpp]
+----
+class SC_API sc_clock
+  : public sc_signal<bool,SC_ONE_WRITER>
+----
+
+sc_clock的工作主要分为3个stage：
+
+1. 在sc_module构造的时候，作为准备绑定sc_clock的 sc_in<bool>，如何将之设置为静态敏感源
+2. 在hierarchy建立之后，仿真开始之前，如何resolve之前设置的静态敏感源，使之得到真正的event事件
+3. 在仿真过程中，sc_clock是如何调度相关的process handle的
+
+=== module构造时
+
+在sc_module的构造函数中，SC_CTHREAD/SC_THREAD可以将sc_in<bool>变量clk的pos()/neg()设置为静态
+敏感事件。然而，此时sc_in<bool> clk并没有绑定具体的sc_clock。所以，这里SystemC用一个
+sc_event_finder来代替。
+
+在SC_THREAD的情况下，`sensitive << clk.pos()` , `sc_in<bool> clk` 的pos()返回的并不是
+一个具体的sc_event，而是一个sc_event_finder:
+
+.src/sysc/communication/sc_signal_ports.h
+[source,cpp]
+----
+    sc_event_finder& pos() const
+    {
+        return sc_event_finder::cached_create
+                ( m_pos_finder_p, *this, &in_if_type::posedge_event );
+    }
+----
+
+所以sensitive设置的参数是一个 `sc_event_finder`:
+
+.src/sysc/kernel/sc_sensitive.cpp
+[source,cpp]
+----
+sc_sensitive&
+sc_sensitive::operator << ( sc_event_finder& event_finder_ )
+{
+    // check
+    if( sc_is_running() ) {
+	SC_REPORT_ERROR( SC_ID_MAKE_SENSITIVE_, "simulation running" );
+    }
+
+    // make sensitive
+    switch( m_mode ) {
+    case SC_METHOD_: {
+	event_finder_.port().make_sensitive( as_method_handle( m_handle ),
+					     &event_finder_ );
+	break;
+    }
+    case SC_THREAD_: {
+	event_finder_.port().make_sensitive( as_thread_handle( m_handle ),
+					     &event_finder_ );
+	break;
+    }
+    case SC_NONE_:
+        /* do nothing */
+        break;
+    }
+
+    return *this;
+}
+----
+
+这里调用了 `sc_port_base` 的 `make_sensitive` :
+
+.src/sysc/communication/sc_port.cpp
+[source,cpp]
+----
+void
+sc_port_base::make_sensitive( sc_thread_handle handle_,
+			      sc_event_finder* event_finder_ ) const
+{
+    sc_assert( m_bind_info != 0 );
+    m_bind_info->thread_vec.push_back( 
+	new sc_bind_ef( (sc_process_b*)handle_, event_finder_ ) );
+}
+
+void
+sc_port_base::make_sensitive( sc_method_handle handle_,
+			      sc_event_finder* event_finder_ ) const
+{
+    sc_assert( m_bind_info != 0 );
+    m_bind_info->method_vec.push_back( 
+	new sc_bind_ef( (sc_process_b*)handle_, event_finder_ ) );
+}
+----
+
+这里将sc_event_finder先设置在sc_in<bool> clk中。
+
+在SC_CTHREAD的情况下， `sensitive(clk.pos())` 调用的则是：
+
+.src/sysc/kernel/sc_sensitive.cpp
+[source,cpp]
+----
+sc_sensitive&
+sc_sensitive::operator () ( sc_cthread_handle handle_,
+			    sc_event_finder& event_finder_ )
+{
+    event_finder_.port().make_sensitive( handle_, &event_finder_ );
+    return *this;
+}
+----
+
+最终调用的也是讲sc_event_finder设置在sc_in<bool> clk中。
+
+module构造的结果是，在 `sc_in<bool> clk` 中，保存了相应的event finder函数，主要是一个
+函数指针。因为module构造的时候，输入端口 `sc_in<bool> clk` 作为一个port还没有绑定
+到最终的signal上，所以此时是无法决议给出最终的sc_event的。 `sc_in<bool> clk` 中
+只能暂时先保存一个sc_event_finder，等待绑定完成后，使用所绑定的interface提供的指针，结合
+保存的成员函数指针，调用得到真正的sc_event事件对象。
+
+=== elaboration done时
+
+在所有的hierarchy都初始化，并且port绑定到interface之后，sc_in<bool> clk即绑定到sc_clock
+上。在elaboration_done阶段，sc_port_registry调用所有port的complete_binding函数，
+同时也会调用sc_in<bool> clk的complete_binding函数。通过给的interface指针 `&clock`
+以及成员函数指针 `posedge_event`
+
+
+.src/sysc/communication/sc_signal.cpp
+[source,cpp]
+----
+template< sc_writer_policy POL >
+const sc_event&
+sc_signal<bool,POL>::posedge_event() const
+{
+    return *this->lazy_kernel_event(&m_posedge_event_p,"posedge_event");
+}
+----
+
+这里返回的是新创建的一个sc_event变量m_posedge_event_p。其中，创建部分的逻辑是：
+
+.src/sysc/communication/sc_signal.cpp
+[source,cpp]
+----
+// create a (kernel) event, if needed
+sc_event*
+sc_signal_channel::lazy_kernel_event( sc_event** ev, const char* name ) const
+{
+    if ( !*ev ) {
+        *ev = new sc_event( sc_event::kernel_event, name );
+    }
+    return *ev;
+}
+----
+
+在sc_in<bool> clk的complete_binding函数中：
+
+.src/sysc/communication/sc_port.cpp
+[source,cpp]
+----
+        // complete static sensitivity for threads
+        size = m_bind_info->thread_vec.size();
+        for( int k = 0; k < size; ++ k ) {
+            sc_bind_ef* p = m_bind_info->thread_vec[k];
+            const sc_event& event = ( p->event_finder != 0 )
+                                  ? p->event_finder->find_event(iface)
+                                  : iface->default_event();
+            p->handle->add_static_event( event );
+        }
+----
+
+这部分代码取得的 `event` 引用就是 `*m_posedge_event_p` 这个事件。调用
+`p->handle->add_static_event(event)` 的结果则是：
+
+.src/sysc/kernel/sc_process.cpp
+[source,cpp]
+----
+//------------------------------------------------------------------------------
+//"sc_process_b::add_static_event"
+//
+// This method adds an event to the list of static events, and sets the
+// event up to call back this process when it fires.
+//------------------------------------------------------------------------------
+void sc_process_b::add_static_event( const sc_event& e )
+{
+    sc_method_handle method_h; // This process as a method.
+    sc_thread_handle thread_h; // This process as a thread.
+
+
+    // CHECK TO SEE IF WE ARE ALREADY REGISTERED WITH THE EVENT:
+
+    for( int i = m_static_events.size() - 1; i >= 0; -- i ) {
+        if( &e == m_static_events[i] ) {
+            return;
+        }
+    }
+
+    // REMEMBER THE EVENT AND THEN REGISTER OUR OBJECT INSTANCE WITH IT:
+
+    m_static_events.push_back( &e );
+
+    switch ( m_process_kind )
+    {
+      case SC_THREAD_PROC_:
+      case SC_CTHREAD_PROC_:
+        thread_h = static_cast<sc_thread_handle>( this );
+        e.add_static( thread_h );
+        break;
+      case SC_METHOD_PROC_:
+        method_h = static_cast<sc_method_handle>( this );
+        e.add_static( method_h );
+        break;
+      default:
+        sc_assert( false );
+        break;
+    }
+}
+----
+
+将这个事件加入到handle自己的 `m_static_events` 数组中，同时调用事件 `*m_posedge_event_p`
+本身的 `add_static` 函数：
+
+.src/sysc/kernel/sc_process.cpp
+[source,cpp]
+----
+inline
+void
+sc_event::add_static( sc_thread_handle thread_h ) const
+{
+    m_threads_static.push_back( thread_h );
+}
+----
+
+将process handle注册到了 `*m_posedge_event_p` 保存的m_thread_static列表中。
+
+elaboration done阶段的结果则是，对于 `sc_clock clock`，其内部的 `*m_posedge_event_p`
+保存了所有静态设置时对其sensitive的SC_THREAD/SC_CTHREAD的process handle，同时这些
+process handle内部也保存了 `*m_posedge_event_p` 的指针。
+
+=== 仿真过程中
+
+在运行中，由于sc_clock的自激励，`*m_posedge_event_p` 在UPDATE PHASE，根据
+primitive channel的framework, `update` 函数被调用：
+
+.src/sysc/communication/sc_signal.cpp
+[source,cpp]
+----
+template< sc_writer_policy POL >
+void
+sc_signal<bool,POL>::update()
+{
+    policy_type::update();
+    if( !( base_type::m_new_val == base_type::m_cur_val ) ) {
+        do_update();
+    }
+}
+
+template< sc_writer_policy POL >
+void
+sc_signal<bool,POL>::do_update()
+{
+    // order of execution below is important, the notify_processes() call
+    // must come after the update of m_cur_val for things to work properly!
+    base_type::do_update();
+    if ( m_reset_p ) m_reset_p->notify_processes();
+
+    sc_event* event_p = this->m_cur_val ? m_posedge_event_p : m_negedge_event_p;
+    sc_signal_channel::notify_next_delta( event_p );
+}
+----
+
+这又调用了do_update函数。在do_update函数中，除了调用基类的do_update函数外，最为重要的
+是 `sc_signal_channel::notify_next_delta(event_p)`。对于发生posedge信号而言：
+
+.src/sysc/communication/sc_signal.h
+[source,cpp]
+----
+    void notify_next_delta( sc_event* ev ) const
+        { if( ev ) ev->notify_next_delta(); }
+----
+
+这等同调用 `m_posedge_event_p` 的notify_next_delta函数，此时位于crunch的UPDATE PHASE。
+
+.src/sysc/kernel/sc_event.h
+[source,cpp]
+----
+inline
+void
+sc_event::notify_next_delta()
+{
+    if( m_notify_type != NONE ) {
+        SC_REPORT_ERROR( SC_ID_NOTIFY_DELAYED_, 0 );
+    }
+    // add this event to the delta events set
+    m_delta_event_index = m_simc->add_delta_event( this );
+    m_notify_type = DELTA;
+}
+----
+
+这里主要是将notify type设置为DELTA，同时将这个事件，也就是 `*m_posedge_event_p`
+放入simc的delta event列表中。这样一来，在NOTIFICATION PHASE，所有被注册到
+simc delta event列表中的事件都会调度其trigger函数，从而调度process handle的trigger_static
+函数，将这个process handle放入下一个delta cycle的runnable列表中。
