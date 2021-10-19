@@ -12,7 +12,7 @@ sc_interface提供的接口包括：
 
 * `register_port` 将port注册到本interface内
 * `default_event` 返回本interface相关的默认事件引用，当敏感信息设置为一个sc_interface类，而不是
-直接的sc_event的时候，调用的就是 `default_event` 返回一个事件引用
+直接的sc_event的时候，调用的就是 `default_event` 返回一个事件引用，作为敏感源事件使用
 
 .src/sysc/kernel/sc_sensitive.cpp
 [source,cpp]
@@ -52,8 +52,8 @@ sc_port/sc_export中，也只保存指向这些sc_interface或者sc_interface子
 
 == sc_clock是如何工作的
 
-sc_clock是一个sc_signal<bool, SC_ONE_WRITER>的继承类，所以sc_clock可以被sc_in<bool>
-绑定：
+sc_clock是一个sc_signal<bool, SC_ONE_WRITER>的继承类，sc_signal<bool, SC_ONE_WRITER> 
+实现了sc_signal_in_if<bool>接口定义的功能，因此sc_clock可以被sc_in<bool> 绑定：
 
 .src/sysc/communication/sc_clock.h
 [source,cpp]
@@ -64,8 +64,8 @@ class SC_API sc_clock
 
 sc_clock的工作主要分为3个stage：
 
-1. 在sc_module构造的时候，作为准备绑定sc_clock的 sc_in<bool>，如何将之设置为静态敏感源
-2. 在hierarchy建立之后，仿真开始之前，如何resolve之前设置的静态敏感源，使之得到真正的event事件
+1. 在sc_module构造的时候，作为准备绑定sc_clock（但还没有绑定sc_clock）的 sc_in<bool> 端口，如何将之设置为静态敏感源
+2. 在hierarchy建立之后，仿真开始之前，如何resolve之前设置的静态敏感源，使之获取真正的event事件
 3. 在仿真过程中，sc_clock是如何调度相关的process handle的
 
 === module构造时

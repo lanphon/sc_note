@@ -161,7 +161,7 @@ sc_sensitive::operator << ( sc_process_handle handle_ )
 }
 ----
 
-从这段代码我们可以看出，调用 `sensitive` 的 `operator <<(sc_process_handle` 只是简单将传入的handle cast成 `sc_process_b` 指针，赋给
+从这段代码我们可以看出，调用 `sensitive` 的 `operator <<(sc_process_handle)` 只是简单将传入的handle cast成 `sc_process_b` 指针，赋给
 `sensitive` 内的一个 `m_handle` 成员变量，同时设置了 `sensitive` 的模式，方便后续校验。从这种意义上来讲， `sensitive/sensitive_pos/sensitive_neg` 
 三个类似于一种语法糖设计。这也是为何一定要在 `SC_METHOD/SC_THREAD/SC_CTHREAD` 之后，立马就调用 `sensitive/sensitive_pos/sensitive_neg` 设置
 敏感信号的原因：如果这个时候不设置，之后的 `SC_METHOD/SC_THREAD/SC_CTHREAD` 会重置 `m_handle` ，而这里却没有返回 `process handle` 的地方可以

@@ -7,9 +7,9 @@ SystemC中的Port和Export
 == 引言
 
 SystemC的Port，抽象的是物理设计中，划分不同模块后，每个模块对外的接口信息，包括输入和输出端口。
-A port
-is a pointer to a channel outside the module. An export is a pointer to a channel inside
-another module.
+
+ A port is a pointer to a channel outside the module. An export is a pointer to a channel inside another module.
+ -- <<SystemC, from ground up>>
 
 所以一个port一定和interface结合在一起使用，因为一个sc_signal/sc_fifo间接继承自sc_interface.
 a port is an interface pointer to a channel that implements the interface.
