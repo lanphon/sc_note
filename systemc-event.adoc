@@ -1,0 +1,10 @@
+:source-highlighter: coderay
+
+:toc: left
+
+SystemC中的Event
+
+== 引言
+
+在之前的介绍中，我们已经看到了sc_event的重要作用。本部分我们对sc_event的设计和相关的API再做一次回顾，
+探究其中的设计模式和设计原理。本部分也一并回顾了SystemC的wait/next_trigger API，并进行深入挖掘。

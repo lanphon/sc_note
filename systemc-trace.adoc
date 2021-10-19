@@ -1,0 +1,7 @@
+:source-highlighter: coderay
+
+:toc: left
+
+SystemC中的Trace组件
+
+== 引言

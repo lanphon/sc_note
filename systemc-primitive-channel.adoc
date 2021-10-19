@@ -1063,3 +1063,22 @@ int sc_main(int argc, char *argv[])
 的地方。这样异步部分只需要在update函数中实现代码，即可保证这种同步效果。
 
 当然，除了这种使用方式以外，primitive channel还提供了其他的异步接口，以供其他方式的使用。
+
+== 其他
+
+在SystemC中，除了primitive channel，还有一种hierarchical channel, `sc_channel` 。然而
+这种类型不过是一个 `sc_module` 而已：
+
+.src/sysc/kernel/sc_module.h
+[source,cpp]
+----
+// ----------------------------------------------------------------------------
+//  TYPEDEFS
+// ----------------------------------------------------------------------------
+
+typedef sc_module sc_channel;
+typedef sc_module sc_behavior;
+----
+
+hierarchical channel经常用于建模诸如 AMBA总线，PCI-X总线等具有复杂结构的总线结构，这些总线
+表现如同channel一样，可以传递数据，然而其本质则是和 sc_module 别无二致的设计。

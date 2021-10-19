@@ -8,6 +8,9 @@ SystemC中的其他组件和用例分析
 
 sc_interface是一个抽象基类，提供了带interface能力类的接口信息。
 
+ DEFINITION: A SystemC interface is an abstract class that inherits from sc_interface and provides only pure virtual declarations of methods refer- enced by SystemC channels and ports. No implementations or data are provided in a SystemC interface.
+ -- <<SystemC: from ground up>>
+
 sc_interface提供的接口包括：
 
 * `register_port` 将port注册到本interface内

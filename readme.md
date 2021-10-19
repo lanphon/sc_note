@@ -5,5 +5,7 @@ order,
 2. coroutine
 3. primitive-channel
 4. port
+4. event
 4. sensitive
+4. trace
 5. misc
