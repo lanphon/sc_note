@@ -3,6 +3,7 @@
 :toc: left
 
 SystemC中的Event
+[[chap::event]]
 
 == 引言
 
@@ -19,6 +20,7 @@ IEEE的SystemC规范建议用户不要直接使用sc_event_list以及派生类�
 或者 `operator &` 时候，作为临时变量创建出来，并在使用后销毁的。
 
 === sc_event_list
+[[data::sc_event_list]]
 
 sc_event_list是个基础类，没有继承自其他任何部分。对于一个sc_event_list而言，重要
 的成员变量包括：
@@ -157,6 +159,7 @@ sc_event_expr<T> 模板的功能表现的就如同其内部类型T一样。之�
 `&` 和 `|` 作为二元运算符，具有左结合的特点。具体的实现细节有待深究。
 
 === sc_event_and_list
+[[data::sc_event_and_list]]
 
 sc_event_and_list直接继承自sc_event_list:
 
@@ -243,6 +246,7 @@ wait/next_trigger函数中时，其定义的 `operator T const &()` 可以自动
 为 `OR_LIST`
 
 === sc_event_or_list
+[[data::sc_event_or_list]]
 
 和sc_event_and_list一样，sc_event_or_list继承自sc_event_list，并且没有
 增加任何其他的成员变量：
@@ -289,3 +293,94 @@ wait/next_trigger调用时候参数类型是sc_event_and_list还是sc_event_or_l
 
 在<<chap::schedule_mode, 调度模型>>一章，我们已经看到了sc_event数据结构所扮演的重要角色。本部分
 我们会深入系统地汇总下sc_event相关的内容。
+
+sc_event是个基础类，没有继承自其它类。这也就意味着sc_event并没有继承自sc_object，没有
+诸如hierarchy结构、框架回调函数等特性。
+
+=== 成员变量
+
+对于sc_event而言，成员变量包括：
+
+.src/sysc/kernel/sc_event.h
+[source,cpp]
+----
+    enum notify_t { NONE, DELTA, TIMED };
+
+    std::string     m_name;     // name of object.
+    sc_object*      m_parent_p; // parent sc_object for this event.
+    sc_simcontext*  m_simc;
+    sc_dt::uint64   m_trigger_stamp; // delta of last trigger
+    notify_t        m_notify_type;
+    int             m_delta_event_index;
+    sc_event_timed* m_timed;
+
+    mutable std::vector<sc_method_handle> m_methods_static;
+    mutable std::vector<sc_method_handle> m_methods_dynamic;
+    mutable std::vector<sc_thread_handle> m_threads_static;
+    mutable std::vector<sc_thread_handle> m_threads_dynamic;
+----
+
+对于一个sc_event而言，最为核心的是与之关联的process handle。这些process handle分为四类：
+
+1. 静态设置本事件为sensitive的method，存储在成员变量 `m_methods_static` 中
+2. 使用 `next_trigger` 将本事件设置为动态调度敏感事件的method，存储在成员变量 `m_methods_dynamic` 中
+3. 静态设置本事件为sensitive的thread(包括cthread)，存储在成员变量 `m_threads_static` 中
+4. 使用 `wait` 降本事件设置为动态调度敏感事件的thread，存储在成员变量 `m_threads_dynamic` 中
+
+一个sc_event，可以是DELTA EVENT，此时 `m_notify_type` 为 `DELTA` 。DELTA EVENT
+在<<concept::crunch, simc的crunch>>函数中的NOTIFICATION阶段trigger。
+sc_event也可以是TIMED EVENT，即 `m_notify_type` 为 `TIMED` 。 TIMED EVENT
+在<<concept::timed_event, simc的simulate>>函数中，crunch运行完之后的仿真时间前进
+部分trigger。无论哪种情况下，trigger完的EVENT进入NONE状态，将 `m_notify_type`
+标记为 `NONE`.
+
+成员变量 `m_delta_event_index` 用以标记当本sc_event为DELTA EVENT时，
+在本次delta cycle中的delta event列表中的索引值。这个成员变量本身只赋值，没有在
+其他地方用到。
+
+成员变量 `m_timed` 则用以标记当本sc_event为TIMED EVENT时，notification
+的**绝对时间**。这里记录的绝对时间是调用 `notify()` 成员函数设置延迟时间
+的时候，将所设置的延迟时间加上当前仿真时间得到的。
+
+`m_trigger_stamp` 成员变量则用以记录sc_event上一次被trigger时候的时间戳。
+这个时间戳并不对应仿真时间，而是有着比仿真时间更精细的粒度，记录的是delta cycle
+级别的时间戳。在有些场景下，这个时间戳可以用来判断sc_event是否在上个delta cycle
+被trigger，已进行相关的动作。
+
+成员变量 `m_name`, `m_simc` 以及 `m_parent_p` 主要用以记录sc_event
+相关的场景信息，以提供DEBUG能力。
+
+=== 构造和析构函数
+
+sc_event可以是空构造，也可以给定本事件的名字。对于sc_event而言，名字并非必须，
+可以为空，此时SystemC会自动创建一个名字。
+
+除了普通的孔构造和给定名字构造以外，sc_event还有一个PRIVATE的构造函数：
+[[concept::event::kernel_event]]
+
+.src/sysc/kernel/sc_event.h
+[source,cpp]
+----
+private:
+    static struct kernel_tag {} kernel_event;
+    explicit sc_event( kernel_tag, const char* name = NULL );
+----
+
+这个构造函数主要用来创建SystemC仿真器内部的事件，以及一些数据结构的内置事件对象。例如
+sc_fifo中的write event和read event都属于使用这种方式创建的kernel event。
+这个构造函数被标记为PRIVATE，因此只有sc_event的友元类才可以访问这个函数，创建
+kernel event，这局限了这种构造函数的使用场景。对于kernel event，我们只需要
+了解即可。
+
+在构造函数中，sc_event会调用成员函数 `register_event` 将自己注册都
+SystemC的内核中。这个注册动作主要是做一些hierarchy管理行为，例如将sc_event
+名字加入到名城管理系统中，将sc_event本身加入所属的父模块的child event列表中等动作。
+对于kernel event则不做这些，可以认为kernel event游离于SystemC管理普通
+sc_event的体系之外，这也是称之为kernel event的原因。
+
+
+拷贝构造函数和赋值构造函数被标记为PRIVATE，并且未实现，这意味着sc_event不允许拷贝
+或者赋值。
+
+sc_event在构造函数中需要注册自己，并分配一些资源，所以sc_event的析构函数
+是非空的。

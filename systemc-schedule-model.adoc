@@ -803,6 +803,15 @@ sc_event::add_dynamic( sc_method_handle method_h ) const
 为数不多的event发生，或者其他原因。如果Method线程没有成功调度，event对象需要保持对这个
 Method线程的引用。反之，如果线程调度成功，则event删除对Method线程的引用。
 
+注意在这里SystemC采用了一种巧妙的方法删除 `trigger_dynamic` 成功的method process handle。
+对于已经成功的process handle，将之与最后一个还没有处理的process handle交换。这样处理了一遍
+之后，`last_i` 指向的就是最后一个没有 trigger_dynamic成功的method，并且这个之前都是
+没有成功的，之后都是已经成功的。最后调用resize，即可将这些trigger_dynamic成功的
+method process handle删掉。
+
+这里也可以对比下那些静态trigger的method process。无论trigger_static method process
+是否成功，method process handle都不会被删除的。
+
 [[sc_process_b::trigger_dynamic]]
 
 .src/sysc/kernel/sc_method_process.cpp
