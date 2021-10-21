@@ -3,6 +3,7 @@
 :toc: left
 
 SystemC内的Primitive Channel
+[[chap::prim_channel]]
 
 == 引言
 
@@ -87,6 +88,7 @@ sc_prim_channel_registry::perform_update()
 
 
 === `sc_prim_channel`
+[[data::sc_prim_channel]]
 
 `sc_prim_channel` 是所有channel的基类。
 
@@ -184,6 +186,7 @@ primitive channel registry通信。
 使用SystemC的primitive channel框架来实现相应的功能的。
 
 === `sc_fifo`
+[[data::sc_fifo]]
 
 ==== 使用request_update的地方
 
@@ -421,6 +424,7 @@ sc_fifo不仅是一个sc_prim_channel，同时也是一个sc_interface，实现�
 功能，将一个 `sc_port_base` 对象注册为自己的reader或者write(根据类型信息来判断是读还是写)。
 
 === `sc_signal`
+[[data::sc_signal]]
 
 不同于 `sc_fifo` 建模一个具有一定深度的先进先出队列以hide住latency, `sc_signal` 建模的
 则是各个模块之间的物理连线。从直觉上来说， `sc_signal` 没有任何的延时：从一个模块的输出
@@ -845,6 +849,7 @@ sc_signal_resolved::update()
 四值信号决议，其代码整体和 `sc_signal_resolved` 一致，这里就不再详述了。
 
 === `sc_clock`
+[[data::sc_clock]]
 
 `sc_clock` 继承自特化版本的 `sc_signal` :
 

@@ -3,6 +3,7 @@
 :toc: left
 
 SystemC中的sensitive
+[[chap::sensitive]]
 
 == 引言
 

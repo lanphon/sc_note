@@ -5,6 +5,7 @@
 SystemC中的其他组件和用例分析
 
 == sc_interface
+[[data::sc_interface]]
 
 sc_interface是一个抽象基类，提供了带interface能力类的接口信息。
 

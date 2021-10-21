@@ -3,6 +3,7 @@
 :toc: left
 
 SystemC调度模型
+[[chap::schedule-mode]]
 
 == 引言
 

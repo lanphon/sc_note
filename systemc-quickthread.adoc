@@ -3,6 +3,7 @@
 :toc: left
 
 Systemc中的QuickThread，协程原理与实现
+[[chap::quickthread]]
 
 == 引言
 

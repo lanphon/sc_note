@@ -8,3 +8,284 @@ SystemC中的Event
 
 在之前的介绍中，我们已经看到了sc_event的重要作用。本部分我们对sc_event的设计和相关的API再做一次回顾，
 探究其中的设计模式和设计原理。本部分也一并回顾了SystemC的wait/next_trigger API，并进行深入挖掘。
+
+== sc_event_list以及派生类
+
+多个sc_event可以组成and/or list，这些复杂的sc_event表达式的结果是保存在sc_event_list以及派生类
+中的。
+
+IEEE的SystemC规范建议用户不要直接使用sc_event_list以及派生类，而仅仅将他们作为函数的参数
+来使用。这些 sc_event_list/sc_event_and_list/sc_event_or_list应当是使用 `operator |`
+或者 `operator &` 时候，作为临时变量创建出来，并在使用后销毁的。
+
+=== sc_event_list
+
+sc_event_list是个基础类，没有继承自其他任何部分。对于一个sc_event_list而言，重要
+的成员变量包括：
+
+.src/sysc/kernel/sc_event.h
+[source,cpp]
+----
+    std::vector<const sc_event*> m_events;
+    bool                         m_and_list;
+    bool                         m_auto_delete;
+    mutable unsigned             m_busy;
+----
+
+从成员变量可以看出，sc_event_list是一个保存多个sc_event指针的数组结构。sc_event_list
+一般是临时创建的，用来为wait/next_trigger服务的对象，因此内部有一个 `m_auto_delete`
+的成员变量，表明是否自动回收sc_event_list本身。
+
+sc_event_list采取一种类似于引用计数的方式。每次调用 `sc_event_list::add_dynamic`
+成员函数，将一个method/thread process handle设置为**所有**保存的
+event的动态敏感handle时候，计数器 `m_busy` 都会自加。而当调用 `auto_delete`
+函数的时候，首先将计数器 `m_busy` 自减。
+[[api::sc_event_list::add_dynamic]]
+
+.src/sysc/kernel/sc_event.cpp
+[source,cpp]
+----
+void
+sc_event_list::add_dynamic( sc_method_handle method_h ) const
+{
+    m_busy++; <1>
+    if ( m_events.size() != 0 ) {
+      const sc_event* const * l_events = &m_events[0];
+      for( int i = m_events.size() - 1; i >= 0; -- i ) {
+          l_events[i]->add_dynamic( method_h ); <2>
+      }
+  }
+}
+
+void
+sc_event_list::add_dynamic( sc_thread_handle thread_h ) const
+{
+    m_busy++; <1>
+    if ( m_events.size() != 0 ) {
+      const sc_event* const* l_events = &m_events[0];
+      for( int i = m_events.size() - 1; i >= 0; -- i ) {
+          l_events[i]->add_dynamic( thread_h ); <2>
+      }
+  }
+}
+----
+<1> 自加计数器 `m_busy`
+<2> sc_event_list的add_dynamic，实际上就是对于保存的每个event都调用add_dynamic
+
+从 `sc_event_list::add_dynamic` 的实现代码中，我们也可以看出，对于sc_event_list
+保存的每个sc_event对象，他们之间更多的是**或**的关系：只要有一个事件发生，就会调度
+相对应的process handle的trigger_dynamic函数。而区分这些event究竟是“与”还是“或”
+关系，就取决于thread/method process中的<<sc_process_b::trigger_dynamic, trigger_dynamic>>函数了。
+u
+
+如果自减的结果等于0，并且设置为自动删除，就会
+`delete this` 的方式自动删除本身所占用的资源。
+[[api::sc_event_list::auto_delete]]
+
+.src/sysc/kernel/sc_event.h
+[source,cpp]
+----
+inline
+void
+sc_event_list::auto_delete() const
+{
+    if( m_busy ) {
+        --m_busy;
+    }
+    if( ! m_busy && m_auto_delete ) {
+        delete this;
+    }
+}
+----
+
+`sc_event_list::auto_delete` 是sc_event_list的内部函数，只用在 sc_event_list
+自己的拷贝构造函数，以及拷贝赋值函数中：
+
+.src/sysc/kernel/sc_event.h
+[source,cpp]
+----
+inline
+sc_event_list::sc_event_list( sc_event_list const & that )
+  : m_events()
+  , m_and_list( that.m_and_list )
+  , m_auto_delete( false )
+  , m_busy( 0 )
+{
+    move_from( that );
+    that.auto_delete(); // free automatic lists
+}
+
+inline
+sc_event_list&
+sc_event_list::operator=( sc_event_list const & that )
+{
+    if( m_busy )
+        report_invalid_modification();
+
+    if( SC_LIKELY_(this != &that) ) {
+        move_from( that );
+        that.auto_delete(); // free automatic lists
+    }
+
+    return *this;
+}
+----
+
+在拷贝构造函数和拷贝赋值函数中使用 `sc_event_list::auto_delete` ，更多的作用是实现了
+资源管理的自动释放。
+
+=== sc_event_expr<T>
+
+在介绍sc_event_list的两个派生类，sc_event_and_list和sc_event_or_list之前，我们先
+学习下sc_event_expr<T>。sc_event_expr<T>并不继承自sc_event_list。
+
+sc_event_expr<T>是一个模板类，模板的参数可以是sc_event_and_list，别名是sc_event_and_expr，
+或者是sc_event_or_list（别名sc_event_or_expr）：
+
+.src/sysc/kernel/sc_event.h
+[source,cpp]
+----
+typedef sc_event_expr<sc_event_and_list> sc_event_and_expr;
+
+typedef sc_event_expr<sc_event_or_list> sc_event_or_expr;
+----
+
+sc_event_expr<T> 内部保存一个指向类型T的指针，并且设计了一些成员函数（尤其是push_back），转发
+给内部的T类型成员变量。
+
+sc_event_expr<T> 模板的功能表现的就如同其内部类型T一样。之所以这么设计一个这样的模板，是因为
+`&` 和 `|` 作为二元运算符，具有左结合的特点。具体的实现细节有待深究。
+
+=== sc_event_and_list
+
+sc_event_and_list直接继承自sc_event_list:
+
+.src/sysc/kernel/sc_event.h
+[source,cpp]
+----
+class SC_API sc_event_and_list
+: public sc_event_list
+----
+
+相比于基类sc_event_list, sc_event_and_list并没有增加任何其他的成员变量。sc_event_and_list
+更多的是增加了几个成员函数，尤其是 `operator &` ，以方便创建 `sc_event_and_list` :
+
+.src/sysc/kernel/sc_event.h
+[source,cpp]
+----
+    sc_event_and_list& operator &= ( const sc_event& );
+    sc_event_and_list& operator &= ( const sc_event_and_list & );
+
+    sc_event_expr<sc_event_and_list>  operator & ( const sc_event& );
+    sc_event_expr<sc_event_and_list>  operator & ( const sc_event_and_list& );
+----
+
+这四个关于 `operator &=` 和 `operator &` 的重载，才是 `sc_event_and_list` 的核心所在。
+
+注意，在 `operator &` 中，返回值类型不是 `sc_event_and_list` ，而是一个 `sc_event_expr<sc_event_and_list>` ，也就是 `sc_event_and_expr` 类型。
+这么设计的原因我暂时还没有想到，希望以后能有所发现。
+
+假设我们有一系列 `sc_event e0, e1, e2, e3` ，那么 `e0 & e1 & e2 & e3`
+按照左结合律的特点，应当是 `(((e0 & e1) & e2) & e3)` 。 `e0 & e1` 调用
+`sc_event::operator &` ，返回一个 `sc_event_and_expr`。接下来
+`& e2` 则调用的是自由函数 `sc_event_and_expr operator &(sc_event_and_expr, sc_event&)`
+，同样返回一个 `sc_event_and_expr` ，依次类推。当 `sc_event_and_expr` 用在
+wait/next_trigger函数中时，其定义的 `operator T const &()` 可以自动
+转换为类型 `sc_event_and_list`
+
+''''
+
+
+仅仅从sc_event.h头文件来看，sc_event_and_list似乎并没有实现字面意义上的and功能。与之后要介绍的sc_event_or_list
+相比，sc_event_and_list唯一的区别是初始化时，将基类sc_event_list中的成员变量 `m_and_list`
+设置为true，但sc_event_or_list设置这个成员变量为false. 然而这个成员变量，以及返回这个成员变量
+值的成员函数 `sc_event_list::and_list()`，却从未使用过。
+
+实际上， `sc_event_list::m_and_list` 这个成员变量的确没有使用过。在SystemC中，process
+动态调度的时候，是直接根据 wait/next_trigger的类型判断的。例如 
+<<sc_process_b::trigger_dynamic, `sc_thread_process::trigger_dynamic`>>
+代码的片段如下：
+
+
+.src/sysc/kernel/sc_thread_process.cpp
+[source,cpp]
+----
+    switch( m_trigger_type )
+    {
+      case EVENT:
+	m_event_p = 0;
+	m_trigger_type = STATIC;
+	break;
+
+      case AND_LIST: <1>
+        -- m_event_count;
+	if ( m_event_count == 0 )
+	{
+	    m_event_list_p->auto_delete();
+	    m_event_list_p = 0;
+	    m_trigger_type = STATIC;
+	}
+	else
+	{
+	    return true;
+	}
+	break;
+
+      case OR_LIST: <1>
+	m_event_list_p->remove_dynamic( this, e );
+	m_event_list_p->auto_delete();
+	m_event_list_p = 0;
+	m_trigger_type = STATIC;
+	break;
+----
+<1> 当使用 `sc_event_and_list` 作为 wait(对于thread而言)/next_trigger(对于method而言)
+参数是， `m_trigger_type` 设置为 `AND_LIST` 。如果使用 `sc_event_or_list` 则设置
+为 `OR_LIST`
+
+=== sc_event_or_list
+
+和sc_event_and_list一样，sc_event_or_list继承自sc_event_list，并且没有
+增加任何其他的成员变量：
+
+.src/sysc/kernel/sc_event.h
+[source,cpp]
+----
+class SC_API sc_event_or_list
+: public sc_event_list
+----
+
+在 `sc_event_or_list` 中，也为 `operator |=` 和 `operator |` 提供了重载的
+成员函数：
+
+.src/sysc/kernel/sc_event.h
+[source,cpp]
+----
+    sc_event_or_list& operator |= ( const sc_event& );
+    sc_event_or_list& operator |= ( const sc_event_or_list & );
+    sc_event_expr<sc_event_or_list>  operator | ( const sc_event& ) const;
+    sc_event_expr<sc_event_or_list>  operator | ( const sc_event_or_list& ) const;
+----
+
+需要说明的一点是，这些成员函数的实现，除了一些地方的类型不同以外，和 `sc_event_and_list`
+相对应的成员函数的实现是一模一样的。
+例如， `sc_event_or_list& operator |=(const sc_event_or_list &)`
+与 `sc_event_and_list& operator &=(const sc_event_and_list &)`
+的实现是一模一样的。
+这也是理所应当的，因为无论是sc_event_and_list，还是sc_event_or_list，都只是将
+一些sc_event存放起来，并提供相应的资源管理。这两个类的功能体现在
+当其中一个sc_event notification时候，调用相对应的method/thread process的
+<<sc_process_b::trigger_dynamic, trigger_dynamic>>地方 footnote:[根据
+wait/next_trigger调用时候参数类型是sc_event_and_list还是sc_event_or_list决定trigger type]，而不在类本身。
+这两个类提供这四个重载的operator，只是为了符合惯用法而已。
+
+[NOTE]
+====
+在wait/next_trigger时候，`&` 和 `|` 不能混合使用，亦即我们无法创建混合and_list和or_list
+类型的复杂list。现实设计中，混合and/or关系list的需求是非常非常罕见的。
+====
+
+== sc_event
+[[data::sc_event]]
+
+在<<chap::schedule_mode, 调度模型>>一章，我们已经看到了sc_event数据结构所扮演的重要角色。本部分
+我们会深入系统地汇总下sc_event相关的内容。

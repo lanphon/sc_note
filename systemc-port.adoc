@@ -3,6 +3,7 @@
 :toc: left
 
 SystemC中的Port和Export
+[[chap::port_and_export]]
 
 == 引言
 
@@ -72,6 +73,7 @@ sc_port_registry和sc_port的关系，就像sc_prim_channel_registry和sc_prim_c
 
 == sc_port_base
 [[api::sc_port_base]]
+[[data::sc_port_base]]
 
 sc_port_base是一个继承自sc_object的接口类，并且不是一个模板类，所以sc_port_base是不包括
 任何模板信息的。这么设计的原因，是为了保证在一些需要使用sc_port的场合，可以直接将参数设置为
@@ -1085,6 +1087,15 @@ MB.EB已经完成了到 sc_interface的绑定工作。对于sc_port而言这是�
 * 能够隐式cast成sc_interface类型，因此基本可以代替sc_interface的使用，例如可以直接作为static sensitive源（存疑，文档里说不能这么做，但我发现从语法上来说应该是可以这么干的）
 * 隐藏实现细节
 * 效率更高，因为sc_export的绑定本质上就是保存sc_interface继承类指针，通过sc_export访问sc_interface继承类的接口函数更快（其实和sc_port直接访问效果是一样的）
+
+在多层次的绑定中，如hierarchy有多层的嵌套的时候，sc_export的效率和一层绑定是一致的。例如，MA内部
+的sc_export EPA绑定内部模块MB的sc_export EPB，EPB绑定内部模块MC的sc_export EPC，然后
+EPC绑定内部模块MD的sc_export MD，而MD则绑定MD自己内部的channel对象。从MA的sc_export EPA
+调用这个sc_export提供的虚接口函数，其效果等同于直接调用MD内部的channel对象的指针。这就体现
+了sc_export的高效率。
+
+如果替换为sc_port和module外的channel，那么这个调用很可能需要三四次channel的转发，极大地
+降低了仿真的效率。
 
 === sc_event_queue_port
 
