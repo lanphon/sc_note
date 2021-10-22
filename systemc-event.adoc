@@ -537,7 +537,7 @@ sc_event::notify()
 }
 ----
 
-这种notify会立刻调用trigger函数，作为事件发生的作用。因此这就带来一个可能的竞争问题：如果
+这种notify会在调用<<api::sc_event::cancel, cancel>>之后，立刻调用<<api::sc_event::trigger, trigger>>函数，作为事件发生的作用。因此这就带来一个可能的竞争问题：如果
 动态敏感的process handle，调度的顺序在这个函数调用之前，那么相对应的process handle
 就已经加入到事件保存的process handle中，不带参数的notify可以trigger这些process handle。反之，
 如果这些process handle调度顺序在这个函数调用之后，那么相对应的process handle此刻是没有
@@ -821,7 +821,7 @@ process加入到runnable列表中（thread/cthread可能设置多个cycle之后�
 一个process handle可以设置多个静态敏感事件。所以，静态敏感事件之间是**或**的关系。一个可能的
 想法是使用 `sc_event_and_list` 为process设置静态敏感事件，然而这种做法比较丑陋且不推荐。
 
-=== cancel
+=== cancel and reset
 [[api::sc_event::cancel]]
 
 sc_event还提供了一个cancel的成员函数，这个成员函数可以在一个delta事件发生的之后，被调用
@@ -856,3 +856,24 @@ sc_event::cancel()
 ----
 <1> 对于delta event，需要将其从simc的delta event列表中移除
 <2> 对于timed event，只需要将延迟时间清除掉，标记为NONE即可
+
+[[api::sc_event::reset]]
+sc_event提供了一个reset成员函数，将本sc_event的数据结构清除掉:
+
+.src/sysc/kernel/sc_event.cpp
+[source,cpp]
+----
+sc_event::reset()
+{
+    m_notify_type = NONE;
+    m_delta_event_index = -1;
+    m_timed = 0;
+    // clear the dynamic sensitive methods
+    m_methods_dynamic.resize(0);
+    // clear the dynamic sensitive threads
+    m_threads_dynamic.resize(0);
+}
+----
+
+注意reset()只清除动态敏感的method和thread process handle。静态敏感的process列表
+仍然保留。
