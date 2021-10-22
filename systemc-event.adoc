@@ -679,7 +679,11 @@ sc_event::notify_internal( const sc_time& t )
 }
 ----
 
-基本上就是用户API形式的缩水版，去掉了处理延时时间被多次设定相关的代码。此外，在SystemC内部，
+基本上就是用户API形式的缩水版，去掉了处理延时时间被多次设定相关的代码。
+例如，在
+<<api::sc_thread_process::wait::sc_time, sc_thread_process的wait>>一种重载形式
+中，就是用了 `notify_internal`.
+此外，在SystemC内部，
 事件立即发生也是一个非常重要的使用场景，为此，sc_event提供了成员函数 `notify_next_delta`
 
 .src/sysc/kernel/sc_event.h
@@ -877,3 +881,583 @@ sc_event::reset()
 
 注意reset()只清除动态敏感的method和thread process handle。静态敏感的process列表
 仍然保留。
+
+== wait
+[[concept::wait]]
+
+wait是Thread/CThread线程用以同步的一个API调用。SystemC中定义了多种形式的wait。例如，sc_module
+定义了具有多种重载形式的成员函数wait:
+
+.src/sysc/kernel/sc_module.h
+[source,cpp]
+----
+    // static sensitivity for SC_THREADs and SC_CTHREADs
+
+    void wait()
+        { ::sc_core::wait( simcontext() ); }
+
+    // dynamic sensitivity for SC_THREADs and SC_CTHREADs
+
+    void wait( const sc_event& e )
+        { ::sc_core::wait( e, simcontext() ); }
+
+    void wait( const sc_event_or_list& el )
+	{ ::sc_core::wait( el, simcontext() ); }
+
+    void wait( const sc_event_and_list& el )
+	{ ::sc_core::wait( el, simcontext() ); }
+
+    void wait( const sc_time& t )
+        { ::sc_core::wait( t, simcontext() ); }
+
+    void wait( double v, sc_time_unit tu )
+        { ::sc_core::wait( sc_time( v, tu, simcontext() ), simcontext() ); }
+
+    void wait( const sc_time& t, const sc_event& e )
+        { ::sc_core::wait( t, e, simcontext() ); }
+
+    void wait( double v, sc_time_unit tu, const sc_event& e )
+        { ::sc_core::wait( 
+		sc_time( v, tu, simcontext() ), e, simcontext() ); }
+
+    void wait( const sc_time& t, const sc_event_or_list& el )
+        { ::sc_core::wait( t, el, simcontext() ); }
+
+    void wait( double v, sc_time_unit tu, const sc_event_or_list& el )
+        { ::sc_core::wait( sc_time( v, tu, simcontext() ), el, simcontext() ); }
+
+    void wait( const sc_time& t, const sc_event_and_list& el )
+        { ::sc_core::wait( t, el, simcontext() ); }
+
+    void wait( double v, sc_time_unit tu, const sc_event_and_list& el )
+        { ::sc_core::wait( sc_time( v, tu, simcontext() ), el, simcontext() ); }
+----
+
+这些成员函数的本质，还是调用自由函数 `::sc_core::wait` 。这些wait函数调用可以分成几种：
+
+* 静态敏感的wait，即不带任何参数的wait
+* wait一个或者几个事件，多个事件可以是and关系，也可以是or关系
+* wait一段特定的时间
+* wait一个或者几个事件，带超时设定
+
+而自由函数wait，一般会最终调用到 `sc_thread_process` 的wait成员函数上去，有一些
+会调用到 `sc_thread_process` 的wait_cycles成员函数上。
+
+=== 静态的wait
+
+不带任何参数的wait，也就是 `wait()` 调用，调用的是如下自由函数：
+
+.src/sysc/kernel/sc_wait.cpp
+[source,cpp]
+----
+SC_API void
+wait( sc_simcontext* simc )
+{
+    sc_curr_proc_handle cpi = simc->get_curr_proc_info();
+    switch( cpi->kind ) {
+    case SC_THREAD_PROC_:
+    case SC_CTHREAD_PROC_: {
+        reinterpret_cast<sc_thread_handle>( cpi->process_handle )->wait_cycles();
+        break;
+    }
+    default:
+	SC_REPORT_ERROR( SC_ID_WAIT_NOT_ALLOWED_, "\n        "
+			 "in SC_METHODs use next_trigger() instead" );
+        break;
+    }
+}
+----
+
+实际上调用的是proces的wait_cycles成员函数。
+
+不带任何参数的 `wait` 会阻塞当前线程的执行，直到所设置的静态敏感事件中的一个发生，才会重新调度
+执行当前线程。wait_cycles实际上并不是等待一个时钟周期，而是等待一个静态事件而已。
+[[api::sc_thread_process::wait_cycles]]
+
+对于Thread/Cthread而言，wait_cycles只是将所设定的数 `n` 减一之后赋给 `m_wait_cycle_n`
+成员变量，然后调用 <<api::sc_thread_process::suspend_me, `suspend_me`> 让渡出执行权。
+[[api::sc_thread_process::wait_cycles]]
+
+.src/sysc/kernel/sc_thread_process.h
+[source,cpp]
+----
+//------------------------------------------------------------------------------
+//"sc_thread_process::wait_cycles"
+//
+// This method suspends this object instance for the specified number of cycles.
+// A cycle is defined as the event the thread is set up to staticly wait on.
+// The field m_wait_cycle_n is set to one less than the number of cycles to
+// be waited for, since the value is tested before being decremented in
+// the simulation kernel.
+//------------------------------------------------------------------------------
+inline
+void
+sc_thread_process::wait_cycles( int n )
+{
+    if( m_unwinding )
+        SC_REPORT_ERROR( SC_ID_WAIT_DURING_UNWINDING_, name() );
+
+    if( n <= 0 )
+        SC_REPORT_ERROR( SC_ID_WAIT_NEGATIVE_CYCLES_, name() );
+
+    m_wait_cycle_n = n-1;
+    suspend_me();
+}
+----
+
+例如，如果wait_cycles设定等待一个clock cycle，那么 `n=1`，所设定的 `m_wait_cycle_n`
+就是0. 在下次<<api::sc_thread_process::trigger_static, thread process的trigger_static>>成员函数被调用的时候，m_wait_cycle_n的检查
+就会直接跳过。所以实际等待的clock cycle数目等于 `m_wait_cycle_n + 1` 。
+
+=== wait一个或者多个事件
+
+wait也可以带一个或者多个事件。例如，带一个事件时候，所调用的自由函数是：
+
+.src/sysc/kernel/sc_wait.cpp
+[source,cpp]
+----
+SC_API void
+wait( const sc_event& e, sc_simcontext* simc )
+{
+    sc_curr_proc_handle cpi = simc->get_curr_proc_info();
+    switch( cpi->kind ) {
+    case SC_THREAD_PROC_: {
+	reinterpret_cast<sc_thread_handle>( cpi->process_handle )->wait( e );
+	break;
+    }
+    case SC_CTHREAD_PROC_: {
+        warn_cthread_wait();
+	sc_cthread_handle cthread_h =
+            reinterpret_cast<sc_cthread_handle>( cpi->process_handle );
+	cthread_h->wait( e );
+	cthread_h->wait_cycles();
+	break;
+    }
+    default:
+	SC_REPORT_ERROR( SC_ID_WAIT_NOT_ALLOWED_, "\n        "
+			 "in SC_METHODs use next_trigger() instead" );
+        break;
+    }
+}
+----
+
+从这个函数也可以看出，CTHREAD不能使用wait一个或者多个事件，因为相应的API中已经将
+这种用法标记为废弃了。
+
+这种形式的wait，包括事件的and list或者or_list，都是调用了thread process handle
+的同名
+<<api::sc_thread_process::wait::sc_event, wait>>成员函数。
+
+=== wait一段特定时间
+
+根据延时时间设置的不同方式，这种wait也有不同的形式，其中都转发给了自由函数wait。一个
+例子是：
+
+.src/sysc/kernel/sc_wait.cpp
+[source,cpp]
+----
+SC_API void
+wait( const sc_time& t, sc_simcontext* simc )
+{
+    sc_curr_proc_handle cpi = simc->get_curr_proc_info();
+    switch( cpi->kind ) {
+    case SC_THREAD_PROC_: {
+	reinterpret_cast<sc_thread_handle>( cpi->process_handle )->wait( t );
+	break;
+    }
+    case SC_CTHREAD_PROC_: {
+        warn_cthread_wait();
+	sc_cthread_handle cthread_h =
+            reinterpret_cast<sc_cthread_handle>( cpi->process_handle );
+	cthread_h->wait( t );
+	cthread_h->wait_cycles();
+	break;
+    }
+    default:
+	SC_REPORT_ERROR( SC_ID_WAIT_NOT_ALLOWED_, "\n        "
+			 "in SC_METHODs use next_trigger() instead" );
+        break;
+    }
+}
+----
+
+就像wait在一个或者多个事件一样，CTHREAD同样不能使用这种wait方式。这种的wait方式同样是
+转发给了thread process的wait成员函数。
+
+对于thread process而言，等待一段时间，等同于内部的一个 `m_timeout_event_p`
+事件调用 <<api::sc_event::notify_internal, `notify_internal`>> 设定超时时间：
+
+[[api::sc_thread_process::wait::sc_time]]
+.src/sysc/kernel/sc_thread_process.h
+[source,cpp]
+----
+inline
+void
+sc_thread_process::wait( const sc_time& t )
+{
+    if( m_unwinding )
+        SC_REPORT_ERROR( SC_ID_WAIT_DURING_UNWINDING_, name() );
+
+    m_timeout_event_p->notify_internal( t );
+    m_timeout_event_p->add_dynamic( this );
+    m_trigger_type = TIMEOUT;
+    suspend_me();
+}
+----
+
+因为在thread process自己的 `m_timeout_event_p` 调用 `notify_internal` 
+后，调度了 `suspend_me` ，当前thread process让渡出执行权限，因此是不可能再次调用
+一个 `wait(const sc_time&)` 来重新设置延时时间的。这样是为何这里
+可以用 `notify_internal` 的重要原因了。
+
+=== wait一个或者多个事件，带超时设定
+
+wait也可以等待一个或者多个事件，设定一个超时时间。如果所设定的超时时间到了，事件没有满足要求，
+wait仍然会返回。sc_module的wait是转发给自由函数wait的，例如：
+
+.src/sysc/kernel/sc_wait.cpp
+[source,cpp]
+----
+SC_API void
+wait( const sc_time& t, const sc_event_and_list& el, sc_simcontext* simc )
+{
+    if( el.empty() ) {
+        SC_REPORT_ERROR( SC_ID_EVENT_LIST_FAILED_,
+                         "wait() on empty event list not allowed" );
+        // may continue, if suppressed
+    }
+
+    sc_curr_proc_handle cpi = simc->get_curr_proc_info();
+    switch( cpi->kind ) {
+    case SC_THREAD_PROC_: {
+	reinterpret_cast<sc_thread_handle>( cpi->process_handle )->wait( t, el );
+	break;
+    }
+    case SC_CTHREAD_PROC_: {
+        warn_cthread_wait();
+	sc_cthread_handle cthread_h =
+            reinterpret_cast<sc_cthread_handle>( cpi->process_handle );
+	cthread_h->wait( t, el );
+	cthread_h->wait_cycles();
+	break;
+    }
+    default:
+	SC_REPORT_ERROR( SC_ID_WAIT_NOT_ALLOWED_, "\n        "
+			 "in SC_METHODs use next_trigger() instead" );
+        break;
+    }
+}
+----
+
+同样，CTHREAD不能使用这种wait方式。这种wait同样是将请求转发给thread process的wait。
+
+对于thread process而言，带超时设定的事件wait，等于分别设置两个event对象，例如
+当使用多个事件的or list wait时：
+
+[[api::sc_thread_process::wait::sc_time_with_event]]
+.src/sysc/kernel/sc_thread_process.h
+[source,cpp]
+----
+inline
+void
+sc_thread_process::wait( const sc_time& t, const sc_event_or_list& el )
+{
+    if( m_unwinding )
+        SC_REPORT_ERROR( SC_ID_WAIT_DURING_UNWINDING_, name() );
+
+    m_timeout_event_p->notify_internal( t );
+    m_timeout_event_p->add_dynamic( this ); <1>
+    el.add_dynamic( this ); <2>
+    m_event_list_p = &el;
+    m_trigger_type = OR_LIST_TIMEOUT;
+    suspend_me();
+}
+----
+<1> 设置超时事件
+<2> 设置event事件
+
+在thread process被<<sc_process_b::trigger_dynamic, trigger_dynamic>>
+的时候，可以判断哪个事件首先发生。如果两个事件中的一个发生，则另一个被
+<<api::sc_event:;cancel, cancel>>掉.
+
+=== CTHREAD特殊设计的wait
+
+对于CTHREAD而言，之前介绍的wait方式，只有不带任何参数的wait()才可以在CTHREAD中使用。
+为了扩展这项能力，sc_module的成员函数特意设计了一个 `wait(int)` ，可以指定
+等待的clock cycle数：
+
+.src/sysc/kernel/sc_module.h
+[source,cpp]
+----
+    void wait( int n )
+        { ::sc_core::wait( n, simcontext() ); }
+----
+
+对于CThread而言，还可以用 `wait(int)` 这种API调用，显式要求等待几个clock cycle。
+这个自由函数wait的实现不再sc_wait.cpp，而是在sc_cthread_wait.cpp中：
+
+.src/sysc/kernel/sc_cthread_wait.cpp
+[source,cpp]
+----
+void
+wait( int n, sc_simcontext* simc )
+{
+    sc_curr_proc_handle cpi = simc->get_curr_proc_info();
+    if( n <= 0 ) {
+        std::stringstream msg;
+        msg << "n = " << n;
+        SC_REPORT_ERROR( SC_ID_WAIT_N_INVALID_, msg.str().c_str() );
+    }
+    switch( cpi->kind ) {
+      case SC_THREAD_PROC_:
+      case SC_CTHREAD_PROC_:
+        reinterpret_cast<sc_thread_handle>( cpi->process_handle )->wait_cycles( n );
+        break;
+      default:
+        SC_REPORT_ERROR( SC_ID_WAIT_NOT_ALLOWED_, "\n        "
+	                 "in SC_METHODs use next_trigger() instead" );
+        break;
+    }
+}
+----
+
+可以看出实际上就是调用了process handle的<<api::sc_thread_process::wait_cycles, wait_cycles>>，给定了等待的clock cycle数目而已。
+
+=== 小结
+
+一般在sc_module设计中所调用的wait，会调用自由函数wait，进而调用到thread process
+的wait成员函数。这样一种设计保证我们在sc_module中使用wait的时候无需指定process handle，
+而是由SystemC自行检索。footnote:[实际是在自由函数中，通过simc的get_curr_proc_info查询到的]
+
+无论哪种形式的wait，调用wait的thread/cthread process一定会被阻塞住，
+在本次delta cycle中不再执行，而是将执行权让渡出去。
+
+== next_trigger
+[[concept::next_trigger]]
+类似于wait, next_trigger也在多个地方有定义。sc_module中的next_trigger定义有：
+
+.src/sysc/kernel/sc_module.h
+[source,cpp]
+----
+    // static sensitivity for SC_METHODs
+
+    void next_trigger()
+	{ ::sc_core::next_trigger( simcontext() ); }
+
+
+    // dynamic sensitivty for SC_METHODs
+
+    void next_trigger( const sc_event& e )
+        { ::sc_core::next_trigger( e, simcontext() ); }
+
+    void next_trigger( const sc_event_or_list& el )
+        { ::sc_core::next_trigger( el, simcontext() ); }
+
+    void next_trigger( const sc_event_and_list& el )
+        { ::sc_core::next_trigger( el, simcontext() ); }
+
+    void next_trigger( const sc_time& t )
+        { ::sc_core::next_trigger( t, simcontext() ); }
+
+    void next_trigger( double v, sc_time_unit tu )
+        { ::sc_core::next_trigger( 
+	    sc_time( v, tu, simcontext() ), simcontext() ); }
+
+    void next_trigger( const sc_time& t, const sc_event& e )
+        { ::sc_core::next_trigger( t, e, simcontext() ); }
+
+    void next_trigger( double v, sc_time_unit tu, const sc_event& e )
+        { ::sc_core::next_trigger( 
+		sc_time( v, tu, simcontext() ), e, simcontext() ); }
+
+    void next_trigger( const sc_time& t, const sc_event_or_list& el )
+        { ::sc_core::next_trigger( t, el, simcontext() ); }
+
+    void next_trigger( double v, sc_time_unit tu, const sc_event_or_list& el )
+        { ::sc_core::next_trigger( 
+	    sc_time( v, tu, simcontext() ), el, simcontext() ); }
+
+    void next_trigger( const sc_time& t, const sc_event_and_list& el )
+        { ::sc_core::next_trigger( t, el, simcontext() ); }
+
+    void next_trigger( double v, sc_time_unit tu, const sc_event_and_list& el )
+        { ::sc_core::next_trigger( 
+	    sc_time( v, tu, simcontext() ), el, simcontext() ); }
+----
+
+同样可以分为如下四种
+
+* 静态敏感的next_trigger，即不带任何参数的next_trigger
+* next_trigger一个或者几个事件，多个事件可以是and关系，也可以是or关系
+* next_trigger一段特定的时间
+* next_trigger一个或者几个事件，带超时设定
+
+在<<api::next_trigger, schedule model的next_trigger>>部分，我们初步介绍了几种基础的
+next_trigger使用，主要是next_trigger无参数，或者参数为一个event时候的场景。
+
+=== next_trigger一段时间
+
+对于设定了一段特定时间的next_trigger，自由函数next_trigger的实现则是：
+
+.src/sysc/kernel/sc_wait.cpp
+[source,cpp]
+----
+SC_API void
+next_trigger( const sc_time& t, sc_simcontext* simc )
+{
+    sc_curr_proc_handle cpi = simc->get_curr_proc_info();
+    if( cpi->kind == SC_METHOD_PROC_ ) {
+	reinterpret_cast<sc_method_handle>( cpi->process_handle )->next_trigger( t );
+    } else {
+	SC_REPORT_ERROR( SC_ID_NEXT_TRIGGER_NOT_ALLOWED_, "\n        "
+			 "in SC_THREADs and SC_CTHREADs use wait() instead" );
+    }
+}
+----
+
+这里其实调用了method process的next_trigger成员函数：
+
+.src/sysc/kernel/sc_method_process.h
+[source,cpp]
+----
+inline
+void
+sc_method_process::next_trigger( const sc_time& t )
+{
+    clear_trigger();
+    m_timeout_event_p->notify_internal( t );
+    m_timeout_event_p->add_dynamic( this );
+    m_trigger_type = TIMEOUT;
+}
+----
+
+类似于带设定时间的wait, next_trigger也是借助内部的一个事件 `m_timeout_event_p`
+来设置的。然而，这里需要注意都是，不同于wait，带延时设定的next_trigger是可以被
+反复设定的，这也就意味着这里的 `notify_internal` 可能被多次调用。
+为了避免出现问题，这里在next_trigger最开始，调用了<<api::sc_method_process::clear_trigger, `clear_trigger`>>
+将这些变量重置到初始状态。
+
+在method process中，多次调用next_trigger设定不同的trigger条件并不是一个良好的设计模式。
+
+=== next_trigger一个或几个事件，带超时设定
+
+对于设定了一个或几个事件的带超时的next_trigger，自由函数next_trigger的实现例子是：
+
+.src/sysc/kernel/sc_wait.cpp
+[source,cpp]
+----
+SC_API void
+next_trigger(const sc_time& t, const sc_event_and_list& el, sc_simcontext* simc)
+{
+    if( el.empty() ) {
+        SC_REPORT_ERROR( SC_ID_EVENT_LIST_FAILED_,
+                         "next_trigger() on empty event list not allowed" );
+        // may continue, if suppressed
+    }
+
+    sc_curr_proc_handle cpi = simc->get_curr_proc_info();
+    if( cpi->kind == SC_METHOD_PROC_ ) {
+	reinterpret_cast<sc_method_handle>( cpi->process_handle )->next_trigger( t, el );
+    } else {
+	SC_REPORT_ERROR( SC_ID_NEXT_TRIGGER_NOT_ALLOWED_, "\n        "
+			 "in SC_THREADs and SC_CTHREADs use wait() instead" );
+    }
+}
+----
+
+这里其实调用了method process的next_trigger成员函数：
+
+.src/sysc/kernel/sc_method_process.h
+[source,cpp]
+----
+inline
+void
+sc_method_process::next_trigger( const sc_time& t, const sc_event_and_list& el )
+{
+    clear_trigger();
+    m_timeout_event_p->notify_internal( t );
+    m_timeout_event_p->add_dynamic( this );
+    el.add_dynamic( this );
+    m_event_list_p = &el;
+    m_event_count = el.size();
+    m_trigger_type = AND_LIST_TIMEOUT;
+}
+----
+
+类似于wait的操作，这里也是保存了两个事件，而在
+<<sc_process_b::trigger_dynamic, trigger_dynamic>>
+中判断事件的发生顺序，将另一个cancel和reset掉。
+
+=== clear_trigger
+
+clear_trigger用以在之前已经使用next_trigger设置过trigger条件的情况下，再次调用
+next_trigger时候的状态清除动作：
+
+.src/sysc/kernel/sc_method_process.cpp
+[source,cpp]
+----
+//------------------------------------------------------------------------------
+//"sc_method_process::clear_trigger"
+//
+// This method clears any pending trigger for this object instance.
+//------------------------------------------------------------------------------
+void sc_method_process::clear_trigger()
+{
+    switch( m_trigger_type ) {
+      case STATIC:
+        return;
+      case EVENT:
+        m_event_p->remove_dynamic( this );
+        m_event_p = 0;
+        break;
+      case OR_LIST:
+        m_event_list_p->remove_dynamic( this, 0 );
+        m_event_list_p->auto_delete();
+        m_event_list_p = 0;
+        break;
+      case AND_LIST:
+        m_event_list_p->remove_dynamic( this, 0 );
+        m_event_list_p->auto_delete();
+        m_event_list_p = 0;
+        m_event_count = 0;
+        break;
+      case TIMEOUT:
+        m_timeout_event_p->cancel();
+        m_timeout_event_p->reset();
+        break;
+      case EVENT_TIMEOUT:
+        m_timeout_event_p->cancel();
+        m_timeout_event_p->reset();
+        m_event_p->remove_dynamic( this );
+        m_event_p = 0;
+        break;
+      case OR_LIST_TIMEOUT:
+        m_timeout_event_p->cancel();
+        m_timeout_event_p->reset();
+        m_event_list_p->remove_dynamic( this, 0 );
+        m_event_list_p->auto_delete();
+        m_event_list_p = 0;
+      break;
+      case AND_LIST_TIMEOUT:
+        m_timeout_event_p->cancel();
+        m_timeout_event_p->reset();
+        m_event_list_p->remove_dynamic( this, 0 );
+        m_event_list_p->auto_delete();
+        m_event_list_p = 0;
+        m_event_count = 0;
+        break;
+    }
+    m_trigger_type = STATIC; <1>
+}
+----
+<1> clear_trigger的结果一定是重置本method process为静态敏感
+
+clear_trigger的代码需要结合不同的trigger type来看。例如，之前设定为AND_LIST_TIMEOUT
+trigger类型，那么在clear trigger的时候，就需要将两个事件对象都做清除。
+
+=== 小结
+
+next_trigger并不会阻塞method process的执行。如果在一次method process中，多次
+执行next_trigger，则以最后一次next_trigger调用为准。这意味着我们如果next_trigger
+设定多个延时时间，那么结果是以最后一次设定的延时时间为准，而不像sc_event的notify一样
+以离此刻最近的时间为准，这是需要注意的一点。

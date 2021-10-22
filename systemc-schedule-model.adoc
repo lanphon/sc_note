@@ -705,16 +705,18 @@ next_trigger( sc_simcontext* simc )
 ----
 
 而 `sc_method_process::clear_trigger` 只是简单清理不使用的资源，然后将本线程的调度模式更改为静态调度而已。
+[[api::sc_method_process::clear_trigger]]
 
 .src/sysc/kernel/sc_method_process.cpp
 [source,cpp]
 ----
 void sc_method_process::clear_trigger()
 {
-    // blabla
+    // blabla <1>
     m_trigger_type = STATIC;
 }
 ----
+<1> 主要是一些资源释放的问题，以及可能已经设置好的timed event被cancel和reset，或者已经加入到dynamic list中的事件被移除
 
 这也就意味着我们可以使用不带任何参数的 `next_trigger()` 调用，将一个Method线程从动态调度改回静态调度模式。
 
@@ -1028,6 +1030,7 @@ PHASE执行调度任务
 的**静态**调度。
 
 Thread的静态调度基本和<<concept::method::static, Method的静态调度>>一样，所不同的是调用的是Thread的 `trigger_static` 函数：
+[[api::sc_thread_process::trigger_static]]
 
 .src/sysc/kernel/sc_thread_process.h
 [source,cpp]
@@ -1196,7 +1199,8 @@ wait( const sc_event& e, sc_simcontext* simc )
 ----
 <1> 对于CTHREAD而言，不应当使用事件触发
 
-对于Thread线程，这转而执行了 `sc_thread_process::wait(const sc_envet&)` 了:
+对于Thread线程，这转而执行了 `sc_thread_process::wait(const sc_event&)` 了:
+[[api::sc_thread_process::wait::sc_event]]
 
 .src/sysc/kernel/sc_thread_process.h
 [source,cpp]

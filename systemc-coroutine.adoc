@@ -226,6 +226,7 @@ Method线程而言，每次启动都相当于调用一次 <<api::semantic, `sema
 
 在thread线程执行过程中，直接或者间接执行 `wait` 后，此线程即被阻塞，让渡出CPU的执行权给
 下一个协程。准确的来说， `sc_thread_process::suspend_me()` 部分真正实现了协程的切换：
+[[api::sc_thread_process::suspend_me]]
 
 .src/sysc/kernel/sc_thread_process.cpp
 [source,cpp]
