@@ -321,6 +321,7 @@ sc_event是个基础类，没有继承自其它类。这也就意味着sc_event�
 ----
 
 对于一个sc_event而言，最为核心的是与之关联的process handle。这些process handle分为四类：
+[[data::sc_event::process_handle]]
 
 1. 静态设置本事件为sensitive的method，存储在成员变量 `m_methods_static` 中
 2. 使用 `next_trigger` 将本事件设置为动态调度敏感事件的method，存储在成员变量 `m_methods_dynamic` 中
@@ -353,9 +354,9 @@ sc_event也可以是TIMED EVENT，即 `m_notify_type` 为 `TIMED` 。 TIMED EVEN
 === 构造和析构函数
 
 sc_event可以是空构造，也可以给定本事件的名字。对于sc_event而言，名字并非必须，
-可以为空，此时SystemC会自动创建一个名字。
+可以为空。
 
-除了普通的孔构造和给定名字构造以外，sc_event还有一个PRIVATE的构造函数：
+除了普通构造和给定名字构造以外，sc_event还有一个PRIVATE的构造函数：
 [[concept::event::kernel_event]]
 
 .src/sysc/kernel/sc_event.h
@@ -377,6 +378,65 @@ SystemC的内核中。这个注册动作主要是做一些hierarchy管理行为�
 名字加入到名城管理系统中，将sc_event本身加入所属的父模块的child event列表中等动作。
 对于kernel event则不做这些，可以认为kernel event游离于SystemC管理普通
 sc_event的体系之外，这也是称之为kernel event的原因。
+[[api::sc_event::register_event]]
+
+.src/sysc/kernel/sc_event.cpp
+[source,cpp]
+----
+// +----------------------------------------------------------------------------
+// |"sc_event::register_event"
+// |
+// | This method sets the name of this object instance and optionally adds
+// | it to the object manager's hierarchy. The object instance will be
+// | inserted into the object manager's hierarchy if one of the following is
+// | true:
+// |   (a) the leaf name is non-null and is_kernel_event == false
+// |   (b) the event is being created before the start of simulation.
+// |
+// | Arguments:
+// |     leaf_name = leaf name of the object or NULL.
+// +----------------------------------------------------------------------------
+void
+sc_event::register_event( const char* leaf_name, bool is_kernel_event /* = false */ )
+{
+    sc_object_manager* object_manager = m_simc->get_object_manager();
+    m_parent_p = m_simc->active_object();
+
+    // No name provided, if we are not executing then create a name:
+
+    if( !leaf_name || !leaf_name[0] ) <1>
+    {
+        if ( sc_is_running( m_simc ) ) return;
+        leaf_name = sc_gen_unique_name
+            ( is_kernel_event ? SC_KERNEL_EVENT_PREFIX : "event" );
+    }
+
+    // prepend kernel events with internal prefix
+    else if ( is_kernel_event ) <2>
+    {
+        m_name = SC_KERNEL_EVENT_PREFIX;
+        m_name.append( leaf_name );
+        leaf_name = m_name.c_str();
+    }
+
+    // Create a hierarchichal name and place it into the object manager if
+    // its not a kernel event:
+
+    object_manager->create_name( leaf_name ).swap( m_name );
+
+    if ( !is_kernel_event ) <3>
+    {
+	object_manager->insert_event(m_name, this);
+	if ( m_parent_p )
+	    m_parent_p->add_child_event( this );
+	else
+	    m_simc->add_child_event( this );
+    }
+}
+----
+<1> 如果给定的名字为空，那么SystemC会自己创建一个名字
+<2> 对于kernel event，名字的命名有着特殊的方法
+<3> 非kernel event才会加入object manager以及hierarchy结构中
 
 
 拷贝构造函数和赋值构造函数被标记为PRIVATE，并且未实现，这意味着sc_event不允许拷贝
@@ -384,3 +444,415 @@ sc_event的体系之外，这也是称之为kernel event的原因。
 
 sc_event在构造函数中需要注册自己，并分配一些资源，所以sc_event的析构函数
 是非空的。
+
+.src/sysc/kernel/sc_event.cpp
+[source,cpp]
+----
+// +----------------------------------------------------------------------------
+// |"sc_event::~sc_event"
+// |
+// | This is the object instance destructor for this class. It cancels any
+// | outstanding waits and removes the event from the object manager's
+// | instance table if it has a name.
+// +----------------------------------------------------------------------------
+sc_event::~sc_event()
+{
+    cancel();
+    if ( m_name.length() != 0 )
+    {
+	sc_object_manager* object_manager_p = m_simc->get_object_manager();
+	object_manager_p->remove_event( m_name );
+    }
+
+    for(size_t i = 0; i < m_threads_dynamic.size(); ++i ) {
+        if( m_threads_dynamic[i]->m_event_p == this )
+            m_threads_dynamic[i]->m_event_p = 0;
+    }
+    for(size_t i = 0; i < m_methods_dynamic.size(); ++i ) {
+        if( m_methods_dynamic[i]->m_event_p == this )
+            m_methods_dynamic[i]->m_event_p = 0;
+    }
+}
+----
+
+析构函数主要完成了分配资源的释放。此外，对于动态等待在本事件上的process handle而言，
+还需要把内部保存的事件指针 `m_event_p` 置为空。
+
+=== 与process handle交互的成员函数
+
+sc_event提供了8个成员函数，以用来与process handle做交互。这个8个成员函数分为两组，分别为
+为本事件添加process handle，以及为本事件删除process handle。sc_event中保存process
+handle的成员变量一共有四个，所以每一组对应的成员函数也有4个:
+
+.src/sysc/kernel/sc_event.h
+[source,cpp]
+----
+    void add_static( sc_method_handle ) const;
+    void add_static( sc_thread_handle ) const;
+    void add_dynamic( sc_method_handle ) const;
+    void add_dynamic( sc_thread_handle ) const;
+
+    bool remove_static( sc_method_handle ) const;
+    bool remove_static( sc_thread_handle ) const;
+    bool remove_dynamic( sc_method_handle ) const;
+    bool remove_dynamic( sc_thread_handle ) const;
+----
+
+这8个成员函数的实现是比较简单的。 `add_*` 只是简单地将函数参数放入对应的成员变量中。
+`remove_*` 检索对应的成员边来那个，如果存在则去除。
+
+这四个函数可以在elaboration阶段，或者simulation阶段被调用。
+
+
+=== notify, trigger和cancel
+
+一个sc_event，最为重要的就是状态的管理，包括notify（通知事件发生/延迟发生），trigger
+（触发事件发生时的作用）以及cancel（取消之前设定的事件发生/延迟发生）。
+
+==== notify
+[[api::sc_event::notify]]
+
+首先是notify。sc_event提供了多种notify方式，以满足不同的需求。
+
+第一种notify是不带任何参数的notify。这种notify的语义定义是，事件立刻发生。
+
+.src/sysc/kernel/sc_event.cpp
+[source,cpp]
+----
+void
+sc_event::notify()
+{
+    // immediate notification
+    if( !m_simc->evaluation_phase() )
+        // coming from
+        //  * elaboration
+        //  * sc_prim_channel::update
+        //  * phase callbacks
+    {
+        SC_REPORT_ERROR( SC_ID_IMMEDIATE_NOTIFICATION_, "" );
+        return;
+    }
+    cancel();
+    trigger();
+}
+----
+
+这种notify会立刻调用trigger函数，作为事件发生的作用。因此这就带来一个可能的竞争问题：如果
+动态敏感的process handle，调度的顺序在这个函数调用之前，那么相对应的process handle
+就已经加入到事件保存的process handle中，不带参数的notify可以trigger这些process handle。反之，
+如果这些process handle调度顺序在这个函数调用之后，那么相对应的process handle此刻是没有
+加入到事件的process handle列表中的，不带参数的notify无法trigger这些process handle。然而，调度
+的顺序是无法预测的，我们无法依靠调度的顺序来决定仿真的行为。
+
+为了避免出现这种情况，SystemC建议用户不要在自己的代码中使用不带参数的notify。对于SystemC自己
+而言，其内部的实现框架可保证顺序，所以不带参数的notify可以在Systemc内部使用。
+
+第二种是带有时间参数的notify函数：
+
+.src/sysc/kernel/sc_event.h
+[source,cpp]
+----
+    void notify( const sc_time& );
+    void notify( double, sc_time_unit );
+----
+
+带有延迟时间参数的notify函数，从语义上定义是，在给定的延迟时间之后，事件发生。
+一个特殊的延迟时间, `SC_ZERO_TIME` ，可以用来从语义上定义事件**立刻**发生。
+对于延迟时间设定为SC_ZERO_TIME的notify，事件将会被标记为delta event，从而
+借助 <<concept::crunch, simc的crunch>>函数中的EVALUATE-UPDATE-NOTIFICATION
+机制，在下一个delta cycle调度阻塞在本事件上的process handle。
+
+当所设定的延迟时间不是 `SC_ZERO_TIME` 的时候，事件标记为timed event，进入
+simc中的timed event列表。在仿真时间走到所标记的时间的时候，事件发生。
+
+sc_event的延迟时间时可以反复设定的，而在sc_event内部，只保存距离当前时间最近的
+设定延迟时间。
+
+.src/sysc/kernel/sc_event.cpp
+[source,cpp]
+----
+void
+sc_event::notify( const sc_time& t )
+{
+    if( m_notify_type == DELTA ) {
+        return; <1>
+    }
+    if( t == SC_ZERO_TIME ) {
+#       if SC_HAS_PHASE_CALLBACKS_
+            if( SC_UNLIKELY_( m_simc->get_status()
+                              & (SC_END_OF_UPDATE|SC_BEFORE_TIMESTEP) ) )
+            {
+                std::stringstream msg;
+                msg << m_simc->get_status()
+                    << ":\n\t delta notification of `"
+                    << name() << "' ignored";
+                SC_REPORT_WARNING( SC_ID_PHASE_CALLBACK_FORBIDDEN_
+                                 , msg.str().c_str() );
+                return;
+            }
+#       endif
+        if( m_notify_type == TIMED ) { <2>
+            // remove this event from the timed events set
+            sc_assert( m_timed != 0 );
+            m_timed->m_event = 0;
+            m_timed = 0;
+        }
+        // add this event to the delta events set
+        m_delta_event_index = m_simc->add_delta_event( this );
+        m_notify_type = DELTA;
+        return;
+    }
+#   if SC_HAS_PHASE_CALLBACKS_
+        if( SC_UNLIKELY_( m_simc->get_status()
+                        & (SC_END_OF_UPDATE|SC_BEFORE_TIMESTEP) ) )
+        {
+            std::stringstream msg;
+            msg << m_simc->get_status()
+                << ":\n\t timed notification of `"
+                << name() << "' ignored";
+            SC_REPORT_WARNING( SC_ID_PHASE_CALLBACK_FORBIDDEN_
+                             , msg.str().c_str() );
+            return;
+        }
+#   endif
+    if( m_notify_type == TIMED ) {
+        sc_assert( m_timed != 0 );
+        if( m_timed->m_notify_time <= m_simc->time_stamp() + t ) { <3>
+            return;
+        }
+        // remove this event from the timed events set
+        m_timed->m_event = 0;
+        m_timed = 0;
+    }
+    // add this event to the timed events set
+    sc_event_timed* et = new sc_event_timed( this, m_simc->time_stamp() + t ); <4>
+    m_simc->add_timed_event( et );
+    m_timed = et;
+    m_notify_type = TIMED;
+}
+----
+<1> 如果事件已经是一个delta event，那么无论设置的延迟时间是多少，都无法设置进来，因为delta event
+是零延时的，没有比这更短的延时了
+<2> 如果事件是一个timed event，延迟时间设定为SC_ZERO_TIME将会导致事件变成delta event，这需要
+删除之前创建的成员变量 `m_timed`
+<3> 事件是timed event，且设定的延迟时间大于之前设定的时间，直接忽略
+<4> 事件是timed event，且设定的延迟时间小于之前设定的时间，重新设置事件发生的绝对时刻
+
+第三种是一系列 `notify_delayed` 函数。这些函数都已经被标记为废弃了，仅仅是为了兼容性目的而继续保留。
+这里我们就不再讨论这些deprecated函数。 `notify_delayed` 函数的功能可以被 `notify` 完全取代。
+
+
+.src/sysc/kernel/sc_event.h
+[source,cpp]
+----
+    void notify_delayed();
+    void notify_delayed( const sc_time& );
+    void notify_delayed( double, sc_time_unit );
+----
+
+带延时时间参数的notify是提供给用户的API,因为无法保证用户的使用方法,实现的时候需要考虑
+同一个事件被多次设定延时时间的场景.在SystemC内部，事件也得到广泛应用。在这种
+受控的长江下，SystemC特意设计了两个notify函数，来简化相关代码的处理。
+
+[[api::sc_event::notify_internal]]
+`notify_internal` 是SystemC用以在内部设置事件延迟时间的API。这个API由于只在内部使用，
+可以保证在事件真正发生之前，延时时间不会被反复设定，因此实现代码非常简单：
+
+.src/sysc/kernel/sc_event.h
+[source,cpp]
+----
+inline
+void
+sc_event::notify_internal( const sc_time& t )
+{
+    if( t == SC_ZERO_TIME ) {
+        // add this event to the delta events set
+        m_delta_event_index = m_simc->add_delta_event( this );
+        m_notify_type = DELTA;
+    } else {
+        sc_event_timed* et =
+		new sc_event_timed( this, m_simc->time_stamp() + t );
+        m_simc->add_timed_event( et );
+        m_timed = et;
+        m_notify_type = TIMED;
+    }
+}
+----
+
+基本上就是用户API形式的缩水版，去掉了处理延时时间被多次设定相关的代码。此外，在SystemC内部，
+事件立即发生也是一个非常重要的使用场景，为此，sc_event提供了成员函数 `notify_next_delta`
+
+.src/sysc/kernel/sc_event.h
+[source,cpp]
+----
+inline
+void
+sc_event::notify_next_delta()
+{
+    if( m_notify_type != NONE ) {
+        SC_REPORT_ERROR( SC_ID_NOTIFY_DELAYED_, 0 );
+    }
+    // add this event to the delta events set
+    m_delta_event_index = m_simc->add_delta_event( this );
+    m_notify_type = DELTA;
+}
+----
+
+[[api::sc_event::notify_next_delta]]
+`notify_next_delta` 可以在EVALUATE或者UPDATE PHASE调用，这是保证安全的。
+
+`notify_internal` 和 `notify_next_delta` 是SystemC内部使用的，因此两个函数
+都被标记为PRIVATE，只有友元类才能够使用。
+
+=== trigger
+
+[[api::sc_event::trigger]]
+
+sc_event的trigger函数一般在<<phase::notification, NOTIFICATION>>阶段被调用，或者
+在一个crunch结束之后，下一个crunch开始之前被调用。
+
+trigger函数可以将调用wait阻塞在本事件上的动态thread/cthread，调用next_trigger设置下次
+动态调度时机的method，以及将本事件作为静态敏感事件注册的method/thread/cthread，放入
+<<concept::runnable, simc的runnable>>列表中。并不是所有存在<<data::sc_event::process_handle, process handle列表>>
+中的method/thread/cthread都会被放入runnable列表中。trigger函数只是直接调用这些
+保存的process handle的trigger_static/trigger_dynamic方法，由这些process handle
+自行判断是否满足条件。
+
+.src/sysc/kernel/sc_event.cpp
+[source,cpp]
+----
+// +----------------------------------------------------------------------------
+// |"sc_event::trigger"
+// |
+// | This method "triggers" this object instance. This consists of scheduling
+// | for execution all the processes that are schedulable and waiting on this
+// | event.
+// +----------------------------------------------------------------------------
+void
+sc_event::trigger()
+{
+    m_trigger_stamp = m_simc->change_stamp(); <1>
+    m_notify_type = NONE; <2>
+    m_delta_event_index = -1;
+    m_timed = 0;
+
+    int       last_i; // index of last element in vector now accessing.
+    int       size;   // size of vector now accessing.
+
+
+    // trigger the static sensitive methods
+
+    if( ( size = m_methods_static.size() ) != 0 )
+    {
+        sc_method_handle* l_methods_static = &m_methods_static[0];
+        int i = size - 1;
+        do {
+            sc_method_handle method_h = l_methods_static[i];
+            method_h->trigger_static(); <3>
+        } while( -- i >= 0 );
+    }
+
+    // trigger the dynamic sensitive methods
+
+
+    if( ( size = m_methods_dynamic.size() ) != 0 )
+    {
+	last_i = size - 1;
+	sc_method_handle* l_methods_dynamic = &m_methods_dynamic[0];
+	for ( int i = 0; i <= last_i; i++ )
+	{
+	    sc_method_handle method_h = l_methods_dynamic[i];
+	    if ( method_h->trigger_dynamic( this ) ) <4>
+	    {
+		l_methods_dynamic[i] = l_methods_dynamic[last_i];
+		last_i--;
+		i--;
+	    }
+	}
+        m_methods_dynamic.resize(last_i+1);
+    }
+
+
+    // trigger the static sensitive threads
+
+    if( ( size = m_threads_static.size() ) != 0 )
+    {
+        sc_thread_handle* l_threads_static = &m_threads_static[0];
+        int i = size - 1;
+        do {
+            sc_thread_handle thread_h = l_threads_static[i];
+            thread_h->trigger_static(); <3>
+        } while( -- i >= 0 );
+    }
+
+    // trigger the dynamic sensitive threads
+
+    if( ( size = m_threads_dynamic.size() ) != 0 )
+    {
+	last_i = size - 1;
+	sc_thread_handle* l_threads_dynamic = &m_threads_dynamic[0];
+	for ( int i = 0; i <= last_i; i++ )
+	{
+	    sc_thread_handle thread_h = l_threads_dynamic[i];
+	    if ( thread_h->trigger_dynamic( this ) ) <4>
+	    {
+		l_threads_dynamic[i] = l_threads_dynamic[last_i];
+		i--;
+		last_i--;
+	    }
+	}
+        m_threads_dynamic.resize(last_i+1);
+    }
+}
+----
+<1> 每次sc_event的trigger被调用的时候，都会保存下当前的delta cycle stamp
+<2> sc_event的trigger被调用后，本sc_event变为一个NONE类型的sc_event
+<3> 将本事件设置为静态敏感事件的method/thread process，调用其trigger_static成员函数
+<4> 降本事件设置为东太敏感的method/thread process，调用trigger_dynamic，如果dynamic
+trigger成功，则从本sc_event的process handle列表中移除此process
+
+一个process handle可以同时存在于静态和动态列表中。这个时候需要此process自己判断情况。一般而言，
+此时process handle的trigger_static只会简单返回，不作任何动作，而由trigger_dynamic来做
+判断动作。
+
+还有一个比较有趣的地方在于，如果一个process handle将sc_event设置为静态敏感事件，且没有动态
+阻塞在这个事件上，那么当这个事件发生的时候，process handle的trigger_static会将这个
+process加入到runnable列表中（thread/cthread可能设置多个cycle之后）。然而在使用的时候，
+一个process handle可以设置多个静态敏感事件。所以，静态敏感事件之间是**或**的关系。一个可能的
+想法是使用 `sc_event_and_list` 为process设置静态敏感事件，然而这种做法比较丑陋且不推荐。
+
+=== cancel
+[[api::sc_event::cancel]]
+
+sc_event还提供了一个cancel的成员函数，这个成员函数可以在一个delta事件发生的之后，被调用
+trigger起作用之前，或者timed事件到达设定时间之前，将sc_event clear掉状态。
+
+.src/sysc/kernel/sc_event.cpp
+[source,cpp]
+----
+void
+sc_event::cancel()
+{
+    // cancel a delta or timed notification
+    switch( m_notify_type ) {
+    case DELTA: {
+        // remove this event from the delta events set
+        m_simc->remove_delta_event( this ); <1>
+        m_notify_type = NONE;
+        break;
+    }
+    case TIMED: {
+        // remove this event from the timed events set
+        sc_assert( m_timed != 0 );
+        m_timed->m_event = 0; <2>
+        m_timed = 0;
+        m_notify_type = NONE;
+        break;
+    }
+    default:
+        ;
+    }
+}
+----
+<1> 对于delta event，需要将其从simc的delta event列表中移除
+<2> 对于timed event，只需要将延迟时间清除掉，标记为NONE即可
