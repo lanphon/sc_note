@@ -3,7 +3,281 @@
 :toc: left
 
 SystemC中的process
+[[chap::process]]
 
 == 引言
 
+在<<chap::schedule_model, SystemC调度模型>>
+一章中，我们已经可以了解SystemC是如何创建和使用Process的。
 本部分是对SystemC中Method/Thread/CThread的总结。
+
+在开始之前，我们需要厘清以下几个数据结构的关系：
+
+* sc_process_b 是所有method/thread/cthread的基础类，直接继承自 `sc_object`
+* sc_thread_process直接继承自sc_process_b，是表示thread线程的数据结构
+* sc_method_process直接继承自sc_process_b，是表示method线程的数据结构
+* sc_cthread_process直接继承自sc_thread_process，是表示cthread线程的数据结构
+* sc_thread_handle是 `sc_thread_process*` 的别名
+* sc_method_handle是 `sc_method_process*` 的别名
+* sc_cthread_handle是 `sc_cthread_process*` 的别名
+* sc_process_handle是基础类，不继承任何其他类，内部保存一个指向sc_process_b的指针，因此可以认为是一个包装类
+
+== sc_process_b
+[[data::sc_process_b]]
+
+=== 成员变量
+
+.src/sysc/kernel/sc_process.h
+[source,cpp]
+----
+    // debugging stuff:
+
+  public:
+    const char*                 file;
+    int                         lineno;
+    int                         proc_id;
+
+  protected:
+    int                          m_active_areset_n; // number of aresets active.
+    int                          m_active_reset_n;  // number of resets active.
+    bool                         m_dont_init;       // true: no initialize call.
+    spawn_t                      m_dynamic_proc;    // SPAWN_ELAB, SPAWN_START, SPAWN_SIM
+    const sc_event*              m_event_p;         // Dynamic event waiting on.
+    int                          m_event_count;     // number of events.
+    const sc_event_list*         m_event_list_p;    // event list waiting on.
+    sc_process_b*                m_exist_p;         // process existence link.
+    bool                         m_free_host;       // free sc_semantic_host_p.
+    bool                         m_has_reset_signal;  // has reset_signal_is.
+    bool                         m_has_stack;       // true is stack present.
+    bool                         m_is_thread;       // true if this is thread.
+    sc_report*                   m_last_report_p;   // last report this process.
+    sc_name_gen*                 m_name_gen_p;      // subprocess name generator
+    sc_curr_proc_kind            m_process_kind;    // type of process.
+    int                          m_references_n;    // outstanding handles.
+    std::vector<sc_reset*>       m_resets;          // resets for process.
+    sc_event*                    m_reset_event_p;   // reset event.
+    sc_event*                    m_resume_event_p;  // resume event.
+    sc_process_b*                m_runnable_p;      // sc_runnable link
+    sc_process_host*             m_semantics_host_p;   // host for semantics.
+    SC_ENTRY_FUNC                m_semantics_method_p; // method for semantics.
+    int                          m_state;           // process state.
+    std::vector<const sc_event*> m_static_events;   // static events waiting on.
+    bool                         m_sticky_reset;    // see note 3 above.
+    sc_event*                    m_term_event_p;    // terminated event.
+    sc_throw_it_helper*          m_throw_helper_p;  // what to throw.
+    process_throw_type           m_throw_status;    // exception throwing status
+    bool                         m_timed_out;       // true if we timed out.
+    sc_event*                    m_timeout_event_p; // timeout event.
+    trigger_t                    m_trigger_type;    // type of trigger using.
+    bool                         m_unwinding;       // true if unwinding stack.
+----
+
+sc_process_b的成员变量比较复杂，这里我们按照这些成员变量的作用一个一个说。
+
+第一组是用来做debug目的的三个成员变量：
+
+----
+    const char*                 file;
+    int                         lineno;
+    int                         proc_id;
+----
+
+然后是做reset处理的两个成员变量：
+
+----
+    int                          m_active_areset_n; // number of aresets active.
+    int                          m_active_reset_n;  // number of resets active.
+----
+
+单独的 `m_dont_init` 是用来表示process是否需要在最初执行一遍，参考
+<<api::dont_initialize, 控制METHOD线程是否初始化>>部分的使用：
+
+----
+    bool                         m_dont_init;       // true: no initialize call.
+----
+
+成员变量 `m_dynamic_proc` 与动态线程有关：
+
+----
+    spawn_t                      m_dynamic_proc;    // SPAWN_ELAB, SPAWN_START, SPAWN_SIM
+----
+
+而接下来的三个变量则是处理动态敏感的。如果wait/next_trigger在一个单独的event上，就使用
+成员变量 `m_event_p` 保存这个事件的指针。如果wait/next_trigger在多个事件上，就使用
+成员变量 `m_event_list_p` 保存创建出来的sc_event_list派生类的指针。对于AND LIST类型
+的多个事件， `m_event_count` 保存着事件的个数，以方便事件发生的时候进行计数：
+
+----
+    const sc_event*              m_event_p;         // Dynamic event waiting on.
+    int                          m_event_count;     // number of events.
+    const sc_event_list*         m_event_list_p;    // event list waiting on.
+----
+
+成员变量 `m_exist_p` 构成了一条process之间的链表。这个成员变量在sc_process_b中没有
+使用，在sc_method_process和sc_thread_process中，分别用一对set_next_exist和next_exist
+API使用了这个成员变量，而set_next_exist API在创建线程的时候被调用，将新建的
+process handle放入simc的 `m_process_table` 中：
+
+----
+    sc_process_b*                m_exist_p;         // process existence link.
+----
+
+接下来这四个bool成员变量都是创建时候设定的，其中 `m_is_thread` 在SystemC中没有得到使用。
+`m_last_report_p` 是sc_report类型，目前还不清楚作用。 `m_name_gen_p` 是用来
+辅助产生hierarchy命名的部分。而 `m_process_kind` 则是用来表示派生类的类型，可选的有
+METHOD，THREAD和CTHREAD：
+
+----
+    bool                         m_free_host;       // free sc_semantic_host_p.
+    bool                         m_has_reset_signal;  // has reset_signal_is.
+    bool                         m_has_stack;       // true is stack present.
+    bool                         m_is_thread;       // true if this is thread.
+    sc_report*                   m_last_report_p;   // last report this process.
+    sc_name_gen*                 m_name_gen_p;      // subprocess name generator
+    sc_curr_proc_kind            m_process_kind;    // type of process.
+----
+
+成员变量 `m_references_n` 是用来做引用计数中，计数器角色的。这个看起来和动态线程
+中的资源自动释放机制有关：
+
+----
+    int                          m_references_n;    // outstanding handles.
+----
+
+这一组成员变量和reset/resume机制有关：
+
+----
+    std::vector<sc_reset*>       m_resets;          // resets for process.
+    sc_event*                    m_reset_event_p;   // reset event.
+    sc_event*                    m_resume_event_p;  // resume event.
+----
+
+`m_runnable_p` 成员变量使得sc_process_b能够形成一个链表，链表中的每个节点
+都是一个进入runnable状态的线程：
+
+----
+    sc_process_b*                m_runnable_p;      // sc_runnable link
+----
+
+这一组成员变量就是sc_process_b所代表的线程的入口函数，以及基类指针：
+
+----
+    sc_process_host*             m_semantics_host_p;   // host for semantics.
+    SC_ENTRY_FUNC                m_semantics_method_p; // method for semantics.
+----
+
+`m_state` 表示的是当前线程的状态，这个integer类型采用了位掩码的方式，来表示各种
+不同的状态的组合：
+
+----
+    int                          m_state;           // process state.
+----
+
+`m_static_events` 则是本process所设置的静态事件对象列表，这些事件之间是或的关系，只要有一个
+事件发生，就可能唤醒此线程：
+
+----
+    std::vector<const sc_event*> m_static_events;   // static events waiting on.
+----
+
+这四个成员变量和sticky_reset以及异常机制有关：
+
+----
+    bool                         m_sticky_reset;    // see note 3 above.
+    sc_event*                    m_term_event_p;    // terminated event.
+    sc_throw_it_helper*          m_throw_helper_p;  // what to throw.
+    process_throw_type           m_throw_status;    // exception throwing status
+----
+
+`m_timed_out` 表示process是否超时，目前没看到与之相关的代码：
+
+----
+    bool                         m_timed_out;       // true if we timed out.
+----
+
+`m_timeout_event_p` 则保存了当process动态敏感时候，带延时时间时，延时时间对象的指针：
+
+----
+    sc_event*                    m_timeout_event_p; // timeout event.
+----
+
+`m_trigger_type` 表明了当前的trigger类型，动态和静态trigger有不同的处理流程：
+
+----
+    trigger_t                    m_trigger_type;    // type of trigger using.
+----
+
+最后一个成员变量 `m_unwinding` 与异常处理的时候，堆栈展开有关：
+
+----
+    bool                         m_unwinding;       // true if unwinding stack.
+----
+
+== sc_process_handle
+[[data::sc_process_handle]]
+
+=== 成员变量
+
+sc_process_handle内部只保存了一个指向基类sc_process_b指针的成员变量 `m_target_p`:
+
+.src/sysc/kernel/sc_process_handle.h
+[source,cpp]
+----
+  protected:
+    sc_process_b* m_target_p;   // Target for this object instance.
+
+  protected:
+    static std::vector<sc_event*>  empty_event_vector;  // If m_target_p == 0.
+    static std::vector<sc_object*> empty_object_vector; // If m_target_p == 0.
+    static sc_event                non_event;           // If m_target_p == 0.
+----
+
+另外三个静态成员变量，是为了在 `m_target_p` 为空的情况下，某些需要返回
+对象引用的成员函数能够正确返回引用而添加的。
+
+== sc_thread_process
+[[data::sc_thread_process]]
+
+=== 成员变量
+
+除了基类 `sc_process_b` 的成员变量以外，sc_thread_process为支持协程
+能力，增加了如下几个成员变量：
+
+.src/sysc/kernel/sc_thread_process.h
+[source,cpp]
+----
+  protected:
+    sc_cor*                          m_cor_p;        // Thread's coroutine.
+    std::vector<sc_process_monitor*> m_monitor_q;    // Thread monitors.
+    std::size_t                      m_stack_size;   // Thread stack size.
+    int                              m_wait_cycle_n; // # of waits to be done.
+----
+
+前三个是为支持协程而添加的。最后一个m_wait_cycle_n，主要用在
+<<api::sc_thread_process::wait_cycles, wait_cycles>>成员函数中，用以支持设定
+特定等待时钟周期的场景。
+
+== sc_method_process
+[[data::sc_method_process]]
+
+=== 成员变量
+
+sc_method_process在基类 `sc_process_b` 的基础上增加了如下几个成员变量：
+
+.src/sysc/kernel/sc_thread_process.h
+[source,cpp]
+----
+    sc_cor*                          m_cor;        // Thread's coroutine.
+    std::size_t                      m_stack_size; // Thread stack size.
+    std::vector<sc_process_monitor*> m_monitor_q;  // Thread monitors.
+----
+
+然而这三个成员变量在sc_method_process中并没有得到使用。
+
+== sc_cthread_process
+[[data::sc_cthread_process]]
+
+=== 成员变量
+
+sc_cthread_process在基类 `sc_thread_process` 基础上，没有新增加其他的
+成员变量。

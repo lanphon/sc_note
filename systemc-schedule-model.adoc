@@ -3,7 +3,7 @@
 :toc: left
 
 SystemC调度模型
-[[chap::schedule-mode]]
+[[chap::schedule_model]]
 
 == 引言
 
@@ -195,7 +195,17 @@ class SC_API sc_process_handle {
 ----
 
 因此可以看出， `sc_process_handle` 实际上就是保存一个 `sc_process_b` 指针的包装类，只不过这个包装类提供了4个到其他类型转换的
-成员函数，可以转为 `sc_process_b*` ，或者 `sc_cthread_handle`, `sc_thread_handle`, `sc_method_handle` 。
+成员函数，可以转为 `sc_process_b*` ，或者 `sc_cthread_handle`, `sc_thread_handle`, `sc_method_handle` :
+
+.src/sysc/kernel/sc_process_handle.h
+[source,cpp]
+----
+    operator sc_process_b* ()
+        { return m_target_p; }
+    operator sc_cthread_handle ();
+    operator sc_method_handle ();
+    operator sc_thread_handle ();
+----
 
 ==== 控制METHOD线程是否初始化
 [[api::dont_initialize]]
