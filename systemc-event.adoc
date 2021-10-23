@@ -78,7 +78,6 @@ sc_event_list::add_dynamic( sc_thread_handle thread_h ) const
 保存的每个sc_event对象，他们之间更多的是**或**的关系：只要有一个事件发生，就会调度
 相对应的process handle的trigger_dynamic函数。而区分这些event究竟是“与”还是“或”
 关系，就取决于thread/method process中的<<sc_process_b::trigger_dynamic, trigger_dynamic>>函数了。
-u
 
 如果自减的结果等于0，并且设置为自动删除，就会
 `delete this` 的方式自动删除本身所占用的资源。
@@ -135,6 +134,53 @@ sc_event_list::operator=( sc_event_list const & that )
 
 在拷贝构造函数和拷贝赋值函数中使用 `sc_event_list::auto_delete` ，更多的作用是实现了
 资源管理的自动释放。
+
+[[api::sc_event_list::remove_dynamic]]
+sc_event_list还有两个 `remove_dynamic` 函数实现。这个函数就和 `add_dynamic`
+类似，调度了每个事件的 `remove_dynamic` 。特殊的一点在于，`remove_dynamic`
+可以接受第二个参数，一个指向sc_event的指针。在remove_dynamic的时候，如果
+保存的事件指针等于这个设定的指针，就跳过调用事件的remove_dynamic。当这个指针
+被设置为0的时候，意味着所有保存的事件都要remove_dynamic。
+
+.src/sysc/kernel/sc_event.cpp
+[source,cpp]
+----
+void
+sc_event_list::remove_dynamic( sc_method_handle method_h,
+                               const sc_event* e_not ) const
+{
+    if ( m_events.size() != 0 ) {
+      const sc_event* const* l_events = &m_events[0];
+      for( int i = m_events.size() - 1; i >= 0; -- i ) {
+          const sc_event* e = l_events[i];
+          if( e != e_not ) {
+              e->remove_dynamic( method_h );
+          }
+      }
+  }
+}
+
+void
+sc_event_list::remove_dynamic( sc_thread_handle thread_h,
+                               const sc_event* e_not ) const
+{
+    if ( m_events.size() != 0 ) {
+      const sc_event* const* l_events = &m_events[0];
+      for( int i = m_events.size() - 1; i >= 0; -- i ) {
+          const sc_event* e = l_events[i];
+          if( e != e_not ) {
+              e->remove_dynamic( thread_h );
+          }
+      }
+  }
+}
+----
+
+[NOTE]
+====
+sc_event_list，以及其派生类都没有实现 `add_static` 或者 `remove_static`
+成员函数，这意味着sc_event_list以及派生类无法作为静态敏感源设置。
+====
 
 === sc_event_expr<T>
 
@@ -1452,8 +1498,30 @@ void sc_method_process::clear_trigger()
 ----
 <1> clear_trigger的结果一定是重置本method process为静态敏感
 
-clear_trigger的代码需要结合不同的trigger type来看。例如，之前设定为AND_LIST_TIMEOUT
-trigger类型，那么在clear trigger的时候，就需要将两个事件对象都做清除。
+clear_trigger的代码需要结合不同的trigger type来看。
+
+如果之前使用next_trigger，使用一个sc_event作为trigger，那么trigger type设置为 `EVENT` 。
+调用clear_trigger的时候，需要从这个sc_event的动态列表中移除这个method handle，然后
+将method handle中的m_event_p指针置为空。
+
+如果之前使用next_trigger，使用一个event的or list作为trigger，那么trigger type
+设置为 `OR_LIST` 。使用clear_trigger的时候，首先调用m_event_list_p的
+<<api::sc_event_list::remove_dynamic, remove_dynamic>>成员函数，并将
+第二个参数设置为0，以此从or list中所有事件中的dynamic method列表中移除当前method
+process handle。接下来调用m_event_list_p的auto_delete，完成资源回收，并将指针置为空。
+
+如果之前使用next_trigger，使用一个event的and list作为trigger，那么trigger type
+设置为 `AND_LIST`。使用clear_trigger的时候，所需要的动作和 `OR_LIST`
+基本一致，多出来的一步是将m_event_count清除为0. 这个计数器是用来数有多少事件发生的，这是因为
+and_list需要每个事件发生才算完成。
+
+如果之前使用next_trigger，设置了延时时间，那么trigger type设置为 `TIMEOUT`。
+使用clear_trigger的时候，首先调用内部事件对象m_timeout_event_p
+的<<api::sc_event::cancel, cancel>>，然后调用
+<<api::sc_event::reset, reset>>重置这个事件对象。
+
+其他几种trigger type，例如 `EVENT_TIMEOUT`, `OR_LIST_TIMEOUT`, `AND_LIST_TIMEOUT` ，
+调用clear_trigger的时候所需的动作等于两种类型的组合，这里就不再分析了。
 
 === 小结
 
