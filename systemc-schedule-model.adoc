@@ -985,13 +985,13 @@ bool sc_method_process::trigger_dynamic( sc_event* e )
     // suspended mark its state as ready to run. If its not suspended then push
     // it onto the runnable queue.
 
-    if ( (m_state & ps_bit_suspended) )
+    if ( (m_state & ps_bit_suspended) ) <3>
     {
 	m_state = m_state | ps_bit_ready_to_run;
     }
     else
     {
-        simcontext()->push_runnable_method(this); <3>
+        simcontext()->push_runnable_method(this); <4>
     }
 
     return true;
@@ -1000,7 +1000,8 @@ bool sc_method_process::trigger_dynamic( sc_event* e )
 <1> 如果method线程正在运行，则无需调度
 <2> 对于EVENT的trigger类型而言，只要事件发生，那么就可以调度，这里调度完之后会清除
 保留的信息，重置method线程的trigger类型为静态调度
-<3> 最后部分将本method线程加入到 `simc` 的push queue中，在下一个delta cycle的EVALUATE
+<3> 如果线程被suspend，简单标记下线程是ready to run，就返回
+<4> 最后部分将本method线程加入到 `simc` 的push queue中，在下一个delta cycle的EVALUATE
 PHASE执行调度任务
 
 

@@ -27,6 +27,9 @@ SystemC中的process
 
 === 成员变量
 
+sc_process_b 继承自 `sc_object` ，除了继承得到的成员变量以外，sc_process_b还
+增加了非常丰富的成员变量，以支持process这一概念：
+
 .src/sysc/kernel/sc_process.h
 [source,cpp]
 ----
@@ -166,12 +169,33 @@ METHOD，THREAD和CTHREAD：
     SC_ENTRY_FUNC                m_semantics_method_p; // method for semantics.
 ----
 
+[[data::sc_process_b::m_state]]
 `m_state` 表示的是当前线程的状态，这个integer类型采用了位掩码的方式，来表示各种
 不同的状态的组合：
 
 ----
     int                          m_state;           // process state.
 ----
+
+目前定义的状态位有：
+
+.src/sysc/kernel/sc_process.h
+[source,cpp]
+----
+    enum process_state {
+	ps_bit_disabled = 1,      // process is disabled.
+	ps_bit_ready_to_run = 2,  // process is ready to run.
+        ps_bit_suspended = 4,     // process is suspended.
+	ps_bit_zombie = 8,        // process is a zombie.
+        ps_normal = 0             // must be zero.
+    };
+----
+
+sc_process_b构造的时候， `m_state`的值为 `ps_normal` 。ps_normal是个特殊的值，它
+并不是一个位掩码，而是一个全0的值。这意味着当没有任何一个位掩码置位的时候，就是ps_normal。
+所以在使用的时候，ps_normal可以不需要显式赋值，只需要将原先状态位的位掩码一个一个去掉，全部
+清除之后，状态自然变成了ps_normal了。
+
 
 `m_static_events` 则是本process所设置的静态事件对象列表，这些事件之间是或的关系，只要有一个
 事件发生，就可能唤醒此线程：
@@ -184,10 +208,11 @@ METHOD，THREAD和CTHREAD：
 
 ----
     bool                         m_sticky_reset;    // see note 3 above.
-    sc_event*                    m_term_event_p;    // terminated event.
+    sc_event*                    m_term_event_p;    // terminated event. <1>
     sc_throw_it_helper*          m_throw_helper_p;  // what to throw.
     process_throw_type           m_throw_status;    // exception throwing status
 ----
+<1> 当sc_process_b的 `disconnect_process` 被调用的时候，m_term_event_p被notify
 
 `m_timed_out` 表示process是否超时，目前没看到与之相关的代码：
 
@@ -281,3 +306,750 @@ sc_method_process在基类 `sc_process_b` 的基础上增加了如下几个成�
 
 sc_cthread_process在基类 `sc_thread_process` 基础上，没有新增加其他的
 成员变量。
+
+== reset逻辑
+
+== process状态的迁移变化
+
+在sc_process_b中，有一个记录当前线程状态的位掩码 <<data::sc_process_b::m_state, `m_state`>> 。
+sc_process_b可能有如下几种状态：
+
+* disable
+* ready to run
+* suspend
+* zombie
+* normal
+
+前四种分别为位的掩码，意味着process可以同时处于前四种状态中的多种。
+
+在使用过程中，应当调用自由函数 `sc_get_current_process_handle` ，获取一个
+<<data::sc_process_handle, sc_process_handle>>的对象，然后通过这个对象的
+如下成员函数，调度这些管理process状态的部分：
+
+* suspend，调用所保管的process handle的 `suspend_process` 成员函数
+* resume，调用所保管的process handle的 `resume_process` 成员函数
+* enable，调用所保管的process handle的 `enable_process` 成员函数
+* disable，调用所保管的process handle的 `disable_process` 成员函数
+* kill，调用所保管的process handle的 `kill_process` 成员函数
+* reset，调用所保管的process handle的 `reset_process` 成员函数
+
+IEEE 1666对于SystemC在如下几种process状态切换时的行为，交给实现自行定义：
+
+* 当一个disabled, suspended的process上调用resume()时的行为
+* 当一个suspended的process上调用sync_reset_on()和sync_reset_off()时的行为
+* 当一个suspended的process上的由reset_signal_is()所指定的signal值发生变化时的行为
+
+Proof of Concept实现在默认情况下，对这三种情况都当做错误处理。此外，在设置
+一个变量 `sc_allow_process_control_corners` 为true的时候，实现可以转而采用
+一种不报错的方式：
+
+* 如果一个disabled, suspended的process上调用了resume()，则这个process被标记为
+不再suspend。如果这么处理后的process是可以调度执行的（没有阻塞在任何事件上），那么这个
+process将会被放入runnable列表中
+* sync_reset_on()和sync_reset_off()只会将相关的标志位置位或者复位。process是否处于
+reset状态，取决于当process得到执行时候，相关标志位的状态。
+* 如果一个suspended的process有由reset_signal_is()所制定的reset signal，则这个reset
+signal的值只有在这个process下次执行的时候，才会被采样，采样的结果决定process是否reset
+
+[[data::sc_allow_process_control_corners]]
+`sc_allow_process_control_corners` 在SystemC中默认值是false:
+
+.src/sysc/kernel/sc_simcontext.h
+[source,cpp]
+----
+bool sc_allow_process_control_corners = false;
+
+// The state transition diagram for the interaction of disable and suspend
+// when sc_allow_process_control_corners is true is shown below:
+//
+// ......................................................................
+// .         ENABLED                    .           DISABLED            .
+// .                                    .                               .
+// .                 +----------+    disable      +----------+          .
+// .   +------------>|          |-------.-------->|          |          .
+// .   |             | runnable |       .         | runnable |          .
+// .   |     +-------|          |<------.---------|          |------+   .
+// .   |     |       +----------+     enable      +----------+      |   .
+// .   |     |          |    ^          .            |    ^         |   .
+// .   |     |  suspend |    | resume   .    suspend |    | resume  |   .
+// .   |     |          V    |          .            V    |         |   .
+// .   |     |       +----------+    disable      +----------+      |   .
+// .   |     |       | suspend  |-------.-------->| suspend  |      |   .
+// . t |   r |       |          |       .         |          |      | r .
+// . r |   u |       |  ready   |<------.---------|  ready   |      | u .
+// . i |   n |       +----------+     enable      +----------+      | n .
+// . g |   / |         ^                .                           | / .
+// . g |   w |  trigger|                .                           | w .
+// . e |   a |         |                .                           | a .
+// . r |   i |       +----------+    disable      +----------+      | i .
+// .   |   t |       | suspend  |-------.-------->| suspend  |      | t .
+// .   |     |       |          |       .         |          |      |   .
+// .   |     |       | waiting  |<------.---------| waiting  |      |   .
+// .   |     |       +----------+     enable      +----------+      |   .
+// .   |     |          |    ^          .            |    ^         |   .
+// .   |     |  suspend |    | resume   .    suspend |    | resume  |   .
+// .   |     |          V    |          .            V    |         |   .
+// .   |     |       +----------+    disable      +----------+      |   .
+// .   |     +------>|          |-------.-------->|          |      |   .
+// .   |             | waiting  |       .         | waiting  |      |   .
+// .   +-------------|          |<------.---------|          |<-----+   .
+// .                 +----------+     enable      +----------+          .
+// .                                    .                               .
+// ......................................................................
+
+----
+
+如果需要支持不出错的处理，可以编译代码的时候将这个更改为true，或者在sc_main()中，第一行
+加入：
+
+[source,cpp]
+----
+sc_core::sc_allow_process_control_corners = true;
+----
+
+=== enable and disable
+
+sc_process_handle的enable/disable调用，如前所述，调用的其实是内部sc_process_b
+的enable_process/disable_process接口函数：
+
+.src/sysc/kernel/sc_process_handle.h
+[source,cpp]
+----
+// enable this object instance's target.
+
+inline void sc_process_handle::enable(sc_descendant_inclusion_info descendants)
+{
+    if ( m_target_p )
+        m_target_p->enable_process(descendants);
+    else
+        SC_REPORT_WARNING( SC_ID_EMPTY_PROCESS_HANDLE_, "enable()");
+}
+
+// disable this object instance's target.
+
+inline void sc_process_handle::disable(sc_descendant_inclusion_info descendants)
+{
+    if ( m_target_p )
+        m_target_p->disable_process(descendants);
+    else
+        SC_REPORT_WARNING( SC_ID_EMPTY_PROCESS_HANDLE_, "disable()");
+}
+----
+
+enable_process/disable_process是sc_process_b的接口函数，是纯虚函数。对于Thread和Method
+有着不同的实现。
+
+==== Thread/CThread
+
+[[concept::process::control::disable::thread]]
+首先我们来看Thread/CThread是如何实现disable的：
+
+.src/sysc/kernel/sc_thread_process.cpp
+[source,cpp]
+----
+void sc_thread_process::disable_process(
+    sc_descendant_inclusion_info descendants )
+{
+
+    // IF NEEDED PROPOGATE THE DISABLE REQUEST THROUGH OUR DESCENDANTS:
+
+    if ( descendants == SC_INCLUDE_DESCENDANTS )
+    {
+        const std::vector<sc_object*>& children = get_child_objects();
+        int                            child_n  = children.size();
+
+        for ( int child_i = 0; child_i < child_n; child_i++ )
+        {
+            sc_process_b* child_p = dynamic_cast<sc_process_b*>(children[child_i]);
+            if ( child_p ) child_p->disable_process(descendants);
+        }
+    }
+
+    // DON'T ALLOW CORNER CASE BY DEFAULT:
+
+    if ( !sc_allow_process_control_corners )
+    {
+        switch( m_trigger_type )
+        {
+          case AND_LIST_TIMEOUT:
+          case EVENT_TIMEOUT:
+          case OR_LIST_TIMEOUT:
+          case TIMEOUT:
+            report_error(SC_ID_PROCESS_CONTROL_CORNER_CASE_,
+                   "attempt to disable a thread with timeout wait");
+            // may continue, if suppressed
+            break;
+          default:
+            break;
+        }
+    }
+
+    // DISABLE OUR OBJECT INSTANCE:
+
+    m_state = m_state | ps_bit_disabled;
+
+    // IF THIS CALL IS BEFORE THE SIMULATION DON'T RUN THE THREAD:
+
+    if ( !sc_is_running() )
+    {
+	m_state = m_state | ps_bit_ready_to_run;
+        simcontext()->remove_runnable_thread(this);
+    }
+}
+----
+
+所有的这些状态转移函数，都会带一个 `descendants` 参数，表示是否需要将动作
+传播给子对象。这部分的内容基本就是检索所有的子对象，并使用dynamic_cast来
+检查这鞋子对象是否是process对象，如果是，就将请求转发过去。后续类似这部分的内容
+我们就不再多解析了。
+
+默认情况下，disable一个process的时候回检查process的状态。如果process设置了
+超时状态（延时执行），那么就报错。如果我们将 `sc_allow_process_control_corners`
+置为true，就会跳过这一步的检查，允许在设置有超时（延时）状态的process上执行disable动作。
+
+接下来，
+<<data::sc_process_b::m_state, m_state>>的ps_bit_disabled位被置位。如果disable process
+发生在仿真开始之前，同时会把m_state的ps_bit_ready_to_run置位，从simc中准备runnable
+的列表中移除这个process。如果disalbe process发生在仿真过程中，就无需其他动作，只需要继续执行下去。
+如果disable_process的请求来自线程本身，disable_process并不会立即生效，而是会继续执行，直到
+此线程被阻塞朱，然后让渡出CPU执行权为止。
+
+这么设计的原因还暂时不清楚。
+
+[[concept::process::control::enable::thread]]
+Thread/CThrad的enable_process实现则是：
+
+.src/sysc/kernel/sc_thread_process.cpp
+[source,cpp]
+----
+void sc_thread_process::enable_process(
+    sc_descendant_inclusion_info descendants )
+{
+
+    // IF NEEDED PROPOGATE THE ENABLE REQUEST THROUGH OUR DESCENDANTS:
+
+    if ( descendants == SC_INCLUDE_DESCENDANTS )
+    {
+        const std::vector<sc_object*>& children = get_child_objects();
+        int                            child_n  = children.size();
+
+        for ( int child_i = 0; child_i < child_n; child_i++ )
+        {
+            sc_process_b* child_p = dynamic_cast<sc_process_b*>(children[child_i]);
+            if ( child_p ) child_p->enable_process(descendants);
+        }
+    }
+
+    // ENABLE THIS OBJECT INSTANCE:
+    //
+    // If it was disabled and ready to run then put it on the run queue.
+
+    m_state = m_state & ~ps_bit_disabled;
+    if ( m_state == ps_bit_ready_to_run && sc_allow_process_control_corners )
+    {
+        m_state = ps_normal;
+	if ( next_runnable() == 0 )
+	    simcontext()->push_runnable_thread(this);
+    }
+}
+----
+
+首先是将m_state的ps_bit_disabled位复位。接下来如果状态是ps_bit_ready_to_run，并且
+设置了 sc_allow_process_control_corners为true的话，将m_state置为ps_normal。如果
+next_runnable()为空，即这个process不在runnable列表中，就将这个thread加入到runnable
+列表中去。
+
+由此可见：
+
+* 如果仿真前disable process，在仿真过程中enable process，process会被放入runnable列表中执行，在下一个delta cycle立马开始执行。如果不这样做，这个process只能等到与之关联的静态敏感事件发生才会被
+放入调度列表中得到执行了，因为process disable发生在仿真之前，process根本没得到执行，无法动态
+等待事件。
+* 如果仿真中disable process，之后再enable process，除非之前process已经执行且处于ready to run状态，否则enable_process不会将这个process放入列表中执行。仿真已经开始，说明这个process handle要么可能被静态敏感事件注册为关联线程，要么动态等待在一个事件上，都会有机会被调度重新放入可执行列表的
+
+==== Method
+
+[[concept::process::control::disable::method]]
+Method的disable_process实现如下：
+
+.src/sysc/kernel/sc_method_process.cpp
+[source,cpp]
+----
+void sc_method_process::disable_process(
+    sc_descendant_inclusion_info descendants )
+{
+
+    // IF NEEDED PROPOGATE THE SUSPEND REQUEST THROUGH OUR DESCENDANTS:
+
+    if ( descendants == SC_INCLUDE_DESCENDANTS )
+    {
+        const std::vector<sc_object*>& children = get_child_objects();
+        int                            child_n  = children.size();
+
+        for ( int child_i = 0; child_i < child_n; child_i++ )
+        {
+            sc_process_b* child_p = dynamic_cast<sc_process_b*>(children[child_i]);
+            if ( child_p ) child_p->disable_process(descendants);
+        }
+    }
+
+    // DON'T ALLOW CORNER CASE BY DEFAULT:
+
+    if ( !sc_allow_process_control_corners )
+    {
+        switch( m_trigger_type )
+        {
+          case AND_LIST_TIMEOUT:
+          case EVENT_TIMEOUT:
+          case OR_LIST_TIMEOUT:
+          case TIMEOUT:
+            report_error( SC_ID_PROCESS_CONTROL_CORNER_CASE_,
+                          "attempt to disable a method with timeout wait" );
+            // may continue, if suppressed
+            break;
+          default:
+            break;
+        }
+    }
+
+    // DISABLE OUR OBJECT INSTANCE:
+
+    m_state = m_state | ps_bit_disabled;
+
+    // IF THIS CALL IS BEFORE THE SIMULATION DON'T RUN THE METHOD:
+
+    if ( !sc_is_running() )
+    {
+        sc_get_curr_simcontext()->remove_runnable_method(this);
+    }
+}
+----
+
+Method的disable process处理基本和Thread的差不多，最大的区别在于，如果disable
+发生在仿真开始之前，没有将状态位ready_to_run置位的。
+这么做的原因还不是很清楚。
+
+[[concept::process::control::enable::method]]
+Method的enable_process实现则是：
+
+.src/sysc/kernel/sc_method_process.cpp
+[source,cpp]
+----
+void sc_method_process::enable_process(
+    sc_descendant_inclusion_info descendants )
+{
+
+    // IF NEEDED PROPOGATE THE RESUME REQUEST THROUGH OUR DESCENDANTS:
+
+    if ( descendants == SC_INCLUDE_DESCENDANTS )
+    {
+        const std::vector<sc_object*>& children = get_child_objects();
+        int                            child_n  = children.size();
+
+        for ( int child_i = 0; child_i < child_n; child_i++ )
+        {
+            sc_process_b* child_p = dynamic_cast<sc_process_b*>(children[child_i]);
+            if ( child_p ) child_p->enable_process(descendants);
+        }
+    }
+
+    // ENABLE THIS OBJECT INSTANCE:
+    //
+    // If it was disabled and ready to run then put it on the run queue.
+
+    m_state = m_state & ~ps_bit_disabled;
+    if ( m_state == ps_bit_ready_to_run )
+    {
+        m_state = ps_normal;
+	if ( next_runnable() == 0 )
+	    simcontext()->push_runnable_method(this);
+    }
+}
+----
+
+这里的处理基本和Thread一致，除了检查状态时候，无须sc_allow_process_control_corners
+为true。我个人猜测，这应该是因为Method每次都会完整执行一遍，不像Thread那样存在死循环，所以
+disable之后，再enable，调度执行即可，不会是一个corner case.
+
+=== suspend and resume
+
+suspend操作会挂起一个线程，而resume操作则会继续此线程的执行。这里的suspend/resume
+指的是从用户方显式地要求挂起和唤醒线程，而不是SystemC内部在线程切换的时候的线程挂起
+和唤醒动作。
+
+sc_process_handle的suspend和resume都转发给了下层的process的suspend_process()
+和resume_process():
+
+.src/sysc/kernel/sc_process_handle.h
+[source,cpp]
+----
+// resume this object instance's target.
+
+inline void sc_process_handle::resume(sc_descendant_inclusion_info descendants)
+{
+    if ( m_target_p )
+        m_target_p->resume_process(descendants);
+    else
+        SC_REPORT_WARNING( SC_ID_EMPTY_PROCESS_HANDLE_, "resume()");
+}
+
+// suspend this object instance's target.
+
+inline void sc_process_handle::suspend(sc_descendant_inclusion_info descendants)
+{
+    if ( m_target_p )
+        m_target_p->suspend_process(descendants);
+    else
+        SC_REPORT_WARNING( SC_ID_EMPTY_PROCESS_HANDLE_, "suspend()");
+}
+----
+
+Method和Thread/CThread有着不同的suspend/resume动作。
+
+==== Thread/CThread
+
+以下是Thread/CThread的suspend_process的代码：
+[[concept::process::control::suspend::thread]]
+
+.src/sysc/kernel/sc_thread_process.cpp
+[source,cpp]
+----
+void sc_thread_process::suspend_process(
+    sc_descendant_inclusion_info descendants )
+{
+
+    // IF NEEDED PROPOGATE THE SUSPEND REQUEST THROUGH OUR DESCENDANTS:
+
+    if ( descendants == SC_INCLUDE_DESCENDANTS )
+    {
+        const std::vector<sc_object*>& children = get_child_objects();
+        int                            child_n  = children.size();
+
+        for ( int child_i = 0; child_i < child_n; child_i++ )
+        {
+            sc_process_b* child_p = dynamic_cast<sc_process_b*>(children[child_i]);
+            if ( child_p ) child_p->suspend_process(descendants);
+        }
+    }
+
+    // CORNER CASE CHECKS, THE FOLLOWING ARE ERRORS:
+    //   (a) if this thread has a reset_signal_is specification
+    //   (b) if this thread is in synchronous reset
+
+    if ( !sc_allow_process_control_corners && m_has_reset_signal )
+    {
+        report_error(SC_ID_PROCESS_CONTROL_CORNER_CASE_,
+                     "attempt to suspend a thread that has a reset signal");
+        // may continue, if suppressed
+    }
+    else if ( !sc_allow_process_control_corners && m_sticky_reset )
+    {
+        report_error(SC_ID_PROCESS_CONTROL_CORNER_CASE_,
+                     "attempt to suspend a thread in synchronous reset");
+        // may continue, if suppressed
+    }
+
+    // SUSPEND OUR OBJECT INSTANCE:
+    //
+    // (1) If we are on the runnable queue then set suspended and ready_to_run,
+    //     and remove ourselves from the run queue.
+    // (2) If this is a self-suspension then a resume should cause immediate
+    //     scheduling of the process, and we need to call suspend_me() here.
+
+    m_state = m_state | ps_bit_suspended;
+    if ( next_runnable() != 0 )
+    {
+	m_state = m_state | ps_bit_ready_to_run;
+	simcontext()->remove_runnable_thread( this );
+    }
+    if ( sc_get_current_process_b() == dynamic_cast<sc_process_b*>(this)  )
+    {
+	m_state = m_state | ps_bit_ready_to_run;
+	suspend_me();
+    }
+}
+----
+
+中间检查了suspend的时候，是否有reset信号。如果有，并且sc_allow_process_control_corners
+是false，就报错，否则就跳过检查。
+
+主要的动作是把m_state的ps_bit_suspended置位。如果 `next_runnable()` 非空，说明当前
+的process在runnable列表中，这种情况下需要将其标记为ready to run(因为已经要准备run了)
+并且从simc的runnable列表中移除此线程。
+
+如果是suspend请求是来自线程自身，即当suspend_process
+调用的时候当前线程正在执行， 同样标记ready to run，并且调用suspend_me让渡出执行权。
+这样的suspend表现的类似于一个wait()，调用后从不返回，直到线程被外部唤醒的时候才返回。
+
+[[concept::process::control::resume::thread]]
+resume_process的操作如下：
+
+.src/sysc/kernel/sc_thread_process.cpp
+[source,cpp]
+----
+//------------------------------------------------------------------------------
+//"sc_thread_process::resume_process"
+//
+// This method resumes the execution of this process, and if requested, its
+// descendants. If the process was suspended and has a resumption pending it
+// will be dispatched in the next delta cycle. Otherwise the state will be
+// adjusted to indicate it is no longer suspended, but no immediate execution
+// will occur.
+//------------------------------------------------------------------------------
+void sc_thread_process::resume_process(
+    sc_descendant_inclusion_info descendants )
+{
+
+    // IF NEEDED PROPOGATE THE RESUME REQUEST THROUGH OUR DESCENDANTS:
+
+    if ( descendants == SC_INCLUDE_DESCENDANTS )
+    {
+        const std::vector<sc_object*>& children = get_child_objects();
+        int                            child_n  = children.size();
+
+        for ( int child_i = 0; child_i < child_n; child_i++ )
+        {
+            sc_process_b* child_p = dynamic_cast<sc_process_b*>(children[child_i]);
+            if ( child_p ) child_p->resume_process(descendants);
+        }
+    }
+
+    // BY DEFAULT THE CORNER CASE IS AN ERROR:
+
+    if ( !sc_allow_process_control_corners && (m_state & ps_bit_disabled) &&
+         (m_state & ps_bit_suspended) )
+    {
+        m_state = m_state & ~ps_bit_suspended;
+        report_error(SC_ID_PROCESS_CONTROL_CORNER_CASE_,
+                     "call to resume() on a disabled suspended thread");
+        // may continue, if suppressed
+    }
+
+    // CLEAR THE SUSPENDED BIT:
+
+    m_state = m_state & ~ps_bit_suspended;
+
+    // RESUME OBJECT INSTANCE IF IT IS READY TO RUN:
+
+    if ( m_state & ps_bit_ready_to_run )
+    {
+	m_state = m_state & ~ps_bit_ready_to_run;
+	if ( next_runnable() == 0 )
+	    simcontext()->push_runnable_thread(this);
+	remove_dynamic_events();  // order important.
+    }
+}
+----
+
+如前所述，resume一个suspended，但是disabled的process是implementation defined行为，这里
+用sc_allow_process_control_corners变量控制行为：如果这个变量为true，跳过检查，否则报错。
+
+主要工作是清除ps_bit_suspended位。如果清除之后，m_state显示ready to run，说明线程在被挂起
+的时候处于可运行状态（要么是在runnable列表中，要么就是正在运行）。此时清除掉ready to run
+标志，同时向本线程放入runnable列表中，这样在下一个delta cycle本线程就会调度执行。线程
+可以被执行，说明已经满足调度条件，所以这里可以移除所有动态的events。
+
+对于Thread线程而言，suspend的地方可以是上次被调度出去的地方（某个wait），也可以是
+自我suspend时候的 `suspend_me` 地方。当resume这个线程的时候，在下一个delta cycle，
+线程会从上次被打断的地方恢复执行。对于自我suspend的情况，这相当于 suspend_process函数
+中的suspend_me返回了。
+
+==== Method
+
+Method的suspend_process实现如下：
+[[concept::process::control::suspend::method]]
+
+.src/sysc/kernel/sc_method_process.cpp
+[source,cpp]
+----
+void sc_method_process::suspend_process(
+    sc_descendant_inclusion_info descendants )
+{
+
+    // IF NEEDED PROPOGATE THE SUSPEND REQUEST THROUGH OUR DESCENDANTS:
+
+    if ( descendants == SC_INCLUDE_DESCENDANTS )
+    {
+        const std::vector<sc_object*>& children = get_child_objects();
+        int                            child_n  = children.size();
+
+        for ( int child_i = 0; child_i < child_n; child_i++ )
+        {
+            sc_process_b* child_p = dynamic_cast<sc_process_b*>(children[child_i]);
+            if ( child_p ) child_p->suspend_process(descendants);
+        }
+    }
+
+    // CORNER CASE CHECKS, THE FOLLOWING ARE ERRORS:
+    //   (a) if this method has a reset_signal_is specification
+    //   (b) if this method is in synchronous reset
+
+    if ( !sc_allow_process_control_corners && m_has_reset_signal )
+    {
+        report_error(SC_ID_PROCESS_CONTROL_CORNER_CASE_,
+                     "attempt to suspend a method that has a reset signal");
+        // may continue, if suppressed
+    }
+    else if ( !sc_allow_process_control_corners && m_sticky_reset )
+    {
+        report_error(SC_ID_PROCESS_CONTROL_CORNER_CASE_,
+                     "attempt to suspend a method in synchronous reset");
+        // may continue, if suppressed
+    }
+
+    // SUSPEND OUR OBJECT INSTANCE:
+    //
+    // (1) If we are on the runnable queue then set suspended and ready_to_run,
+    //     and remove ourselves from the run queue.
+    // (2) If this is a self-suspension then a resume should cause immediate
+    //     scheduling of the process.
+
+    m_state = m_state | ps_bit_suspended;
+    if ( next_runnable() != 0 )
+    {
+	m_state = m_state | ps_bit_ready_to_run;
+	simcontext()->remove_runnable_method( this );
+    }
+    if ( sc_get_current_process_b() == dynamic_cast<sc_process_b*>(this)  )
+    {
+	m_state = m_state | ps_bit_ready_to_run;
+    }
+}
+----
+
+可以看出，Method的suspend_process处理过程和tHREAD基本是一模一样的。
+不同之处在于，Method没有suspend_me的概念，所以如果自我suspend的case, suspend_process
+并不会立即阻塞此线程，而是标记为ready_to_run之后，立即返回。这意味着，如果在一个method
+process中，我们调用了这个线程的suspend_process，线程不会阻塞，还是会继续执行下去。
+
+[[concept::process::control::resume::method]]
+Method的resume_process执行如下：
+
+.src/sysc/kernel/sc_method_process.cpp
+[source,cpp]
+----
+
+//------------------------------------------------------------------------------
+//"sc_method_process::resume_process"
+//
+// This method resumes the execution of this process, and if requested, its
+// descendants. If the process was suspended and has a resumption pending it
+// will be dispatched in the next delta cycle. Otherwise the state will be
+// adjusted to indicate it is no longer suspended, but no immediate execution
+// will occur.
+//------------------------------------------------------------------------------
+void sc_method_process::resume_process(
+    sc_descendant_inclusion_info descendants )
+{
+
+    // IF NEEDED PROPOGATE THE RESUME REQUEST THROUGH OUR DESCENDANTS:
+
+    if ( descendants == SC_INCLUDE_DESCENDANTS )
+    {
+        const std::vector<sc_object*>& children = get_child_objects();
+        int                            child_n  = children.size();
+
+        for ( int child_i = 0; child_i < child_n; child_i++ )
+        {
+            sc_process_b* child_p = dynamic_cast<sc_process_b*>(children[child_i]);
+            if ( child_p ) child_p->resume_process(descendants);
+        }
+    }
+
+
+    // BY DEFAULT THE CORNER CASE IS AN ERROR:
+
+    if ( !sc_allow_process_control_corners && (m_state & ps_bit_disabled) &&
+         (m_state & ps_bit_suspended) )
+    {
+        m_state = m_state & ~ps_bit_suspended;
+        report_error( SC_ID_PROCESS_CONTROL_CORNER_CASE_,
+                      "call to resume() on a disabled suspended method" );
+        // may continue, if suppressed
+    }
+
+    // CLEAR THE SUSPENDED BIT:
+
+    m_state = m_state & ~ps_bit_suspended;
+
+    // RESUME OBJECT INSTANCE:
+    //
+    // If this is not a self-resume and the method is ready to run then
+    // put it on the runnable queue.
+
+    if ( m_state & ps_bit_ready_to_run )
+    {
+	m_state = m_state & ~ps_bit_ready_to_run;
+	if ( next_runnable() == 0 &&
+	   ( sc_get_current_process_b() != dynamic_cast<sc_process_b*>(this) ) )
+        {
+	    simcontext()->push_runnable_method(this);
+	    remove_dynamic_events();
+	}
+    }
+}
+----
+
+resume一个Method线程的动作和resume一个Thread线程的动作是一模一样的。概念上的区别在于，resume
+一个Method线程，这个线程会从头开始执行，而不像Thread线程那样，从上次suspend的地方开始执行。
+
+=== suspend-resume例子分析
+
+例如，我们有calling和target两个Thread，其中 `t` 是target的sc_process_handle:
+
+[source,cpp]
+----
+void calling()
+{
+  wait(20, SC_NS);
+  t.suspend(); // @20 ns
+  wait(30, SC_NS);
+  t.resume() // @50 ns
+
+  wait(110, SC_NS);
+  t.suspend(); // @160 ns
+
+  wait(200, SC_NS);
+  t.resume(); // @360 ns
+}
+
+void target()
+{
+  while(1)
+  {
+      wait(100, SC_NS);
+      cout << sc_time_stamp(); // 100 360, 460
+  }
+}
+----
+
+这个例子中，target process的suspend和resume都是从另外一个线程calling发出的。
+target线程每次都创建一个100ns延时的timed event，并等待此event的发生。
+
+target中，第一个100ns的时候，target处于正常状态（20ns的suspend又在50ns的时候resume了），
+所以target被正常调度执行，打印100，接下来又创建一个100ns的delay，准备在200ns的时候
+唤醒此线程。然而，200ns的时候，设定的延时时间到达，事件发生，事件调用trigger_dynamic，将
+动态阻塞在这个事件上的线程trigger起来的时候，线程处于suspended状态（160ns开始被suspend）。
+在 <<sc_process_b::trigger_dynamic, trigger_dynamic>>的实现中，我们可以看到
+如下部分代码：
+
+[source,cpp]
+----
+    if ( (m_state & ps_bit_suspended) )
+    {
+	m_state = m_state | ps_bit_ready_to_run;
+    }
+    else
+    {
+        simcontext()->push_runnable_method(this);
+    }
+----
+
+如果线程状态m_state的suspended位被置位，那么如果线程满足调度条件，这里也只是将其标记为
+ready to run，而不会真正放入runnable列表。
+
+因此，在这个例子中，200ns时候的timed event只会将线程target标记为ready to run，然后返回。
+在360ns的时候，target线程被resume。由于
+<<concept::process::control::resume::thread, resume此线程>>的时候，
+线程是ready to run的，因此线程被
+立即放入runnable列表，执行的时候打印出360的结果。之后线程以360ns为开始，每隔100ns
+打印一个时间戳，直到仿真结束。
