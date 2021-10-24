@@ -529,6 +529,10 @@ sc_event::~sc_event()
 sc_event提供了8个成员函数，以用来与process handle做交互。这个8个成员函数分为两组，分别为
 为本事件添加process handle，以及为本事件删除process handle。sc_event中保存process
 handle的成员变量一共有四个，所以每一组对应的成员函数也有4个:
+[[api::sc_event::add_static]]
+[[api::sc_event::add_dynamic]]
+[[api::sc_event::remove_static]]
+[[api::sc_event::remove_dynamic]]
 
 .src/sysc/kernel/sc_event.h
 [source,cpp]

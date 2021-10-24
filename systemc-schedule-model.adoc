@@ -1246,6 +1246,7 @@ Thread线程的动态调度过程和<<sc_process_b::trigger_dynamic, Method线�
 同步得到修改。
 
 === 初始化
+[[concept::simulate::initialize]]
 
 到现在我们已经可以理解在运行过程中，各个method/thread线程是如何通过event来交互的，然而要让整个
 系统正确运行起来，一个非常重要的前提是这些method/thread已经开始执行。想象一下我们有很多
@@ -1254,12 +1255,13 @@ method/thread线程，这些线程都没有设置静态调度条件，并且都�
 也会陷入从来不会被调度的困境。因此，对于method/thread线程，一定要仔细评估其触发条件，防止
 出现显式或者隐式的孤儿线程。
 
-在仿真最开始的时候， `sc_simcontext::prepare_to_simulation()` 函数中，会将所有
+在仿真最开始的时候， `sc_simcontext::prepare_to_simulate()` 函数中，会将所有
 
 * 需要初始化的method线程
 * 需要初始化的thread线程 
 
-放入runnable的<<concept::push_queue, Push Queue>>中。此时仿真器处于0时刻，在 
+放入runnable的<<concept::push_queue, Push Queue>>中footnote:[实际上是只有那些
+没有被disable/suspend的线程才会被放入runnable中]。此时仿真器处于0时刻，在 
 `sc_simcontext::simulate()` 函数内，则在仿真开始的0时刻执行一次 `crunch` 函数，并且限定
 只执行一次delta cycle:
 

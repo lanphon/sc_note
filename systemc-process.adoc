@@ -238,6 +238,196 @@ sc_process_b构造的时候， `m_state`的值为 `ps_normal` 。ps_normal是个
     bool                         m_unwinding;       // true if unwinding stack.
 ----
 
+=== 重要成员函数
+
+[[api::sc_process_b::add_static_event]]
+`add_static_event` 将一个事件加入到 `m_static_events` 列表中，同时也将
+本process cast为合适的派生类，调用事件的
+<<api::sc_event::add_static, `add_static`>>成员函数，设置到事件中：
+
+.src/sysc/kernel/sc_process.cpp
+[source,cpp]
+----
+//------------------------------------------------------------------------------
+//"sc_process_b::add_static_event"
+//
+// This method adds an event to the list of static events, and sets the
+// event up to call back this process when it fires.
+//------------------------------------------------------------------------------
+void sc_process_b::add_static_event( const sc_event& e )
+{
+    sc_method_handle method_h; // This process as a method.
+    sc_thread_handle thread_h; // This process as a thread.
+
+
+    // CHECK TO SEE IF WE ARE ALREADY REGISTERED WITH THE EVENT:
+
+    for( int i = m_static_events.size() - 1; i >= 0; -- i ) {
+        if( &e == m_static_events[i] ) {
+            return;
+        }
+    }
+
+    // REMEMBER THE EVENT AND THEN REGISTER OUR OBJECT INSTANCE WITH IT:
+
+    m_static_events.push_back( &e );
+
+    switch ( m_process_kind )
+    {
+      case SC_THREAD_PROC_:
+      case SC_CTHREAD_PROC_:
+        thread_h = static_cast<sc_thread_handle>( this );
+        e.add_static( thread_h );
+        break;
+      case SC_METHOD_PROC_:
+        method_h = static_cast<sc_method_handle>( this );
+        e.add_static( method_h );
+        break;
+      default:
+        sc_assert( false );
+        break;
+    }
+}
+----
+
+注意，sc_process_b并没有定义与add_static_event相对应的
+add_dynamic_event，这是因为static的event是在process 创建的时候指定的。而
+dynamic event则是在<<concept::wait, wait>>或者<<concept::next_trigger, next_trigger>>
+时候设置的。对于事件，将一个sc_process_b通过add_dynamic列入本事件所关联的动态
+事件，也是在wait/next_trigger中**动态**完成的。
+
+[[api::sc_process_b::remove_static_events]]
+与add_static_event功能相反的是remove_static_events:
+
+.src/sysc/kernel/sc_process.cpp
+[source,cpp]
+----
+//------------------------------------------------------------------------------
+//"sc_process_b::remove_static_events"
+//
+// This method removes this object instance from the events in its static
+// event list.
+//------------------------------------------------------------------------------
+void
+sc_process_b::remove_static_events()
+{
+    sc_method_handle method_h; // This process as a method.
+    sc_thread_handle thread_h; // This process as a thread.
+
+    switch ( m_process_kind )
+    {
+      case SC_THREAD_PROC_:
+      case SC_CTHREAD_PROC_:
+        thread_h = static_cast<sc_thread_handle>( this );
+        for( int i = m_static_events.size() - 1; i >= 0; -- i ) {
+            m_static_events[i]->remove_static( thread_h );
+        }
+        m_static_events.resize(0);
+        break;
+      case SC_METHOD_PROC_:
+        method_h = static_cast<sc_method_handle>( this );
+        for( int i = m_static_events.size() - 1; i >= 0; -- i ) {
+            m_static_events[i]->remove_static( method_h );
+        }
+        m_static_events.resize(0);
+        break;
+      default: // Some other type, it needs to clean up itself.
+        // std::cout << "Check " << __FILE__ << ":" << __LINE__ << std::endl;
+        break;
+    }
+}
+----
+
+这里的过程和 `add_static_event` 相反。对于每一个 `m_static_events`
+的事件，调用其 <<api::sc_event::remove_static, `remove_static`>> 将本process handle从sc_event的
+static process列表中移除。最后将 `m_static_events` 清零。
+
+一般来说，很少需要将process的static events列表清除，因为在process的生命周期中，process
+都需要依赖这些静态事件的发生来被调度。只有当process的生命周期显式地被要求结束（在disconnect_process中），才需要调用remove_static_events。
+
+[[api::sc_process_b::remove_dynamic_events]]
+在process生命周期显式杯结束的时候，还需要清除动态敏感事件，因此有一个 `remove_dynamic_events`
+的成员函数：
+
+.src/sysc/kernel/sc_process.cpp
+[source,cpp]
+----
+//------------------------------------------------------------------------------
+//"sc_process_b::remove_dynamic_events"
+//
+// This method removes this object instance from the events in its dynamic
+// event lists.
+//
+// Arguments:
+//     skip_timeout = skip cleaning up the timeout event, it will be done
+//                    by sc_event_notify().
+//------------------------------------------------------------------------------
+void
+sc_process_b::remove_dynamic_events( bool skip_timeout )
+{
+    sc_method_handle  method_h;   // This process as a method.
+    sc_thread_handle  thread_h;   // This process as a thread.
+
+    m_trigger_type = STATIC;
+    switch ( m_process_kind )
+    {
+      case SC_THREAD_PROC_:
+      case SC_CTHREAD_PROC_:
+        thread_h = static_cast<sc_thread_handle>(this);
+	if ( thread_h->m_timeout_event_p && !skip_timeout ) {
+	    thread_h->m_timeout_event_p->remove_dynamic(thread_h);
+	    thread_h->m_timeout_event_p->cancel();
+	}
+        if ( m_event_p )
+        {
+            m_event_p->remove_dynamic( thread_h );
+            m_event_p = 0;
+        }
+        if ( m_event_list_p )
+        {
+            m_event_list_p->remove_dynamic( thread_h, 0 );
+            m_event_list_p->auto_delete();
+	    m_event_list_p = 0;
+        }
+        break;
+      case SC_METHOD_PROC_:
+        method_h = static_cast<sc_method_handle>(this);
+	if ( method_h->m_timeout_event_p && !skip_timeout ) {
+	    method_h->m_timeout_event_p->remove_dynamic(method_h);
+	    method_h->m_timeout_event_p->cancel();
+	}
+        if ( m_event_p )
+        {
+            m_event_p->remove_dynamic( method_h );
+            m_event_p = 0;
+        }
+        if ( m_event_list_p )
+        {
+            m_event_list_p->remove_dynamic( method_h, 0 );
+            m_event_list_p->auto_delete();
+	    m_event_list_p = 0;
+        }
+        break;
+      default: // Some other type, it needs to clean up itself.
+        // std::cout << "Check " << __FILE__ << ":" << __LINE__ << std::endl;
+        break;
+    }
+}
+----
+
+对于sc_process_b而言，静态事件都保存在 `m_static_events` 列表中，然而动态事件：
+
+* 单一的动态事件，指针保存在 m_event_p 中
+* 组合的动态事件列表，指针保存在 m_event_list_p 中
+* 定时的内部创建的事件（wait/next_trigger中带延时功能），保存在 m_timed_event_p 中
+
+因此在 `remove_dynamic_events` 的时候，需要一个一个检查是否有效，并移除。
+
+需要注意的是， `remove_dynamic_events` 可以接受一个布尔参数，表明是否跳过timeout event
+的移除。默认情况下会将所有动态事件移除，如果设置跳过timed event，则移除除了timeout
+event以外所有的动态事件（其实只有单一事件和多个事件列表）。只有在trigger_dynamic的时候，
+process被disable，才会传入一个参数要求保留timeout event，但这么设计的原因目前未知。
+
 == sc_process_handle
 [[data::sc_process_handle]]
 
@@ -278,7 +468,13 @@ sc_process_handle内部只保存了一个指向基类sc_process_b指针的成员
     int                              m_wait_cycle_n; // # of waits to be done.
 ----
 
-前三个是为支持协程而添加的。最后一个m_wait_cycle_n，主要用在
+`m_cor_p` 以及 `m_stack_size` 是为支持协程而添加的。
+`m_cor_p` 就是代表本thread的协程参数，用以启动、挂起和恢复协程时使用。
+`m_stack_size` 则是有栈协程的协程栈的大小。
+
+`m_monitor_q` 是thread monitor，后续我们再介绍。
+
+最后一个m_wait_cycle_n，主要用在
 <<api::sc_thread_process::wait_cycles, wait_cycles>>成员函数中，用以支持设定
 特定等待时钟周期的场景。
 
@@ -407,7 +603,8 @@ bool sc_allow_process_control_corners = false;
 sc_core::sc_allow_process_control_corners = true;
 ----
 
-=== enable and disable
+=== disable and enable
+[[concept::process::control::disable_enable]]
 
 sc_process_handle的enable/disable调用，如前所述，调用的其实是内部sc_process_b
 的enable_process/disable_process接口函数：
@@ -670,7 +867,126 @@ void sc_method_process::enable_process(
 为true。我个人猜测，这应该是因为Method每次都会完整执行一遍，不像Thread那样存在死循环，所以
 disable之后，再enable，调度执行即可，不会是一个corner case.
 
+=== disable-enable例子分析
+
+现在我们有一个clock period为100ns的sc_clock clock，并且有如下代码：
+
+[source,cpp]
+----
+void calling()
+{
+  wait(20, SC_NS);
+  t.disable(); // @20 ns
+  wait(30, SC_NS);
+  t.enable() // @50 ns
+
+  wait(110, SC_NS);
+  t.disable(); // @160 ns
+
+  wait(200, SC_NS);
+  t.endable(); // @360 ns
+}
+
+void target()
+{
+  while(1)
+  {
+      wait();
+      cout << sc_time_stamp(); // 100 400 500
+  }
+}
+----
+
+target线程设置静态敏感事件为 `sensitive << clock.pos();`。 t是target线程的
+sc_process_handle。
+
+在第一个时钟上升沿，也就是100ns时，target处于enable状态，因此会正确输出100。接下来200ns
+和300ns的时钟上升沿，target都处于disable状态。clock的posedge事件调用target的
+<<api::sc_thread_process::trigger_static, trigger_static>>
+成员函数，在这个函数里，有何如下代码(以thread的trigger_static为例，method中
+有一样的处理代码)：
+
+[source,cpp]
+----
+    // No need to try queueing this thread if one of the following is true:
+    //    (a) it is disabled
+    //    (b) it is already queued for execution
+    //    (c) it is waiting on a dynamic event
+    //    (d) its wait count is not satisfied and it is not currently in reset
+
+    if ( (m_state & ps_bit_disabled) || is_runnable() ||
+          m_trigger_type != STATIC )
+        return;
+----
+
+可以看到如果状态中有disable状态，那么trigger_static是不生效的，这里会直接返回。
+
+直到400ns的上升沿事件发生，target才处于enable状态，target才会调度执行，从上次
+执行时被阻塞的地方恢复执行。
+
+如果动态阻塞在一个事件，这个事件在process disable状态发生的话，调用的是process
+的
+<<sc_process_b::trigger_dynamic, trigger_dynamic>>，这里有如下代码(以thread
+为例，method中有一样的处理代码）：
+
+[source,cpp]
+----
+    // If a process is disabled then we ignore any events, leaving them enabled:
+    //
+    // But if this is a time out event we need to remove both it and the
+    // event that was being waited for.
+
+    if ( m_state & ps_bit_disabled )
+    {
+        if ( e == m_timeout_event_p )
+	{
+	    remove_dynamic_events( true ); <1>
+	    return true;
+	}
+	else
+	{
+	    return false;
+	}
+    }
+----
+<1> 保留timed event对象，参见<<api::sc_process_b::remove_dynamic_events, remove_dynamic_events>>部分
+
+如果动态trigger这个disabled process的事件是个timed事件，那么disabled状态的
+线程认为这个事件已经被accpet，需要清除掉这个事件，同时返回true。这个返回值用以
+向事件表明是否线程被成功调度。这里可以看到，disabled process向外界报告自己被
+重新调度，然而却没有放入runnable列表。
+
+回到最初的那个例子，如果那个例子中target没有设置静态敏感事件，而是依赖动态敏感
+事件的话：
+
+[source,cpp]
+----
+void target()
+{
+  while(1)
+  {
+      wait(100, SC_NS);
+      cout << sc_time_stamp(); // 100 360, 460
+  }
+}
+----
+
+那么在100ns时候输出100后，200ns 时候timed event发生，这里不会恢复执行，只会将200ns
+的timed event移除。这样带来的后果是，target线程在之后永远不会被调度执行！因为200ns
+的timed event被移除，但target没有恢复执行以创建下一个300ns的timed event，这个
+target奖没有任何event能够唤醒，哪怕之后被enable了同样如此。这是使用disable-enable
+时候应当注意的一点：一个使用disable-enable控制的线程，应当有静态敏感事件，以协助在enable
+线程之后，线程可以继续调度执行。
+在<<use::process::control::prepare_to_simulate, prepare_to_simulate中的状态判断>>
+部分，我们也可能看到simc在初始的时候，是不允许disable状态的线程没有静态敏感事件的。
+
+
+线程在disable状态，无法响应任何发生的事件。这种特性可以用来模拟clock-gating行为。disable-enable
+机制一般适用于clock驱动的process，这些process天然带有clock的敏感沿作为静态事件。
+
+
 === suspend and resume
+[[concept::process::control::suspend_resume]]
 
 suspend操作会挂起一个线程，而resume操作则会继续此线程的执行。这里的suspend/resume
 指的是从用户方显式地要求挂起和唤醒线程，而不是SystemC内部在线程切换的时候的线程挂起
@@ -847,6 +1163,10 @@ void sc_thread_process::resume_process(
 的时候处于可运行状态（要么是在runnable列表中，要么就是正在运行）。此时清除掉ready to run
 标志，同时向本线程放入runnable列表中，这样在下一个delta cycle本线程就会调度执行。线程
 可以被执行，说明已经满足调度条件，所以这里可以移除所有动态的events。
+
+所以一个自我suspended的thread，在resume的时候，会立即开始执行（实际上是从下一个delta cycle
+开始执行），而不会等待阻塞事件发生（因为实际上并没有被事件阻塞）。一个满足调度条件的thread，再被
+suspended之后不会执行，直到resume的时候才会被放入调度队列，重新开始执行。
 
 对于Thread线程而言，suspend的地方可以是上次被调度出去的地方（某个wait），也可以是
 自我suspend时候的 `suspend_me` 地方。当resume这个线程的时候，在下一个delta cycle，
@@ -1030,7 +1350,7 @@ target中，第一个100ns的时候，target处于正常状态（20ns的suspend�
 唤醒此线程。然而，200ns的时候，设定的延时时间到达，事件发生，事件调用trigger_dynamic，将
 动态阻塞在这个事件上的线程trigger起来的时候，线程处于suspended状态（160ns开始被suspend）。
 在 <<sc_process_b::trigger_dynamic, trigger_dynamic>>的实现中，我们可以看到
-如下部分代码：
+如下部分代码(在method/thread的trigger_static中也是这套逻辑)：
 
 [source,cpp]
 ----
@@ -1053,3 +1373,83 @@ ready to run，而不会真正放入runnable列表。
 线程是ready to run的，因此线程被
 立即放入runnable列表，执行的时候打印出360的结果。之后线程以360ns为开始，每隔100ns
 打印一个时间戳，直到仿真结束。
+
+从这个例子中，我们也可以看到，一个被suspend的process，仍然可以接受调度请求。
+在suspend期间，如果process满足调度条件，那么就会被延迟到resume的时候才会被
+调度执行。如果suspend期间不满足调度请求，那么resume的时候，继续之前的状态，
+表现起来好像这段suspend期间从未存在过一样。
+
+suspend-resume机制不太适合用于clock驱动的process，因为使用clock驱动的process
+很那理解这种把suspend期间发生的事件推迟到resume时候的概念。suspend-resume
+一般用来抽象调度器。
+
+=== prepare_to_simulate中的状态判断
+[[use::process::control::prepare_to_simulate]]
+
+在<<concept::simulate::initialize, 初始化>>部分，我们介绍过，在仿真开始前的时刻，
+simc会将所有没有设定dont_initialize的method/thread都放入runnable列表中。这个
+说法并不是很准确，因为里边还涉及到一些process状态的判断，现在我们回过头来看一下这部分代码：
+
+.src/sysc/kernel/sc_simcontext.h
+[source,cpp]
+----
+    // make all method processes runnable
+
+    for ( method_p = m_process_table->method_q_head();
+	  method_p; method_p = method_p->next_exist() )
+    {
+	if ( ((method_p->m_state & sc_process_b::ps_bit_disabled) != 0) ||
+	     method_p->dont_initialize() )
+	{
+	    if ( method_p->m_static_events.size() == 0 )
+	    {
+	        SC_REPORT_WARNING( SC_ID_DISABLE_WILL_ORPHAN_PROCESS_,
+		                   method_p->name() );
+	    }
+	}
+	else if ( (method_p->m_state & sc_process_b::ps_bit_suspended) == 0)
+	{
+            if ( !method_p->is_runnable() ) // already scheduled?
+                push_runnable_method_front( method_p );
+        }
+	else
+	{
+	    method_p->m_state |= sc_process_b::ps_bit_ready_to_run;
+	}
+    }
+
+    // make thread processes runnable
+    // (cthread processes always have the dont_initialize flag set)
+
+    for ( thread_p = m_process_table->thread_q_head();
+	  thread_p; thread_p = thread_p->next_exist() )
+    {
+	if ( ((thread_p->m_state & sc_process_b::ps_bit_disabled) != 0) ||
+	     thread_p->dont_initialize() )
+	{
+	    if ( thread_p->m_static_events.size() == 0 )
+	    {
+	        SC_REPORT_WARNING( SC_ID_DISABLE_WILL_ORPHAN_PROCESS_,
+		                   thread_p->name() );
+	    }
+	}
+	else if ( (thread_p->m_state & sc_process_b::ps_bit_suspended) == 0)
+	{
+            if ( !thread_p->is_runnable() ) // already scheduled?
+                push_runnable_thread_front( thread_p );
+        }
+	else
+	{
+	    thread_p->m_state |= sc_process_b::ps_bit_ready_to_run;
+	}
+    }
+----
+
+这两段代码分别处理了所有的method和thread，处理method和thread的代码一致，我们以thread
+为例来说明。
+
+对于每个thread，如果在仿真开始前被disable掉了，或者设置dont_initialize(CThread天然
+设置无需初始化)，那么就需要检查，必须存在静态敏感事件。这个和我们之前的分析是一致的。
+如果在仿真开始之前线程没有被suspend掉了，这表明线程应当可以执行，放入runnable列表。最后
+就是仿真开始之前线程已经被suspend了，由于理论上此时线程应该被执行一次，但是却被suspend，按照
+suspend-resume的逻辑，需要标记其为ready to run，这样在resume的时候就可以执行起来了。
