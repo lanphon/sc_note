@@ -256,6 +256,81 @@ Process的成员变量中，有多个与sc_event相关的部分，这些是proce
 
 === 重要成员函数
 
+==== semantics
+[[api::sc_process_b::semantics]]
+
+sc_process_b的semantics函数会启动sc_process_b所保存的线程函数，这个我们在
+<<api::semantic, coroutine>>部分已经讲过了。除此之外，semantics还需要
+处理一些异常相关的部分。semantics的函数实现如下：
+
+.src/sysc/kernel/sc_process.h
+[source,cpp]
+----
+inline void sc_process_b::semantics()
+{
+
+    // within this function, the process has a stack associated
+
+    scoped_flag scoped_stack_flag( m_has_stack );
+
+    sc_assert( m_process_kind != SC_NO_PROC_ );
+
+    // Determine the reset status of this object instance and potentially
+    // trigger its notify event:
+
+    // See if we need to trigger the notify event:
+
+    if ( m_reset_event_p &&
+         ( (m_throw_status == THROW_SYNC_RESET) ||
+	   (m_throw_status == THROW_ASYNC_RESET) )
+    ) {
+        trigger_reset_event();
+    }
+
+    // Set the new reset status of this object based on the reset counts:
+
+    m_throw_status = m_active_areset_n ? THROW_ASYNC_RESET :
+        ( m_active_reset_n  ?  THROW_SYNC_RESET : THROW_NONE);
+
+    // Dispatch the actual semantics for the process:
+
+#   ifndef SC_USE_MEMBER_FUNC_PTR
+        m_semantics_method_p->invoke( m_semantics_host_p );
+#   else
+        (m_semantics_host_p->*m_semantics_method_p)();
+#   endif
+}
+----
+
+在启动线程函数之前，semantics会首先检查变量 `m_throw_status`的值，
+看是否有需要抛出什么东西。如果需要异步或者同步reset，那就
+调用 `trigger_reset_event`，这其实就是一个很简单的事件对象的 `notify`
+
+.src/sysc/kernel/sc_process.cpp
+[source,cpp]
+----
+void sc_process_b::trigger_reset_event()
+{
+    if ( m_reset_event_p ) m_reset_event_p->notify();
+}
+----
+
+接下来 `m_throw_status` 会根据 `m_active_areset_n` 和 `m_active_reset_n`
+的值被赋值，其中异步reset计数器优先级高于同步reset计数器。
+
+在同步reset的时候，我们会调用 
+<<api::sc_process_handle::sync_reset_on, sync_reset_on>> 开启同步reset周期。这会
+调用 <<api::sc_process_b::reset_changed, reset_changed>>，将 `m_active_reset_n` 计数器加一。
+`m_active_reset_n` 计数器会一直保持，直到
+<<api::sc_process_handle::sync_reset_on, sync_reset_off>>
+被调用为止。这意味着，如果 `sync_reset_on` 和 `sync_reset_off`
+所定义的同步reset周期内，process被多次启动，那么每一次 `m_throw_status`
+都会保持 `THROW_SYNC_RESET` 不变，并且每次都会trigger reset event footnote:[这里假设
+没有异步reset]。
+
+
+==== add_static_event
+
 [[api::sc_process_b::add_static_event]]
 `add_static_event` 将一个事件加入到 `m_static_events` 列表中，同时也将
 本process cast为合适的派生类，调用事件的
@@ -312,6 +387,8 @@ dynamic event则是在<<concept::wait, wait>>或者<<concept::next_trigger, next
 时候设置的。对于事件，将一个sc_process_b通过add_dynamic列入本事件所关联的动态
 事件，也是在wait/next_trigger中**动态**完成的。
 
+==== remove_static_events
+
 [[api::sc_process_b::remove_static_events]]
 与add_static_event功能相反的是remove_static_events:
 
@@ -360,6 +437,8 @@ static process列表中移除。最后将 `m_static_events` 清零。
 
 一般来说，很少需要将process的static events列表清除，因为在process的生命周期中，process
 都需要依赖这些静态事件的发生来被调度。只有当process的生命周期显式地被要求结束（在disconnect_process中），才需要调用remove_static_events。
+
+==== remove_dynamic_events
 
 [[api::sc_process_b::remove_dynamic_events]]
 在process生命周期显式杯结束的时候，还需要清除动态敏感事件，因此有一个 `remove_dynamic_events`
@@ -444,6 +523,234 @@ sc_process_b::remove_dynamic_events( bool skip_timeout )
 event以外所有的动态事件（其实只有单一事件和多个事件列表）。只有在trigger_dynamic的时候，
 process被disable，才会传入一个参数要求保留timeout event，但这么设计的原因目前未知。
 
+==== child object management
+
+sc_process_b中有三个用于管理子对象的函数：
+
+* add_child_object
+* remove_child_object
+* get_child_objects 
+
+这3个都调用基类sc_object的相应函数，来管理process的子对象，sc_process_b在其中
+增加了引用计数 `m_references_n` 管理部分的工作：
+
+.src/sysc/kernel/sc_process.h
+[source,cpp]
+----
+inline void
+sc_process_b::add_child_object( sc_object* object_p )
+{
+    sc_object::add_child_object( object_p );
+    reference_increment();
+}
+
+inline bool
+sc_process_b::remove_child_object( sc_object* object_p )
+{
+    if ( sc_object::remove_child_object( object_p ) ) {
+	    reference_decrement();
+            return true;
+    }
+    else
+    {
+        return false;
+    }
+}
+
+inline const ::std::vector<sc_object*>&
+sc_process_b::get_child_objects() const
+{
+    return m_child_objects;
+}
+----
+
+==== disconnect_process
+[[api::sc_process_b::disconnect_process]]
+
+disconnect_process 用以在kill_process中，从其他与之关联的数据结构，如monitor, event等，
+移除本process:
+
+.src/sysc/kernel/sc_process.cpp
+[source,cpp]
+----
+void sc_process_b::disconnect_process()
+{
+    int               mon_n;      // monitor queue size.
+    sc_thread_handle  thread_h;   // This process as a thread.
+
+    // IF THIS OBJECT IS PINING FOR THE FJORDS WE ARE DONE:
+
+    if ( m_state & ps_bit_zombie ) return;
+
+    // IF THIS IS A THREAD SIGNAL ANY MONITORS WAITING FOR IT TO EXIT:
+
+    switch ( m_process_kind )
+    {
+      case SC_THREAD_PROC_:
+      case SC_CTHREAD_PROC_:
+        thread_h = static_cast<sc_thread_handle>(this);
+        mon_n = thread_h->m_monitor_q.size();
+        if ( mon_n )
+        {
+            for ( int mon_i = 0; mon_i < mon_n; mon_i++ )
+            {
+                thread_h->m_monitor_q[mon_i]->signal( thread_h,
+			      sc_process_monitor::spm_exit);
+            }
+        }
+        break;
+      default:
+        break;
+    }
+
+    // REMOVE EVENT WAITS, AND REMOVE THE PROCESS FROM ITS SC_RESET:
+
+    remove_dynamic_events();
+    remove_static_events();
+
+    for ( std::vector<sc_reset*>::size_type rst_i = 0; rst_i < m_resets.size(); rst_i++ )
+    {
+        m_resets[rst_i]->remove_process( this );
+    }
+    m_resets.resize(0);
+
+
+    // FIRE THE TERMINATION EVENT, MARK AS TERMINATED, AND DECREMENT THE COUNT:
+    //
+    // (1) We wait to set the process kind until after doing the removals
+    //     above.
+    // (2) Decrementing the reference count will result in actual object
+    //     deletion if we hit zero.
+
+    m_state = ps_bit_zombie;
+    if ( m_term_event_p ) m_term_event_p->notify();
+    reference_decrement();
+}
+----
+
+disconnect process主要的动作有：
+
+* 对于thread，调度monitor的signal接口函数，通知线程退出
+* 使用<<api::sc_process_b::remove_static_events, remove_static_events>>和
+<<api::sc_process_b::remove_dynamic_events, remove_dynamic_events>>断开与sc_event
+之间的连接
+* 从每个reset中移除本process，并清除本process保存的reset信息
+* 将状态m_state置为zombie状态
+* 如果有terminated event，就notify terminated event
+* 减少引用计数器
+
+调用了disconnect_process的process进入zombie状态，m_state被标记为ps_zombie
+bit位。对一个zombie的process调用disconnect_process会直接返回。
+
+==== delete_process
+[[api::sc_process_b::delete_process]]
+
+delete_process可以将本process所有分配的资源释放掉：
+
+.src/sysc/kernel/sc_process.cpp
+[source,cpp]
+----
+void sc_process_b::delete_process()
+{
+    sc_assert( m_references_n == 0 );
+
+    // Immediate deletion:
+
+    if ( NULL == sc_get_current_process_b() )
+    {
+        delete this; <1>
+    }
+
+    // Deferred deletion: note we set the reference count to one  for the call
+    // to reference_decrement that occurs in sc_simcontext::crunch().
+
+    else
+    {
+        m_references_n = 1;
+        detach();
+        simcontext()->mark_to_collect_process( this );
+    }
+}
+----
+<1> 之所以能够delete，是因为所有的process都是new出来的
+
+注意只有引用计数为0的时候，才能够调用delete_process。如果删除的请求来源不是来自一个process，那么
+立即删除，否则就将这个process标记为待回收的process。
+
+待回收的process在每次<<concept::crunch, crunch>>的最后，do_collect_processes
+会调用每一个待回收的process的reference_decrement()
+[[api::sc_simcontext::do_collect_processes]]
+
+.src/sysc/kernel/sc_simcontext.cpp
+[source,cpp]
+----
+void sc_simcontext::do_collect_processes()
+{
+    while( ! m_collectable->empty() )
+    {
+        sc_process_b* del_p = m_collectable->front();
+        m_collectable->pop_front();
+        del_p->reference_decrement();
+    }
+}
+----
+
+[[api::sc_process_b::reference_decrement]]
+而在sc_process_b的reference_decrement中，将引用计数减去一，如果引用计数为0，则
+再次调用delete_process:
+
+.src/sysc/kernel/sc_process.h
+[source,cpp]
+----
+inline void sc_process_b::reference_decrement()
+{
+    m_references_n--;
+    if ( m_references_n == 0 ) delete_process();
+}
+----
+
+在simc的do_collect_processes之前，会调用reset_curr_proc，将当前的process
+信息重置：
+
+[source,cpp]
+----
+    this->reset_curr_proc();
+    do_collect_processes();
+----
+
+所以这一次，sc_get_current_proc_b返回空指针，delete_process就可以正常 `delete this` 了。
+
+==== reset_process
+[[api::sc_process_b::reset_process]]
+
+不同于disconnect_process或者delete_process, reset_process的处理相对来说比较复杂，因为
+reset_process需要reset之后，process还能够正常运行。对于Method线程而言这比较容易做到，因为每个
+Method执行的时候都是完整执行函数体的。但是对于Thread/CThread线程而言，reset就没那么简单了。
+
+关于reset_process的内容，请参考<<concept::process::reset, reset机制>>的
+<<api::sc_process_b::reset_process::impl, reset执行流程>>部分。
+
+==== reset_event
+[[api::sc_process_b::reset_event]]
+
+sc_process_b的 `reset_event` 返回一个与本process相关联的reset event的引用。如果
+成员变量 `m_reset_event_p` 为空，就新建一个kernel event：
+
+.src/sysc/kernel/sc_process.cpp
+[source,cpp]
+----
+sc_event& sc_process_b::reset_event()
+{
+    if ( !m_reset_event_p )
+    {
+        m_reset_event_p = new sc_event( sc_event::kernel_event, "reset_event" );
+    }
+    return *m_reset_event_p;
+}
+----
+
+这个sc_event可以用来用来做静态或者动态的调度事件使用，也可以用在其他event能够使用的场合。
+
 == sc_process_handle
 [[data::sc_process_handle]]
 
@@ -494,6 +801,11 @@ sc_process_handle内部只保存了一个指向基类sc_process_b指针的成员
 <<api::sc_thread_process::wait_cycles, wait_cycles>>成员函数中，用以支持设定
 特定等待时钟周期的场景。
 
+=== 重要成员函数
+
+==== throw_reset
+[[api::sc_thread_process::throw_reset]]
+
 == sc_method_process
 [[data::sc_method_process]]
 
@@ -511,6 +823,11 @@ sc_method_process在基类 `sc_process_b` 的基础上增加了如下几个成�
 
 然而这三个成员变量在sc_method_process中并没有得到使用。
 
+=== 重要成员函数
+
+==== throw_reset
+[[api::sc_method_process::throw_reset]]
+
 == sc_cthread_process
 [[data::sc_cthread_process]]
 
@@ -519,7 +836,438 @@ sc_method_process在基类 `sc_process_b` 的基础上增加了如下几个成�
 sc_cthread_process在基类 `sc_thread_process` 基础上，没有新增加其他的
 成员变量。
 
-== reset逻辑
+== reset机制
+
+Process中有一套非常复杂的reset机制，来仿真模拟实际的RTL reset行为。
+
+=== reset设置流程
+
+sc_module提供了如下几组API，用来实现process的reset逻辑指定：
+
+[[api::sc_module::reset_signal_is]]
+[[api::sc_module::async_reset_signal_is]]
+.src/sysc/kernel/sc_module.h
+[source,cpp]
+----
+    // set reset sensitivity for SC_xTHREADs
+    void async_reset_signal_is( const sc_in<bool>& port, bool level );
+    void async_reset_signal_is( const sc_inout<bool>& port, bool level );
+    void async_reset_signal_is( const sc_out<bool>& port, bool level );
+    void async_reset_signal_is( const sc_signal_in_if<bool>& iface, bool level);
+    void reset_signal_is( const sc_in<bool>& port, bool level );
+    void reset_signal_is( const sc_inout<bool>& port, bool level );
+    void reset_signal_is( const sc_out<bool>& port, bool level );
+    void reset_signal_is( const sc_signal_in_if<bool>& iface, bool level );
+----
+
+这些API实际调用的是 `sc_reset` 数据结构的 `reset_signal_is` 函数。例如：
+
+.src/sysc/kernel/sc_module.cpp
+[source,cpp]
+----
+void
+sc_module::reset_signal_is( const sc_in<bool>& port, bool level )
+{
+	sc_reset::reset_signal_is(false, port, level);
+}
+----
+
+`reset_signal_is` 是 `sc_reset` 的一组带重载的静态函数，所以这里无需一个sc_reset
+的instance，就可以直接调用 `reset_signal_is` 。
+
+[[api::sc_reset::reset_signal_is]]
+`reset_signal_is` 具有多种重载形式，这里我们选择最终实现逻辑的一种重载形式来进行分析。
+其他几种重载形式如果能拿到interface指针，都会直接调用这个，否则采取类似于
+<<api::sc_event_finder, sc_event_finder>>的方式，
+构造<<data::sc_reset_finder, sc_reset_finder>>延迟查找
+这些interface。
+
+以下是reset_signal_is的实现：
+
+.src/sysc/kernel/sc_reset.cpp
+[source,cpp]
+----
+void sc_reset::reset_signal_is(
+    bool async, const sc_signal_in_if<bool>& iface, bool level )
+{
+    sc_process_b*   process_p;    // process adding reset for.
+    sc_reset_target reset_target; // entry to build for the process.
+    sc_reset*       reset_p;      // reset object.
+
+    process_p = sc_process_b::last_created_process_base(); <1>
+    sc_assert( process_p );
+    process_p->m_has_reset_signal = true;
+    switch ( process_p->proc_kind() )
+    {
+      case SC_METHOD_PROC_:
+      case SC_CTHREAD_PROC_:
+      case SC_THREAD_PROC_:
+	reset_p = iface.is_reset(); <2>
+	process_p->m_resets.push_back(reset_p);
+        reset_target.m_async = async;
+	reset_target.m_level = level;
+	reset_target.m_process_p = process_p;
+	reset_p->m_targets.push_back(reset_target);
+	if ( iface.read() == level ) process_p->initially_in_reset( async );
+        break;
+      default:
+        SC_REPORT_ERROR(SC_ID_UNKNOWN_PROCESS_TYPE_, process_p->name());
+        break;
+    }
+}
+----
+<1> process handle是直接获取的，类似于sensitive中获取的最后一个创建的process handle的方式
+<2> is_reset是sc_signal_in_if<T>的接口函数，默认返回一个空指针
+
+process中的 `m_resets` 保存了设置reset的 `sc_reset` 对象指针，而这个reset对象指针里的
+`m_targets` 则保存了reset需要的三个信息：
+
+1. reset的同步/异步情况
+2. reset的level（低电平reset还是高电平reset）
+3. reset的process handle
+
+如果发现当前信号值等于所设置的reset电平值，则调用process的initially_in_reset函数：
+[[api::sc_process_b::initially_in_reset]]
+
+.src/sysc/kernel/sc_process.h
+[source,cpp]
+----
+inline void sc_process_b::initially_in_reset( bool async )
+{
+    if ( async )
+        m_active_areset_n++;
+    else
+        m_active_reset_n++;
+}
+----
+
+而这里只是简单将reset的counter计数器做自增而已，至于加在哪个上边，取决于是异步reset还是
+同步reset。
+
+至此，用作reset的sc_signal和设置这个sc_signal作为reset的process已经建立了关系：
+
+* sc_signal内保存了所有的需要reset的process 的一组三元信息
+* process内保存了所有用作reset的sc_reset指针footnote:[从SystemC代码中并没有看到这里保存的m_resets被使用的情况]
+
+=== reset执行流程
+
+在SystemC中，reset大致可以分为两种：
+
+* 异步reset(asynchronous)，这种reset一般是与clock无关的reset信号
+* 同步reset(synchronous)，这种reset一般由clock驱动的signal发出来，与时钟同步
+
+[[api::sc_process_handle::sync_reset_on]]
+对于一个sc_process_handle，提供了3个API，支持这两种reset机制：
+
+* `reset` 成员函数可以异步reset process
+* `sync_reset_off` 和 `sync_reset_on` 可以同步reset process
+
+.src/sysc/kernel/sc_process_handle.h
+[source,cpp]
+----
+inline void sc_process_handle::reset( sc_descendant_inclusion_info descendants )
+{
+    if ( m_target_p )
+        m_target_p->reset_process( sc_process_b::reset_asynchronous,
+	                           descendants );
+    else
+        SC_REPORT_WARNING( SC_ID_EMPTY_PROCESS_HANDLE_, "reset()");
+}
+
+inline void sc_process_handle::sync_reset_off(
+    sc_descendant_inclusion_info descendants)
+{
+    if ( m_target_p )
+        m_target_p->reset_process( sc_process_b::reset_synchronous_off,
+	                           descendants);
+    else
+        SC_REPORT_WARNING( SC_ID_EMPTY_PROCESS_HANDLE_, "sync_reset_off()");
+}
+
+// turn sync_reset on for this object instance's target.
+
+inline void sc_process_handle::sync_reset_on(
+    sc_descendant_inclusion_info descendants)
+{
+    if ( m_target_p )
+    {
+        m_target_p->reset_process(sc_process_b::reset_synchronous_on,
+            descendants);
+    }
+    else
+    {
+        SC_REPORT_WARNING( SC_ID_EMPTY_PROCESS_HANDLE_, "sync_reset_on()");
+    }
+}
+----
+
+所以reset/sync_reset_on/sync_reset_off实际调用的都是sc_process_b的reset_process。
+
+[[api::sc_process_b::reset_process::impl]]
+以下是sc_process_b的reset_process代码实现：
+
+.src/sysc/kernel/sc_process.cpp
+[source,cpp]
+----
+//------------------------------------------------------------------------------
+//"sc_process_b::reset_process"
+//
+// This inline method changes the reset state of this object instance and
+// conditionally its descendants.
+//
+// Notes:
+//   (1) It is called for sync_reset_on() and sync_reset_off(). It is not used
+//       for signal sensitive resets, though all reset flow ends up in
+//       reset_changed().
+//
+// Arguments:
+//     rt = source of the reset:
+//            * reset_asynchronous     - sc_process_handle::reset()
+//            * reset_synchronous_off  - sc_process_handle::sync_reset_off()
+//            * reset_synchronous_on   - sc_process_handle::sync_reset_on()
+//     descendants = indication of how to process descendants.
+//------------------------------------------------------------------------------
+void sc_process_b::reset_process( reset_type rt,
+                                  sc_descendant_inclusion_info descendants )
+{
+
+    // PROCESS THIS OBJECT INSTANCE'S DESCENDANTS IF REQUESTED TO:
+
+    if ( descendants == SC_INCLUDE_DESCENDANTS )
+    {
+        const std::vector<sc_object*> children = get_child_objects();
+        int                           child_n  = children.size();
+
+        for ( int child_i = 0; child_i < child_n; child_i++ )
+        {
+            sc_process_b* child_p = dynamic_cast<sc_process_b*>(children[child_i]);
+            if ( child_p ) child_p->reset_process(rt, descendants);
+        }
+    }
+
+    // PROCESS THIS OBJECT INSTANCE:
+
+    switch (rt)
+    {
+      // One-shot asynchronous reset: remove dynamic sensitivity and throw:
+      //
+      // If this is an sc_method only throw if it is active.
+
+      case reset_asynchronous:
+	if ( sc_get_status() != SC_RUNNING )
+	{
+	    report_error(SC_ID_RESET_PROCESS_WHILE_NOT_RUNNING_);
+	}
+	else
+	{
+	    remove_dynamic_events();
+	    throw_reset(true);
+	}
+        break;
+
+      // Turn on sticky synchronous reset: use standard reset mechanism.
+
+      case reset_synchronous_on:
+	if ( m_sticky_reset == false )
+	{
+	    m_sticky_reset = true;
+	    reset_changed( false, true );
+	}
+        break;
+
+      // Turn off sticky synchronous reset: use standard reset mechanism.
+
+      default:
+	if ( m_sticky_reset == true )
+	{
+	    m_sticky_reset = false;
+	    reset_changed( false, false );
+	}
+        break;
+    }
+}
+----
+
+最开始的代码用以处理子对象的reset请求。如前所述，reset来源分为异步reset，同步的reset开
+和同步的reset关，反映在 `reset_process` 的第一个参数 `rt`, 即reset type上。
+
+如果是异步的reset，首先移除所有动态事件，因为reset一个process需要从头开始执行，所以
+这些阻塞的动态事件就没必要了，接下来调度 throw_reset(true)。这里代码会检查异步
+reset的时机，保证异步reset发生在simulation运行过程中。
+
+如果是同步的reset，这里使用了变量 `m_sticky_reset` 来辅助做同步reset。m_stick_reset
+默认为false，其含义是是否处于同步reset周期内。如果请求打开同步reset，且未处于reset
+周期内（m_sticky_reset为false），调用 `reset_changed(false, true)`，并设置 
+m_sticky_reset为true，否则无动作。同样，如果请求关闭同步reset，且处于reset
+周期内（m_sticky_reset为true），调用 `reset_changed(false, false)`，并设置
+m_sticky_reset为false，否则无动作。m_sticky_reset的引入，保证了无论
+同步reset持续多长的时钟周期，表现都如同一个reset一样。
+
+[[api::sc_process_b::reset_changed]]
+这里的 `reset_changed` 实现如下：
+
+.src/sysc/kernel/sc_process.cpp
+[source,cpp]
+----
+//------------------------------------------------------------------------------
+//"sc_process_b::reset_changed"
+//
+// This method is called when there is a change in the value of the
+// signal that was specified via reset_signal_is, or the value of the
+// m_sticky_reset field. We get called any time m_sticky_reset changes
+// or a signal value changes since, since we may need to throw an exception
+// or clear one. Note that this method may be called when there is no
+// active process, but rather the main simulator is executing so we must
+// check for that case.
+//
+// Arguments:
+//     async    = true if this is an asynchronous reset.
+//     asserted = true if reset being asserted, false if being deasserted.
+//------------------------------------------------------------------------------
+void sc_process_b::reset_changed( bool async, bool asserted )
+{
+
+    // Error out on the corner case:
+
+    if ( !sc_allow_process_control_corners && !async &&
+         (m_state & ps_bit_suspended) )
+    {
+	report_error( SC_ID_PROCESS_CONTROL_CORNER_CASE_,
+	              "synchronous reset changed on a suspended process" );
+    }
+
+    // IF THIS OBJECT IS PUSHING UP DAISIES WE ARE DONE:
+
+    if ( m_state & ps_bit_zombie ) return;
+
+    // Reset is being asserted:
+
+    if ( asserted )
+    {
+        // if ( m_reset_event_p ) m_reset_event_p->notify();
+        if ( async )
+	{
+	    m_active_areset_n++;
+	    if ( sc_is_running() ) throw_reset(true);
+	}
+	else
+	{
+	    m_active_reset_n++;
+	    if ( sc_is_running() ) throw_reset(false);
+	}
+    }
+
+    // Reset is being deasserted:
+
+    else
+    {
+        if ( async )
+	{
+	    m_active_areset_n--;
+	}
+	else
+	{
+	    m_active_reset_n--;
+	}
+    }
+
+    // Clear the throw type if there are no active resets.
+
+    if ( (m_throw_status == THROW_SYNC_RESET ||
+          m_throw_status == THROW_ASYNC_RESET) &&
+         m_active_areset_n == 0 && m_active_reset_n == 0 && !m_sticky_reset )
+    {
+        m_throw_status = THROW_NONE;
+    }
+}
+----
+
+这里最开始是处理一个corner case，即同步reset一个suspended的case。
+
+异步和同步reset，主要是在相关的计数器加减上。另外，如果reset时simulation已经开始，这里
+同样会调用 throw_reset()函数。
+
+reset_changed这个函数除了在sc_process_b的reset_process中使用以外，还在sc_reset
+的notify_processes中使用：
+[[api::sc_reset::notify_processes]]
+
+.src/sysc/kernel/sc_reset.cpp
+[source,cpp]
+----
+//------------------------------------------------------------------------------
+//"sc_reset::notify_processes"
+//
+// Notify processes that there is a change in the reset signal value.
+//------------------------------------------------------------------------------
+void sc_reset::notify_processes()
+{
+    bool                                    active;       // true if reset is active.
+    sc_reset_target*                        entry_p;      // reset entry processing.
+    std::vector<sc_reset_target>::size_type process_i;    // index of process resetting.
+    std::vector<sc_reset_target>::size_type process_n;    // # of processes to reset.
+    bool                                    value;        // value of our signal.
+
+    value = m_iface_p->read();
+    process_n = m_targets.size();
+    for ( process_i = 0; process_i < process_n; process_i++ )
+    {
+        entry_p = &m_targets[process_i];
+	active = ( entry_p->m_level == value );
+	entry_p->m_process_p->reset_changed( entry_p->m_async, active );
+    }
+}
+----
+
+这相当于从一个sc_reset中触发所有依赖这个sc_reset的process的reset_changed函数了。
+
+reset流程走到最后，着落点在于 `throw_reset` 这个函数。这是sc_process_b的接口函数，
+<<api::sc_thread_process::throw_reset, thread>>和
+<<api::sc_method_process::throw_reset, method>>都实现了自己的throw_reset逻辑。
+
+异步的reset请求，每请求一次，就调用一次 `throw_reset(true)`。同步的reset请求，每一对
+sync_reset_on和sync_reset_off，在sync_reset_on的时候，调用一次 `throw_reset(false)`。
+实际从thread和method的throw_reset逻辑来看，同步的reset请求，throw_reset只是：
+
+* 将 `m_throw_status` 设置为 `THROW_SYNC_RESET`
+* 对于thread，清除 `m_wait_cycle_n` 为0
+
+而没有其他的逻辑，这是因为对于同步reset，只需要标记 `m_throw_status` 为 `THROW_SYNC_RESET`
+就足够了。
+
+对于Method线程而言，将 `m_throw_status` 置为 `THROW_SYNC_RESET`，意味着在Method下次启动执行
+的时候，<<api::sc_process_b::semantics, sc_process_b的semantics>>中会trigger可能的
+reset event。但这种trigger reset event的事情，会在同步reset期间，每一次调度的时候都执行
+一遍，直到同步reset结束为止。
+
+
+=== 能够用作reset的类型
+
+默认情况下， `sc_signal_in_if<T>` 的 is_reset 会返回一个空指针，这意味着普通的sc_signal
+是无法作为reset的。从逻辑角度考虑这也是符合事实的，只有一根信号的sc_signal才能够作为
+reset信号。
+
+在SystemC中，只有 sc_signal<bool> footnote:[这意味着只有sc_signal<bool>才能作为reset信号]才实现了is_reset API返回一个sc_reset对象指针的功能：
+
+.src/sysc/communication/sc_signal.cpp
+[source,cpp]
+----
+template< sc_writer_policy POL >
+sc_reset*
+sc_signal<bool,POL>::is_reset() const
+{
+    sc_reset* result_p;
+    if ( !m_reset_p ) m_reset_p = new sc_reset( this );
+    result_p = m_reset_p;
+    return result_p;
+}
+----
+
+`sc_signal<sc_dt::sc_logic>` 不能作为reset信号，猜测是因为 `sc_logic` 是一个四值逻辑，不符合
+作为reset信号的二值逻辑要求。
+
+=== sc_reset_finder
+[[data::sc_reset_finder]]
+
 
 == process状态的迁移变化
 
@@ -1781,3 +2529,53 @@ m_next_posedge_event和m_next_negedge_event谁先发生，取决于sc_clock初�
 
 sc_clock虽然只是一个sc_signal，但是借助sc_spawn，获得了类似于sc_module
 这样的能够创建单独线程的能力，这就实现了sc_clock的自激励特性。
+
+=== sc_bind, sc_ref和sc_cref
+[[func::sc-bind]]
+[[func::sc_ref]]
+[[func::sc_cref]]
+
+为支持动态process功能，SystemC内置了如下3个辅助函数：
+
+* sc_bind
+* sc_ref
+* sc_cref
+
+.src/sysc/kernel/sc_dynamic_processes.h
+[source,cpp]
+----
+namespace sc_unnamed {
+using namespace std::placeholders;
+} // namespace sc_unnamed
+
+namespace sc_core {
+
+template<typename F, typename... Args>
+auto sc_bind( F&& f, Args&&... args )
+#  if SC_CPLUSPLUS < 201402L // explicit return type needed before C++14
+   -> decltype( std::bind(std::forward<F>(f), std::forward<Args>(args)...) )
+#  endif
+ { return std::bind( std::forward<F>(f), std::forward<Args>(args)... ); }
+
+template<typename T>
+auto sc_ref( T&& v )
+#  if SC_CPLUSPLUS < 201402L // explicit return type needed before C++14
+   -> decltype( std::ref(std::forward<T>(v) ) )
+#  endif
+ { return std::ref( std::forward<T>(v) ); }
+
+template<typename T>
+auto sc_cref( T&& v )
+#  if SC_CPLUSPLUS < 201402L // explicit return type needed before C++14
+   -> decltype( std::cref(std::forward<T>(v) ) )
+#  endif
+ { return std::cref( std::forward<T>(v) ); }
+
+} // namespace sc_core
+----
+
+从代码实现来看，对于支持C++11的编译器而言，这三个其实就是 `std::bind`， `std::ref`
+和 `std::cref` 的别名而已。
+
+sc_bind(可以认为就是std::bind)返回的是一个functor，天然重载了 `operator()` ，无需
+显式重载 `operator()` 。

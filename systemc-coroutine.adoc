@@ -105,7 +105,7 @@ void sc_thread_cor_fn( void* arg )
         }
         catch( const sc_unwind_exception& ex ) {
 	    ex.clear();
-            if ( ex.is_reset() ) continue;
+            if ( ex.is_reset() ) continue; <3>
         }
         catch( ... ) {
             sc_report* err_p = sc_handle_exception();
@@ -140,13 +140,15 @@ void sc_thread_cor_fn( void* arg )
 }
 ----
 <1> 这里将传入的 `args` cast成 `sc_thread_process*` 指针，因为在协程建立的时候，提供的参数就是 `this` 指针
-<2> `sc_process_b::semantic()` 函数会实际调用线程的主体部分代码，理论上协程函数执行到这里之后就
-永远不会返回
+<2> `sc_process_b::semantics()` 函数会实际调用线程的主体部分代码，理论上协程函数执行到这里之后就
+永远不会返回，除非semantic内部抛出异常，由接下来的异常处理部分分别处理
+<3> 如果抛出的异常是 `sc_unwind_exception`，并且指定是reset，则重新执行semantics函数，相当于
+从头开始执行thread的代码，不是reset的 `sc_unwind_exception` 会结束当前while循环，表现为本线程执行结束，实际是被kill掉了，参见<<api::sc_thread_process::suspend_me::kill, kill>> 部分
 
 这里的处理主要是考虑协程抛出异常，或者意外退出的时候，我们需要保证整个仿真器的工作正常.
 
 [[api::semantic]]
-在 `sc_process_b::semantic()` 函数的视线里，最核心的就是以下几行语句：
+在 `sc_process_b::semantics()` 函数的实现里，最核心的就是以下几行语句：
 
 .src/sysc/kernel/sc_process.h
 [source,cpp]
@@ -203,7 +205,7 @@ sc_process_b::sc_process_b( const char* name_p, bool is_thread, bool free_host,
 [NOTE]
 ====
 Method类型的线程是不需要 <<api::sc_thread_cor_fn, `sc_thread_cor_fn`>>的。对于一个
-Method线程而言，每次启动都相当于调用一次 <<api::semantic, `semantic`>>成员函数。
+Method线程而言，每次启动都相当于调用一次 <<api::semantic, `semantics`>>成员函数。
 ====
 
 至此，我们已经可以为一个Thread/CThread线程建立完整的协程参数。这个协程的启动顺序为:
@@ -228,7 +230,7 @@ Method线程而言，每次启动都相当于调用一次 <<api::semantic, `sema
 下一个协程。准确的来说， `sc_thread_process::suspend_me()` 部分真正实现了协程的切换：
 [[api::sc_thread_process::suspend_me]]
 
-.src/sysc/kernel/sc_thread_process.cpp
+.src/sysc/kernel/sc_thread_process.h
 [source,cpp]
 ----
 inline void sc_thread_process::suspend_me()
@@ -248,9 +250,54 @@ inline void sc_thread_process::suspend_me()
         DEBUG_MSG( DEBUG_NAME , this, "resuming thread");
     }
 
+    // IF THERE IS A THROW TO BE DONE FOR THIS PROCESS DO IT NOW:
+    //
+    // (1) Optimize THROW_NONE for speed as it is the normal case.
+    // (2) If this thread is already unwinding then suspend_me() was
+    //     called from the catch clause to throw an exception on another
+    //     process, so just go back to the catch clause.
+
+    if ( m_throw_status == THROW_NONE ) return;
+
+    if ( m_unwinding ) return;
+
+    switch( m_throw_status ) <3>
+    {
+      case THROW_ASYNC_RESET:
+      case THROW_SYNC_RESET:
+        DEBUG_MSG( DEBUG_NAME , this, "throwing reset for");
+	if ( m_reset_event_p ) m_reset_event_p->notify();
+        throw sc_unwind_exception( this, true ); <4>
+
+      case THROW_USER:
+        DEBUG_MSG( DEBUG_NAME, this, "invoking throw_it for");
+	m_throw_status = m_active_areset_n ? THROW_ASYNC_RESET :
+	                                  (m_active_reset_n ? THROW_SYNC_RESET :
+			                  THROW_NONE);
+        m_throw_helper_p->throw_it();
+	break;
+
+      case THROW_KILL:
+        DEBUG_MSG( DEBUG_NAME, this, "throwing kill for");
+	throw sc_unwind_exception( this, false ); <4>
+
+      default: // THROWING_NOW
+        if( !unwinding_preempted )
+            SC_REPORT_FATAL( SC_ID_INTERNAL_ERROR_
+                           , "unexpected unwinding/throw status" );
+        // may continue, if suppressed
+        m_throw_status = THROW_NONE;
+        DEBUG_MSG( DEBUG_NAME, this, "restarting thread");
+        break;
+    }
+}
 ----
 <1> 这里获取下一个协程的信息
 <2> 让渡出CPU控制权，让下一个协程能够执行
+<3> 这里处理在运行过程中，process的throw type被设置的情况
+[[api::sc_thread_process::suspend_me::kill]]
+<4> 对于reset/kill，其实就是抛出一个sc_unwind_exception的异常而已，对于reset，第二个参数为true，
+对于kill，第二个参数为false
 
 比较难以理解的就是 `yield` 函数的执行。当 `yield` 执行的时候，CPU的执行权立马转入下一个
 协程。只有当当前协程再次被调度的时候， `yield` 函数才会返回。

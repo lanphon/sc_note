@@ -1309,6 +1309,7 @@ typedef sc_out<bool>   sc_out_clk;
 
 == event_finder
 [[api::event_finder]]
+[[data::event_finder]]
 
 sc_event_finder数据结构的主要作用，就是为sc_port作为static sensitive源的时候，解决
 此时sc_port没有绑定具体的interface，因此无法指定sc_event的问题。sc_event_finder
