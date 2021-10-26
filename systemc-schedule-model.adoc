@@ -553,7 +553,7 @@ void sc_process_b::add_static_event( const sc_event& e )
 
 而在 `sc_process_b::add_static_event()` 函数的实现里，主要做了两件事情：
 
-1. 将event的指针保存到成员变量 `m_static_events` 内，一个event智慧宝存一次，避免多次调度
+1. 将event的指针保存到成员变量 `m_static_events` 内，一个event只会保存一次，避免多次调度
 2. 同时将自己本身cast成为合适的handle，调用event的 `add_static` 成员函数，注册到event中
 
 对于event而言:

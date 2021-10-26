@@ -322,7 +322,7 @@ process handle内部也保存了 `*m_posedge_event_p` 的指针。
 
 === 仿真过程中
 
-在运行中，由于sc_clock的自激励，在UPDATE PHASE，根据
+在运行中，由于sc_clock的<<usage::sc_spawn::sc_clock, 自激励>>，在UPDATE PHASE，根据
 primitive channel的framework, `*m_posedge_event_p` 的成员函数 `update` 函数被调用：
 
 .src/sysc/communication/sc_signal.cpp

@@ -291,6 +291,12 @@ wait/next_trigger函数中时，其定义的 `operator T const &()` 可以自动
 参数是， `m_trigger_type` 设置为 `AND_LIST` 。如果使用 `sc_event_or_list` 则设置
 为 `OR_LIST`
 
+在 `m_trigger_type` 为 `AND_LIST` 的时候，如果事件发生，但是 `m_event_count` 不为0，这种
+情况下 `trigger_dynamic` 直接返回true，从引发trigger_dynamic的事件的动态process列表中
+删除对这个process的引用。这样一来，如果引发trigger_dynamic的事件再次发生，就不会调用 `trigger_dynamic`
+了。这保证对于 `AND_LIST` 这种trigger type来讲，必须每个事件都发生一次，才可以最终trigger
+调度进程。
+
 === sc_event_or_list
 [[data::sc_event_or_list]]
 
@@ -701,7 +707,7 @@ sc_event::notify( const sc_time& t )
 ----
 
 带延时时间参数的notify是提供给用户的API,因为无法保证用户的使用方法,实现的时候需要考虑
-同一个事件被多次设定延时时间的场景.在SystemC内部，事件也得到广泛应用。在这种
+同一个事件被多次设定延时时间的场景. 在SystemC内部，事件也得到广泛应用。在这种
 受控的长江下，SystemC特意设计了两个notify函数，来简化相关代码的处理。
 
 [[api::sc_event::notify_internal]]

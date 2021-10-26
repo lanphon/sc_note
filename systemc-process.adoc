@@ -238,6 +238,22 @@ sc_process_b构造的时候， `m_state`的值为 `ps_normal` 。ps_normal是个
     bool                         m_unwinding;       // true if unwinding stack.
 ----
 
+==== 静态/动态事件
+
+Process的成员变量中，有多个与sc_event相关的部分，这些是process静态或者动态调度时所依赖
+的时间对象。Process使用哪些对象，要根据 `m_trigger_type` 判断：
+
+* trigger type为 `STATIC` ，使用 m_static_events 里所保存的事件对象
+* trigger type为 `EVENT` ，使用 m_event_p 所保存的事件对象
+* trigger type为 `OR_LIST` ，使用 m_event_list_p 所保存的事件列表对象
+* trigger type为 `AND_LIST` ，使用 m_event_list_p 所保存的事件列表对象，并辅助使用 m_event_count 记录事件发生的数目
+* trigger type为 `TIMEOUT` ，使用 m_timeout_event_p 所保存的事件对象
+* trigger type为 `EVENT_TIMEOUT` ，使用 m_event_p 和 m_timeout_event_p 两个事件对象
+* trigger type为 `OR_LIST_TIMEOUT` ，使用 m_event_list_p 和 m_timeout_event_p 两个对象
+* trigger type为 `AND_LIST_TIMEOUT` ，使用 m_event_list_p 和 m_timeout_event_p 两个对象，并辅助使用 m_event_count
+
+一种特定trigger type下，不使用的动态部分需要清空。
+
 === 重要成员函数
 
 [[api::sc_process_b::add_static_event]]
@@ -1453,3 +1469,315 @@ simc会将所有没有设定dont_initialize的method/thread都放入runnable列�
 如果在仿真开始之前线程没有被suspend掉了，这表明线程应当可以执行，放入runnable列表。最后
 就是仿真开始之前线程已经被suspend了，由于理论上此时线程应该被执行一次，但是却被suspend，按照
 suspend-resume的逻辑，需要标记其为ready to run，这样在resume的时候就可以执行起来了。
+
+== Dynamic Process
+
+动态的process，指的是在仿真开始之后（simulation阶段）创建出来的线程，这些线程一般使用
+sc_
+
+=== sc_spawn
+
+
+[[func::sc_spawn]]
+sc_spawn用以从给定的参数中生成一个SystemC级别的线程（可以是Method，也可以是Thread，但不会是
+CThread）。以下是sc_spawn的实现代码：
+
+.src/sysc/kernel/sc_spawn.h
+[source,cpp]
+----
+template <typename T>
+inline sc_process_handle sc_spawn( 
+    T object, 
+    const char* name_p = 0,
+    const sc_spawn_options* opt_p = 0)
+{
+    sc_simcontext*      context_p;
+    sc_spawn_object<T>* spawn_p;
+    
+    context_p = sc_get_curr_simcontext();
+    spawn_p = new sc_spawn_object<T>(object); <1>
+    if ( !opt_p || !opt_p->is_method() )
+    {
+            sc_process_handle thread_handle = context_p->create_thread_process( 
+            name_p, true,
+            SC_MAKE_FUNC_PTR(sc_spawn_object<T>,semantics), <2>
+            spawn_p, opt_p 
+        );
+        return thread_handle;
+    }
+    else
+    {
+            sc_process_handle method_handle = context_p->create_method_process( 
+            name_p, true,
+            SC_MAKE_FUNC_PTR(sc_spawn_object<T>,semantics), <2>
+            spawn_p, opt_p 
+        );
+        return method_handle;
+    }
+}
+----
+<1> 从类型T的对象object创建一个 `sc_spawn_object<T>` 对象
+<2> 设置Method/Thread的启动函数为刚才创建对象 spawn_p的 `semantics` 成员函数
+
+从这段代码可以看出，对于给定的对象 `object`，这里会新建一个类型为 `sc_spawn_object<T>`
+的对象，设置Method/Thread启动函数为这个新建的对象的 `semantics`。以下是 `sc_spawn_object<>`
+的定义：
+
+.src/sysc/kernel/sc_spawn.h
+[source,cpp]
+----
+template<typename T>
+class sc_spawn_object : public sc_process_host {
+  public:
+    sc_spawn_object( T object) : m_object(object)
+    {
+    }
+
+    virtual void semantics()
+    {
+        m_object();
+    }
+
+  protected:
+    T                        m_object; <1>
+};
+----
+<1> sc_spwan_object保存了对象的拷贝
+
+所以我们能看到， `semantics` 成员函数实际上调用的是 `m_object()` ，这意味着
+对象的类必须重载了 `operator()` 才可以。
+
+在sc_spawn的时候，我们可以看到，创建method/thread时候的第二个参数被设置为true，这与
+使用<<api::SC_THREAD, SC_THREAD>>创建Thread线程，使用<<api::SC_METHOD, SC_METHOD>>
+创建Method线程时都不同（那两个都将第二个参数设置为false）。这实际上是free_host参数，表明
+这个method/thread所依赖的对象是否是一个自由对象。如果是，那么在相应的sc_process_b
+析构的时候，会调用delete删除此对象。这也是为何在sc_spawn中，只new不delete却不会内存
+泄漏的原因：
+
+.src/sysc/kernel/sc_process.cpp
+[source,cpp]
+----
+sc_process_b::~sc_process_b()
+{
+
+    // REDIRECT ANY CHILDREN AS CHILDREN OF THE SIMULATION CONTEXT:
+
+    orphan_child_objects();
+
+
+    // DELETE SEMANTICS OBJECTS IF NEED BE:
+
+    if ( m_free_host ) delete m_semantics_host_p; <1>
+#   if !defined(SC_USE_MEMBER_FUNC_PTR) // Remove invocation object.
+        delete m_semantics_method_p;
+#   endif
+
+
+    // REMOVE ANY STRUCTURES THAT MAY HAVE BEEN BUILT:
+
+    delete m_last_report_p;
+    delete m_name_gen_p;
+    delete m_reset_event_p;
+    delete m_resume_event_p;
+    delete m_term_event_p;
+    delete m_throw_helper_p;
+    delete m_timeout_event_p;
+
+}
+----
+<1> 如果设置free host，在相应的sc_process_b析构的时候，会帮忙删除new出来的对象
+
+另一个值得观察的地方在于，sc_spawn创建Method/Thread的最后一个参数都不为空，而是可能
+给出参数。这个参数就是 `sc_spawn_options` 指针。之所以如此，是因为sc_spawn创建
+出来的method/thread，没有类似<<api::SC_THREAD, SC_THREAD>>和<<api::SC_METHOD, SC_METHOD>>
+那样可以辅助设置静态敏感事件、设定是否需要初始化等操作。为了支持这些，sc_spawn允许
+传入一个 `sc_spwan_options` 对象的指针，补上这些。
+
+例如，在sc_thread_process的构造函数中，有这么一段代码：
+
+.src/sysc/kernel/sc_thread_process.cpp
+[source,cpp]
+----
+    if (opt_p) {
+        m_dont_init = opt_p->m_dont_initialize;
+        if ( opt_p->m_stack_size ) m_stack_size = opt_p->m_stack_size;
+
+        // traverse event sensitivity list
+        for (unsigned int i = 0; i < opt_p->m_sensitive_events.size(); i++) {
+            sc_sensitive::make_static_sensitivity(
+                this, *opt_p->m_sensitive_events[i]);
+        }
+
+        // traverse port base sensitivity list
+        for ( unsigned int i = 0; i < opt_p->m_sensitive_port_bases.size(); i++)
+        {
+            sc_sensitive::make_static_sensitivity(
+                this, *opt_p->m_sensitive_port_bases[i]);
+        }
+
+        // traverse interface sensitivity list
+        for ( unsigned int i = 0; i < opt_p->m_sensitive_interfaces.size(); i++)
+        {
+            sc_sensitive::make_static_sensitivity(
+                this, *opt_p->m_sensitive_interfaces[i]);
+        }
+
+        // traverse event finder sensitivity list
+        for ( unsigned int i = 0; i < opt_p->m_sensitive_event_finders.size();
+            i++)
+        {
+            sc_sensitive::make_static_sensitivity(
+                this, *opt_p->m_sensitive_event_finders[i]);
+        }
+
+        // process any reset signal specification:
+
+	opt_p->specify_resets();
+
+    }
+
+    else
+    {
+        m_dont_init = false;
+    }
+----
+
+这里在 `opt_p` 非空，即外界传入一个有效的 `sc_spawn_options` 指针的时候，使用这个
+对象里的选项来初始化sc_thread_process的内容。sc_method_process的构造函数有着一样
+的实现。
+
+[[usage::sc_spawn::sc_clock]]
+举个sc_spawn使用的例子。在sc_clock的before_end_of_elaboration中，
+sc_clock就是用sc_spawn，创造出两个
+METHOD，分别用来实现上升沿事件和下降沿事件：
+
+.src/sysc/communication/sc_clock.cpp
+[source,cpp]
+----
+void sc_clock::before_end_of_elaboration()
+{
+    std::string gen_base;
+    sc_spawn_options posedge_options;	// Options for posedge process.
+    sc_spawn_options negedge_options;	// Options for negedge process.
+
+    posedge_options.spawn_method();
+    posedge_options.dont_initialize();
+    posedge_options.set_sensitivity(&m_next_posedge_event);
+    gen_base = basename();
+    gen_base += "_posedge_action";
+    sc_spawn(sc_clock_posedge_callback(this),
+	sc_gen_unique_name( gen_base.c_str() ), &posedge_options);
+
+    negedge_options.spawn_method();
+    negedge_options.dont_initialize();
+    negedge_options.set_sensitivity(&m_next_negedge_event);
+    gen_base = basename();
+    gen_base += "_negedge_action";
+    sc_spawn( sc_clock_negedge_callback(this),
+    	sc_gen_unique_name( gen_base.c_str() ), &negedge_options );
+}
+----
+
+这里sc_clock需要用 sc_spawn_options，指定：
+
+* 创造出来的是Method，而不是Thread(如果不指定，则默认创造Thread)
+* 无需初始化
+* 设置两个Method的静态敏感事件列表
+
+sc_spawn设置的两个Method，宿主是 `sc_clock_posedge_callback(this)` 和
+`sc_clock_negedge_callback(this)` 。两个都是临时对象，这不会带来问题，因为
+在 `sc_spawn_object<T>` 构造的时候，对象是**拷贝**而不是引用进来的。两个Method
+的函数体就是 `sc_clock_posedge_callback(this)` 和 `sc_clock_negedge_callback(this)`
+的 `operator()` :
+
+.src/sysc/communication/sc_clock.h
+[source,cpp]
+----
+
+class SC_API sc_clock_posedge_callback {
+public:
+    sc_clock_posedge_callback(sc_clock* target_p) : m_target_p(target_p) {}
+    inline void operator () () { m_target_p->posedge_action(); }
+  protected:
+    sc_clock* m_target_p;
+};
+
+class SC_API sc_clock_negedge_callback {
+  public:
+    sc_clock_negedge_callback(sc_clock* target_p) : m_target_p(target_p) {}
+    inline void operator () () { m_target_p->negedge_action(); }
+  protected:
+    sc_clock* m_target_p;
+};
+----
+
+所以实际上，当 `sc_clock` 的 m_next_posedge_event发生的时候，调用的是自己的 `posedge_action`
+函数。当 m_next_negedge_event发生的时候，调用的是自己的 `negedge_action` 函数。
+这也是这两个辅助类名字里的 `callback` 含义所在。
+
+.src/sysc/communication/sc_clock.h
+[source,cpp]
+----
+inline
+void
+sc_clock::posedge_action()
+{
+    m_next_negedge_event.notify_internal( m_negedge_time );
+	m_new_val = true;
+	request_update(); <1>
+}
+
+inline
+void
+sc_clock::negedge_action()
+{
+    m_next_posedge_event.notify_internal( m_posedge_time );
+	m_new_val = false;
+	request_update(); <1>
+}
+----
+<1> sc_clock继承自sc_signal，需要调用 `request_update` 在UPDATE PHASE更新值
+
+在 `posedge_action` 中，设置了延时 `m_negedge_time` 后，`m_next_negedge_event`
+发生。同样，在 `negedge_action` 中，设置了延时 `m_posedge_time` 后， `m_next_posedge_event`
+发生。如此，只要 m_next_posedge_event和m_next_negedge_event中有一个事件发生，sc_clock
+就可以自我驱动下去，实现了时钟的功能。
+
+m_next_posedge_event和m_next_negedge_event谁先发生，取决于sc_clock初始化的时候
+的设置。这是概念上，一个clock时钟初始时是0还是1的区别：初始为0，那么先发生上升沿事件，初始为1
+则先发生下降沿事件。例如，在sc_clock的某个构造函数中，有这么一段：
+
+.src/sysc/communication/sc_clock.h
+[source,cpp]
+----
+    init( sc_time( period_v_, period_tu_, simcontext() ),
+	  duty_cycle_,
+	  sc_time( start_time_v_, start_time_tu_, simcontext() ),
+	  posedge_first_ );
+
+    if( posedge_first_ ) {
+	// posedge first
+	m_next_posedge_event.notify_internal( m_start_time );
+    } else {
+	// negedge first
+	m_next_negedge_event.notify_internal( m_start_time );
+    }
+----
+
+先用 `init` 成员函数初始化值。接下来，如果要求现有上升沿，就让事件m_next_posedge_event
+发生，否则就先让 m_next_negedge_event发生。可以想象，在init中，也是根据是否先要上升沿
+决定当前值的：如果现有上升沿，初始值为0，否则为1：
+
+[source,cpp]
+----
+    if( posedge_first_ ) {
+	this->m_cur_val = false;
+	this->m_new_val = false;
+    } else {
+	this->m_cur_val = true;
+	this->m_new_val = true;
+    }
+----
+
+sc_clock虽然只是一个sc_signal，但是借助sc_spawn，获得了类似于sc_module
+这样的能够创建单独线程的能力，这就实现了sc_clock的自激励特性。
