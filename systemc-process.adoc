@@ -9,7 +9,9 @@ SystemC中的process
 
 在<<chap::schedule_model, SystemC调度模型>>
 一章中，我们已经可以了解SystemC是如何创建和使用Process的。
-本部分是对SystemC中Method/Thread/CThread的总结。
+本部分是对SystemC中Method/Thread/CThread的总结，并且
+总结了SystemC中process control部分的内容，重点介绍了reset process的实现，
+process的disable/enable，以及process的suspend/resume。
 
 在开始之前，我们需要厘清以下几个数据结构的关系：
 
@@ -24,6 +26,12 @@ SystemC中的process
 
 == sc_process_b
 [[data::sc_process_b]]
+
+sc_process_b 是所有三种process的基类，并且这是一个接口类，派生自sc_process_b
+的类需要实现对应到接口函数。
+
+sc_process_b 作为一个接口类，不只是简单定义了接口函数，而是实现了非常丰富的
+成员变量，以及相应的成员函数，以供继承类使用。
 
 === 成员变量
 
@@ -73,6 +81,10 @@ sc_process_b 继承自 `sc_object` ，除了继承得到的成员变量以外，
     sc_event*                    m_timeout_event_p; // timeout event.
     trigger_t                    m_trigger_type;    // type of trigger using.
     bool                         m_unwinding;       // true if unwinding stack.
+
+protected:
+    static sc_process_b* m_last_created_process_p; // Last process created.
+
 ----
 
 sc_process_b的成员变量比较复杂，这里我们按照这些成员变量的作用一个一个说。
@@ -85,7 +97,7 @@ sc_process_b的成员变量比较复杂，这里我们按照这些成员变量�
     int                         proc_id;
 ----
 
-然后是做reset处理的两个成员变量：
+然后是做reset处理的两个成员变量，扮演的角色是相应reset事件的计数器（异步reset和同步reset）：
 
 ----
     int                          m_active_areset_n; // number of aresets active.
@@ -93,7 +105,8 @@ sc_process_b的成员变量比较复杂，这里我们按照这些成员变量�
 ----
 
 单独的 `m_dont_init` 是用来表示process是否需要在最初执行一遍，参考
-<<api::dont_initialize, 控制METHOD线程是否初始化>>部分的使用：
+<<api::dont_initialize, 控制METHOD线程是否初始化>>部分的使用，Thread/CThread
+部分和Method线程初始化控制同理：
 
 ----
     bool                         m_dont_init;       // true: no initialize call.
@@ -140,7 +153,7 @@ METHOD，THREAD和CTHREAD：
     sc_curr_proc_kind            m_process_kind;    // type of process.
 ----
 
-成员变量 `m_references_n` 是用来做引用计数中，计数器角色的。这个看起来和动态线程
+成员变量 `m_references_n` 是用来做引用计数中，计数器角色的。这个动态线程
 中的资源自动释放机制有关：
 
 ----
@@ -156,13 +169,16 @@ METHOD，THREAD和CTHREAD：
 ----
 
 `m_runnable_p` 成员变量使得sc_process_b能够形成一个链表，链表中的每个节点
-都是一个进入runnable状态的线程：
+都是一个进入runnable状态的线程，可以在下一个delta cycle得到调度执行：
 
 ----
     sc_process_b*                m_runnable_p;      // sc_runnable link
 ----
 
-这一组成员变量就是sc_process_b所代表的线程的入口函数，以及基类指针：
+如果一个process的 `m_runnable_p` 指针为空，那么就意味着这process要么在当前delta cycle
+已经执行完毕了，所以从runnable列表中移出来，要么这个process在当前的delta cycle无需运行。
+
+接下来这一组成员变量就是sc_process_b所代表的线程的入口函数，以及基类指针：
 
 ----
     sc_process_host*             m_semantics_host_p;   // host for semantics.
@@ -214,6 +230,10 @@ sc_process_b构造的时候， `m_state`的值为 `ps_normal` 。ps_normal是个
 ----
 <1> 当sc_process_b的 `disconnect_process` 被调用的时候，m_term_event_p被notify
 
+`m_throw_status` 是标记本process应当抛出的类型。这个状态位会在reset/kill等被调用的时候标记，然后
+在合适的地方（method的run_process，以及thread的suspend_me）检查，并根据需要抛出异常。
+在reset/kill的时候，我们会着重介绍这个变量的使用。
+
 `m_timed_out` 表示process是否超时，目前没看到与之相关的代码：
 
 ----
@@ -232,18 +252,34 @@ sc_process_b构造的时候， `m_state`的值为 `ps_normal` 。ps_normal是个
     trigger_t                    m_trigger_type;    // type of trigger using.
 ----
 
+一个process只能是静态或者动态。当process处于STATIC状态时，使用 `m_static_events`
+里的静态事件trigger。如果process处于非STATIC的状态时，说明process动态trigger，这个
+时候 `trigger_static` 就会会略来自 `m_static_events` 所记录的sc_event的请求，只是
+简单返回。
+
 最后一个成员变量 `m_unwinding` 与异常处理的时候，堆栈展开有关：
 
 ----
     bool                         m_unwinding;       // true if unwinding stack.
 ----
 
+除了这些成员变量以外，sc_process_b还有一个静态成员变量， `m_last_created_process_p` ，
+这个静态成员变量在每次sc_process_b构建的时候，都会获得当前process的指针值。
+
+----
+protected:
+    static sc_process_b* m_last_created_process_p; // Last process created.
+----
+
+这个 `m_last_created_process_p` 是实现 `last_created_process_handle`
+的基石。
+
 ==== 静态/动态事件
 
 Process的成员变量中，有多个与sc_event相关的部分，这些是process静态或者动态调度时所依赖
 的时间对象。Process使用哪些对象，要根据 `m_trigger_type` 判断：
 
-* trigger type为 `STATIC` ，使用 m_static_events 里所保存的事件对象
+* trigger type为 `STATIC` ，使用 m_static_events 里所保存的事件对象，此时process是静态process，除此之外所有的trigger type都是动态process
 * trigger type为 `EVENT` ，使用 m_event_p 所保存的事件对象
 * trigger type为 `OR_LIST` ，使用 m_event_list_p 所保存的事件列表对象
 * trigger type为 `AND_LIST` ，使用 m_event_list_p 所保存的事件列表对象，并辅助使用 m_event_count 记录事件发生的数目
@@ -255,6 +291,8 @@ Process的成员变量中，有多个与sc_event相关的部分，这些是proce
 一种特定trigger type下，不使用的动态部分需要清空。
 
 === 重要成员函数
+
+sc_process_b还实现了非常多的基础函数，以供派生类使用。
 
 ==== semantics
 [[api::sc_process_b::semantics]]
@@ -271,7 +309,7 @@ inline void sc_process_b::semantics()
 
     // within this function, the process has a stack associated
 
-    scoped_flag scoped_stack_flag( m_has_stack );
+    scoped_flag scoped_stack_flag( m_has_stack ); <1>
 
     sc_assert( m_process_kind != SC_NO_PROC_ );
 
@@ -301,6 +339,8 @@ inline void sc_process_b::semantics()
 #   endif
 }
 ----
+<1> 在semantics开始，将m_has_stack设置为true，当semantics执行完毕的时候，`scoped_stack_flag` 
+的析构函数会自动设置m_has_stack为false，这意味着对于永远不会退出的Thread/Cthread而言，运行过程中时钟保持着m_has_stack为true，参见<<concept::process::control::kill::thread, thread的kill_process>>部分的应用
 
 在启动线程函数之前，semantics会首先检查变量 `m_throw_status`的值，
 看是否有需要抛出什么东西。如果需要异步或者同步reset，那就
@@ -325,7 +365,8 @@ void sc_process_b::trigger_reset_event()
 <<api::sc_process_handle::sync_reset_on, sync_reset_off>>
 被调用为止。这意味着，如果 `sync_reset_on` 和 `sync_reset_off`
 所定义的同步reset周期内，process被多次启动，那么每一次 `m_throw_status`
-都会保持 `THROW_SYNC_RESET` 不变，并且每次都会trigger reset event footnote:[这里假设
+都会保持 `THROW_SYNC_RESET` 不变，并且每次都会
+调用<<api::sc_process_b::trigger_reset_event, trigger reset event>> footnote:[这里假设
 没有异步reset]。
 
 
@@ -730,11 +771,16 @@ Method执行的时候都是完整执行函数体的。但是对于Thread/CThread
 关于reset_process的内容，请参考<<concept::process::reset, reset机制>>的
 <<api::sc_process_b::reset_process::impl, reset执行流程>>部分。
 
-==== reset_event
+==== reset_event and terminated_event
 [[api::sc_process_b::reset_event]]
 
 sc_process_b的 `reset_event` 返回一个与本process相关联的reset event的引用。如果
 成员变量 `m_reset_event_p` 为空，就新建一个kernel event：
+
+[[api::sc_process_b::terminated_event]]
+与 `reset_event` 类似的还有一个 `terminated_event` ，返回内部新建的terminated event
+的引用。当process调用<<api::sc_process_b::disconnect_process, disconnect_process>>
+的时候，terminated event被触发。
 
 .src/sysc/kernel/sc_process.cpp
 [source,cpp]
@@ -750,6 +796,130 @@ sc_event& sc_process_b::reset_event()
 ----
 
 这个sc_event可以用来用来做静态或者动态的调度事件使用，也可以用在其他event能够使用的场合。
+[[api::sc_process_b::trigger_reset_event]]
+
+在trigger_reset_event成员函数中，这个reset event可以被trigger:
+
+.src/sysc/kernel/sc_process.cpp
+[source,cpp]
+----
+void sc_process_b::trigger_reset_event()
+{
+    if ( m_reset_event_p ) m_reset_event_p->notify();
+}
+----
+
+==== last_created_process_handle
+
+last_created_process_handle是一个静态成员函数，用以返回最后一次创建的process
+的handle:
+
+.src/sysc/kernel/sc_process_handle.h
+[source,cpp]
+----
+//------------------------------------------------------------------------------
+//"sc_process_b::last_created_process_handle"
+//
+// This method returns the kind of this process.
+//------------------------------------------------------------------------------
+inline sc_process_handle sc_process_b::last_created_process_handle()
+{
+    return sc_process_handle(m_last_created_process_p);
+}
+----
+
+这里面主要借助了 sc_process_b 静态成员变量 m_last_created_process_p 。
+
+==== start_unwinding, clear_unwinding and is_unwinding
+
+start_unwinding, clear_unwinding, 以及 is_unwinding，这三个函数实际上
+只是操作 `m_unwinding` 这个状态变量：
+
+[[api::sc_process_b::start_unwinding]]
+.src/sysc/kernel/sc_process.h
+[source,cpp]
+----
+//------------------------------------------------------------------------------
+//"sc_process_b::start_unwinding"
+//
+// This method flags that this object instance should start unwinding if the
+// current throw status requires an unwind.
+//
+// Result is true if the flag is set, false if the flag is already set.
+//------------------------------------------------------------------------------
+inline bool sc_process_b::start_unwinding()
+{
+    if ( !m_unwinding )
+    {
+	switch( m_throw_status )
+	{
+	  case THROW_KILL:
+	  case THROW_ASYNC_RESET:
+	  case THROW_SYNC_RESET:
+	    m_unwinding = true;
+	     return true;
+	  case THROW_USER:
+	   default:
+	     break;
+	 }
+    }
+    return false;
+}
+----
+
+对于start_unwinding而言，只有THROW_KILL以及THROW_ASYNC_RESET/THROW_SYNC_RESET，即
+在kill或者异步/同步reset中，才需要展开调用栈，在其他情况下是不需要展开调用栈的。
+
+sc_process_b的start_unwinding只在构造sc_unwind_exception的时候被调用。如果构造
+sc_unwind_exception的process处于kill或者reset状态，process自己的m_unwinding
+就会被标记为true，否则保持原样：
+
+.src/sysc/kernel/sc_except.cpp
+[source,cpp]
+----
+sc_unwind_exception::sc_unwind_exception( sc_process_b* proc_p, bool is_reset )
+  : m_proc_p(proc_p), m_is_reset( is_reset )
+{
+  sc_assert( m_proc_p );
+  m_proc_p->start_unwinding();
+}
+----
+
+[[api::sc_process_b::clear_unwinding]]
+.src/sysc/kernel/sc_process.h
+[source,cpp]
+----
+//------------------------------------------------------------------------------
+//"sc_process_b::clear_unwinding"
+//
+// This method clears this object instance's throw status and always returns
+// true.
+//------------------------------------------------------------------------------
+inline bool sc_process_b::clear_unwinding()
+{
+    m_unwinding = false;
+    return true;
+}
+----
+
+而clear_unwinding只是简单将m_unwinding标志位置为false即可。
+
+[[api::sc_process_b::is_unwinding]]
+.src/sysc/kernel/sc_process.h
+[source,cpp]
+----
+//------------------------------------------------------------------------------
+//"sc_process_b::is_unwinding"
+//
+// This method returns true if this process is unwinding from a kill or reset.
+//------------------------------------------------------------------------------
+inline bool sc_process_b::is_unwinding() const
+{
+    return m_unwinding;
+}
+----
+
+is_unwinding则返回m_unwinding的状态。
 
 == sc_process_handle
 [[data::sc_process_handle]]
@@ -772,6 +942,33 @@ sc_process_handle内部只保存了一个指向基类sc_process_b指针的成员
 
 另外三个静态成员变量，是为了在 `m_target_p` 为空的情况下，某些需要返回
 对象引用的成员函数能够正确返回引用而添加的。
+
+=== 成员函数
+
+sc_process_handle的成员函数，绝大多数都是调用保存的 `m_target_p` 的相应同名或者
+近似名称的成员函数:
+
+* `disable` 调用了sc_process_b的<<concept::process::control::disable_enable, disable_process>>
+* `enable` 调用了sc_process_b的<<concept::process::control::disable_enable, enable_process>>
+* `dont_initialize` 调用了sc_process_b的<<api::sc_process_b::dont_initialize, dont_initialize>>
+* `dump_state` 调用了sc_process_b的dump_state
+* `dynamic` 调用了sc_process_b的dynamic
+* `get_child_events` 调用了sc_process_b的get_child_events
+* `get_child_objects` 调用了sc_process_b的get_child_objects
+* `get_parent_object` 调用了sc_process_b的get_parent_object
+* `is_unwinding` 调用了sc_process_b的<<api::sc_process_b::is_unwinding, is_unwinding>>
+* `kill` 调用了sc_process_b的<<concept::process::control::kill, kill_process>>
+* `name` 调用了sc_process_b的name
+* `basename` 调用了sc_process_b的basename
+* `proc_kind` 调用了sc_process_b的proc_kind
+* `reset` 调用了sc_process_b的<<api::sc_process_b::reset_process, reset_process>>
+* `reset_event` 调用了sc_process_b的<<api::sc_process_b::reset_event, reset_event>>
+* `resume` 调用了sc_process_b的<<api::sc_process_b::resume_process, resume_process>>
+* `suspend` 调用了sc_process_b的<<api::sc_process_b::suspend_process, suspend_process>>
+* `sync_reset_off` 调用了sc_process_b的<<api::sc_process_b::reset_process, reset_process>>
+* `sync_reset_on` 调用了sc_process_b的<<api::sc_process_b::reset_process, reset_process>>
+* `terminated` 调用了sc_process_b的terminated
+* `terminated_event` 调用了sc_process_b的<<api::sc_process_b::terminated_event, terminated_event>>
 
 == sc_thread_process
 [[data::sc_thread_process]]
@@ -806,6 +1003,230 @@ sc_process_handle内部只保存了一个指向基类sc_process_b指针的成员
 ==== throw_reset
 [[api::sc_thread_process::throw_reset]]
 
+throw_reset是 <<api::sc_process_b::reset_changed, reset_changed>> 成员函数中最终调用的
+部分。throw_reset是个接口函数，method和thread都需要实现自己的throw_reset函数。
+
+从名字上来看，throw_reset的本意在于抛出一个reset，但是以何种形式抛出，取决于SystemC的实现。实际上
+systemC在throw_reset里并不真正抛出reset，而是做了标记，等到需要的时候才抛出reset。以下是
+thread的throw_reset的实现：
+
+.src/sysc/kernel/sc_thread_process.cpp
+[source,cpp]
+----
+void sc_thread_process::throw_reset( bool async )
+{
+    // IF THE PROCESS IS CURRENTLY UNWINDING OR IS ALREADY A ZOMBIE
+    // IGNORE THE RESET:
+
+    if ( m_unwinding )
+    {
+        SC_REPORT_WARNING( SC_ID_PROCESS_ALREADY_UNWINDING_, name() );
+        return;
+    }
+
+    if ( m_state & ps_bit_zombie )
+        return;
+
+
+    // Set the throw type and clear any pending dynamic events:
+
+    m_throw_status = async ? THROW_ASYNC_RESET : THROW_SYNC_RESET;
+    m_wait_cycle_n = 0;
+
+    // If this is an asynchronous reset:
+    //
+    //   (a) Cancel any dynamic events
+    //   (b) Set the thread up for execution:
+    //         (i) If we are in the execution phase do it now.
+    //         (ii) If we are not queue it to execute next when we hit
+    //              the execution phase.
+
+    if ( async )
+    {
+        m_state = m_state & ~ps_bit_ready_to_run;
+        remove_dynamic_events();
+	if ( simcontext()->evaluation_phase() )
+	{
+            simcontext()->preempt_with( this );
+	}
+	else
+	{
+	    if ( is_runnable() )
+	        simcontext()->remove_runnable_thread(this);
+	    simcontext()->execute_thread_next(this);
+	}
+    }
+}
+----
+
+首先检查unwinding标志和state位，这里不允许一个已经unwinding的thread抛出reset，并且
+对于zombie的process没必要抛出reset。然后根据是否是异步异常来设置 m_throw_status，并
+清除m_wait_cycle_n变量。 m_wait_cycle_n变量记录的是thread线程动态wait还剩下的数目，
+如果thread线程被reset掉，就需要把这个值也重置为0.
+
+''''
+
+如果是同步reset，这里就无需多余的动作，可以直接返回了。同步的reset并不会在这里抛出异常，
+而是根据字面意思，会在process执行的时候**同步**抛出。这个位置在
+<<api::sc_thread_process::suspend_me, suspend_me>>的地方。回忆一下，对于
+一个thread process，如果调用了suspend_me，那么这个thread process会在yield
+的地方挂起，交出CPU执行权。等到这个thread process再次被调度执行的时候，才会从
+yield返回。这意味着，每次从yield返回之后的代码，就是thread process每次执行（除了
+初始化的第一次之外）的代码。以下是从yield返回值后的代码：
+
+.src/sysc/kernel/sc_thread_process.h
+[source,cpp]
+----
+    // IF THERE IS A THROW TO BE DONE FOR THIS PROCESS DO IT NOW:
+    //
+    // (1) Optimize THROW_NONE for speed as it is the normal case.
+    // (2) If this thread is already unwinding then suspend_me() was
+    //     called from the catch clause to throw an exception on another
+    //     process, so just go back to the catch clause.
+
+    if ( m_throw_status == THROW_NONE ) return;
+
+    if ( m_unwinding ) return;
+
+    switch( m_throw_status )
+    {
+      case THROW_ASYNC_RESET:
+      case THROW_SYNC_RESET:
+        DEBUG_MSG( DEBUG_NAME , this, "throwing reset for");
+	if ( m_reset_event_p ) m_reset_event_p->notify();
+        throw sc_unwind_exception( this, true ); <1>
+
+      case THROW_USER:
+        DEBUG_MSG( DEBUG_NAME, this, "invoking throw_it for");
+	m_throw_status = m_active_areset_n ? THROW_ASYNC_RESET :
+	                                  (m_active_reset_n ? THROW_SYNC_RESET :
+			                  THROW_NONE);
+        m_throw_helper_p->throw_it();
+	break;
+
+      case THROW_KILL:
+        DEBUG_MSG( DEBUG_NAME, this, "throwing kill for");
+	throw sc_unwind_exception( this, false ); <1>
+
+      default: // THROWING_NOW
+        if( !unwinding_preempted )
+            SC_REPORT_FATAL( SC_ID_INTERNAL_ERROR_
+                           , "unexpected unwinding/throw status" );
+        // may continue, if suppressed
+        m_throw_status = THROW_NONE;
+        DEBUG_MSG( DEBUG_NAME, this, "restarting thread");
+        break;
+    }
+----
+<1> 同步/异步reset和KILL时候的异常抛出类型一致，只不过参数不同
+
+如果thread process执行过程中没有设置抛出什么东西，或者已经unwinding了，suspend_me就可以直接结束执行。反之，如果 `m_throw_status` 被设置为需要同步或者异步reset，这里除了
+notify以下 <<api::sc_process_b::reset_event, reset event>>之外，主要就是
+抛出一个 `sc_unwind_exception(this, true)` 类型的异常了。
+
+同时我们也能看到，对于 m_throw_status 为THROW_KILL的情况，SystemC也是抛出
+一个 `sc_unwind_exception(this, false)` 类型的异常来结束处理的。第二个布尔
+型参数用来设置异常是否是reset:
+
+.src/sysc/kernel/sc_except.h
+[source,cpp]
+----
+  protected:
+    explicit
+    sc_unwind_exception( sc_process_b* target_p, bool is_reset = false );
+----
+
+
+
+抛出来的异常会在 <<api::sc_thread_cor_fn, sc_thread_cor_fn>> 这个自由函数
+中被catch住。 以下是相关的代码片段：
+
+.src/sysc/kernel/sc_thread_process.cpp
+[source,cpp]
+----
+    while( true ) {
+
+        try {
+            thread_h->semantics(); <2>
+        }
+        catch( sc_user ) {
+            continue;
+        }
+        catch( sc_halt ) {
+            ::std::cout << "Terminating process "
+                      << thread_h->name() << ::std::endl;
+        }
+        catch( const sc_unwind_exception& ex ) {
+	    ex.clear();
+            if ( ex.is_reset() ) continue;
+        }
+        catch( ... ) {
+            sc_report* err_p = sc_handle_exception();
+            thread_h->simcontext()->set_error( err_p );
+        }
+        break;
+    }
+----
+
+如果是 `sc_unwind_exception` 类型的异常，如果是reset，那么就继续执行当前的while
+循环，这等同于将thread线程函数 **重新** 执行一遍，来达到reset thread 线程的目的。
+如果不是reset，那就是kill了，此时走到后边的 `break` 会结束当前while循环，执行后续
+的kill process收尾动作。
+
+''''
+
+如果throw_reset的时候，要求是异步reset，那么在throw_reset内还需要做其他的动作。
+
+[source,cpp]
+----
+    if ( async )
+    {
+        m_state = m_state & ~ps_bit_ready_to_run;
+        remove_dynamic_events();
+	if ( simcontext()->evaluation_phase() )
+	{
+            simcontext()->preempt_with( this );
+	}
+	else
+	{
+	    if ( is_runnable() )
+	        simcontext()->remove_runnable_thread(this);
+	    simcontext()->execute_thread_next(this);
+	}
+    }
+----
+
+首先是将状态位的 ready to run清除掉，并移除所有动态的event。
+
+如果当前仿真在EVALUATE PHASE，这意味着reset请求的来源来自其中当前delta cycle
+中某一个runnable列表中的process。这种情况下调用simc的
+<<api::sc_simcontext::preempt_with::thread>>
+来立即执行即将被reset的process。
+
+如果当前仿真没有在EVALUATE PHASE，例如正在UPDATE PHASE，那么reset的请求来源
+不是某个process. 例如，某个signal作为reset，直到UPDATE PHASE值才会更新，并
+触发reset请求（这个例子存疑，需要仔细斟酌下是否有可能）。
+这种情况下先检查这个process是否在runnable中，如果在，则移除。移除的目的并不是为了
+不执行这个process，恰恰相反，接下来我们要调用 `execute_thread_next`
+将这个process加入到runnable的最前边（method或者thread列表第一个）。这样
+到了下一个delta cycle的时候，process将会是第一个得到执行的。
+
+执行process的结果和同步reset是一样的。
+
+''''
+
+异步reset和同步reset的区别在于：
+
+* 异步reset会尽可能早地将process reset掉，如果reset请求来自其它process，则使用
+<<api::sc_simcontext::preempt_with, preempt_with>>抢占当前process，进行reset。
+如果reset请求来自其它地方，则将本process放入runnable最前边，以使得下一个delta cycle本process就能够执行。
+* 同步reset只会将需要reset的proces标记好，等到下一次这个需要reset的process执行的时候，才
+reset
+
+==== throw_user
+[[api::sc_thread_process::throw_user]]
+类似throw_reset, throw_user抛出一个用户自定义的异常。
+
 == sc_method_process
 [[data::sc_method_process]]
 
@@ -813,7 +1234,7 @@ sc_process_handle内部只保存了一个指向基类sc_process_b指针的成员
 
 sc_method_process在基类 `sc_process_b` 的基础上增加了如下几个成员变量：
 
-.src/sysc/kernel/sc_thread_process.h
+.src/sysc/kernel/sc_method_process.h
 [source,cpp]
 ----
     sc_cor*                          m_cor;        // Thread's coroutine.
@@ -827,6 +1248,146 @@ sc_method_process在基类 `sc_process_b` 的基础上增加了如下几个成�
 
 ==== throw_reset
 [[api::sc_method_process::throw_reset]]
+
+对于method的throw_reset，其实现如下：
+
+.src/sysc/kernel/sc_method_process.cpp
+[source,cpp]
+----
+void sc_method_process::throw_reset( bool async )
+{
+    // IF THE PROCESS IS CURRENTLY UNWINDING OR IS ALREADY A ZOMBIE
+    // IGNORE THE RESET:
+
+    if ( m_unwinding )
+    {
+        SC_REPORT_WARNING( SC_ID_PROCESS_ALREADY_UNWINDING_, name() );
+        return;
+    }
+
+    if ( m_state & ps_bit_zombie )
+        return;
+
+    // Set the throw status and if its an asynchronous reset throw an
+    // exception:
+
+    m_throw_status = async ? THROW_ASYNC_RESET : THROW_SYNC_RESET;
+    if ( async )
+    {
+        remove_dynamic_events();
+	if ( sc_get_current_process_b() == this )
+	{
+	    DEBUG_MSG(DEBUG_NAME,this,"throw_reset: throwing exception");
+	    m_throw_status = THROW_ASYNC_RESET;
+	    throw sc_unwind_exception( this, true );
+	}
+	else
+	{
+	    DEBUG_MSG(DEBUG_NAME,this,
+	              "throw_reset: queueing this method for execution");
+	    simcontext()->preempt_with(this);
+	}
+    }
+}
+----
+
+大部分处理与<<api::sc_thread_process::throw_reset, thread的throw_reset>>一样，
+除了method不需要ready to run位清零（因为method不使用ready to run状态)。所不同之初在于
+异步reset的处理。
+
+如果是异步reset，并且当前本method正在执行，则直接抛出一个 `sc_unwind_exception`
+异常，并标识其为一个reset的异常。
+
+不同于thread借助协程来一个一个运行，method都是调度其 `run_process` 来直接执行的
+
+.src/sysc/kernel/sc_method_process.h
+[source,cpp]
+----
+inline bool sc_method_process::run_process()
+{
+    // Execute this object instance's semantics and catch any exceptions that
+    // are generated:
+
+    bool restart = false;
+    do {
+        try {
+            DEBUG_MSG(DEBUG_NAME,this,"executing method semantics");
+            semantics();
+            restart = false;
+        }
+        catch( sc_unwind_exception& ex ) {
+            DEBUG_MSG(DEBUG_NAME,this,"caught unwind exception");
+            ex.clear();
+            restart = ex.is_reset();
+        }
+        catch( ... ) {
+            sc_report* err_p = sc_handle_exception();
+            simcontext()->set_error( err_p );
+            return false;
+        }
+    } while( restart );
+
+    return true;
+}
+----
+
+throw_reset抛出来的异常会在这里被catch住，然后整个method会再一次执行一遍。
+
+如果当前process不是被reset的method process，那么就调用
+<<api::sc_simcontext::preempt_with::method, method重载形式的preempt_with>>，
+来抢占执行method。
+
+对于method而言，同步的reset似乎不需要特殊处理。因为对于method而言，每一次执行都是重新开始执行。
+
+==== run_process
+[[api::sc_method_process::run_process]]
+
+method的 `run_process` 函数是method的入口函数，例如，在simc的
+<<concept::crunch, crunch>>中，每一个method都是调用 run_process 来调度执行的:
+
+.src/sysc/kernel/sc_method_process.h
+[source,cpp]
+----
+// +----------------------------------------------------------------------------
+// |"sc_method_process::run_process"
+// | 
+// | This method executes this object instance, including fielding exceptions.
+// |
+// | Result is false if an unfielded exception occurred, true if not.
+// +----------------------------------------------------------------------------
+inline bool sc_method_process::run_process()
+{
+    // Execute this object instance's semantics and catch any exceptions that
+    // are generated:
+
+    bool restart = false;
+    do {
+        try {
+            DEBUG_MSG(DEBUG_NAME,this,"executing method semantics");
+            semantics();
+            restart = false;
+        }
+        catch( sc_unwind_exception& ex ) {
+            DEBUG_MSG(DEBUG_NAME,this,"caught unwind exception");
+            ex.clear();
+            restart = ex.is_reset();
+        }
+        catch( ... ) {
+            sc_report* err_p = sc_handle_exception();
+            simcontext()->set_error( err_p );
+            return false;
+        }
+    } while( restart );
+
+    return true;
+}
+----
+
+Method的调度执行相比于Thread比较简单，这是因为method的调度执行每一次都会执行完整的函数体，而没有
+Thread挂起/恢复机制。
+
+这里主要是处理调用method函数体(即semantics)过程中抛出的异常。除了reset会让函数体重新执行
+以外，其他的异常都会中断执行，并根据情况返回状态位。
 
 == sc_cthread_process
 [[data::sc_cthread_process]]
@@ -842,10 +1403,10 @@ Process中有一套非常复杂的reset机制，来仿真模拟实际的RTL rese
 
 === reset设置流程
 
+[[api::sc_module::async_reset_signal_is]]
 sc_module提供了如下几组API，用来实现process的reset逻辑指定：
 
 [[api::sc_module::reset_signal_is]]
-[[api::sc_module::async_reset_signal_is]]
 .src/sysc/kernel/sc_module.h
 [source,cpp]
 ----
@@ -953,14 +1514,16 @@ inline void sc_process_b::initially_in_reset( bool async )
 
 在SystemC中，reset大致可以分为两种：
 
-* 异步reset(asynchronous)，这种reset一般是与clock无关的reset信号
-* 同步reset(synchronous)，这种reset一般由clock驱动的signal发出来，与时钟同步
+* 异步reset(asynchronous)，这种reset一般是与clock无关的reset信号，要求reset信号到达之后，相应的
+process立马被reset
+* 同步reset(synchronous)，这种reset一般由clock驱动的signal发出来，与时钟同步，reset动作需要等到
+时钟沿才进行
 
 [[api::sc_process_handle::sync_reset_on]]
 对于一个sc_process_handle，提供了3个API，支持这两种reset机制：
 
-* `reset` 成员函数可以异步reset process
-* `sync_reset_off` 和 `sync_reset_on` 可以同步reset process
+* `sc_process_handle::reset` 成员函数可以异步reset process
+* `sc_process_handle::sync_reset_off` 和 `sc_process_handle::sync_reset_on` 可以同步reset process
 
 .src/sysc/kernel/sc_process_handle.h
 [source,cpp]
@@ -1268,6 +1831,66 @@ sc_signal<bool,POL>::is_reset() const
 === sc_reset_finder
 [[data::sc_reset_finder]]
 
+sc_reset_finder的设计思想和设计目的与sc_event_finder一致，都是在module中，sc_port/sc_export
+还没有绑定具体的sc_signal的时候，如何作为reset信号设置下来。
+
+如同sc_event_finder一样，sc_reset_finder是在sc_reset的静态成员函数reconcile_resets中
+完成决议，将具体的interace从sc_reset_finder中查找出来的。
+reconcile_resets则在simc的elabroate函数中被调用，这就保证了仿真开始之前，reset信号被真正
+设置了下去.
+
+以下是reconcile_resets的实现：
+[[api::sc_reset::reconcile_resets]]
+
+.src/sysc/kernel/sc_reset.cpp
+[source,cpp]
+----
+void sc_reset::reconcile_resets(sc_reset_finder* reset_finder_q)
+{
+    const sc_signal_in_if<bool>*  iface_p;      // Interface to reset signal.
+    sc_reset_finder*              next_p;       // Next finder to process.
+    sc_reset_finder*              now_p;        // Finder currently processing.
+    sc_reset_target               reset_target; // Target's reset entry.
+    sc_reset*                     reset_p;      // Reset object to use.
+
+    for ( now_p = reset_finder_q; now_p; now_p = next_p )
+    {
+        next_p = now_p->m_next_p;
+        if ( now_p->m_in_p )
+        {
+            iface_p = dynamic_cast<const sc_signal_in_if<bool>*>(
+                now_p->m_in_p->get_interface());
+        }
+        else if ( now_p->m_inout_p )
+        {
+            iface_p = dynamic_cast<const sc_signal_in_if<bool>*>(
+                now_p->m_inout_p->get_interface());
+        }
+        else
+        {
+            iface_p = dynamic_cast<const sc_signal_in_if<bool>*>(
+                now_p->m_out_p->get_interface());
+        }
+        sc_assert( iface_p != 0 );
+        reset_p = iface_p->is_reset();
+	now_p->m_target_p->m_resets.push_back(reset_p);
+	reset_target.m_async = now_p->m_async;
+	reset_target.m_level = now_p->m_level;
+	reset_target.m_process_p = now_p->m_target_p;
+	reset_p->m_targets.push_back(reset_target);
+	if ( iface_p->read() == now_p->m_level ) // see note 1 above
+	    now_p->m_target_p->initially_in_reset( now_p->m_async ); <1>
+        delete now_p;
+    }
+}
+----
+<1> 如果elaboration的时候，reset信号的值等于设定的reset值，这意味着仿真一开始process就处于
+reset状态了
+
+对于sc_in<bool>，sc_inout<bool>，可以在没有被绑定sc_signal<bool>的情况下，
+就可以使用<<api::sc_module::reset_signal_is, sc_module的reset_signal_is>>，
+设置其为process的reset信号。如果需要设置异步reset，可以使用
+<<api::sc_module::async_reset_signal_is, sc_module的async_reset_signal_is>>。
 
 == process状态的迁移变化
 
@@ -1471,9 +2094,9 @@ void sc_thread_process::disable_process(
 接下来，
 <<data::sc_process_b::m_state, m_state>>的ps_bit_disabled位被置位。如果disable process
 发生在仿真开始之前，同时会把m_state的ps_bit_ready_to_run置位，从simc中准备runnable
-的列表中移除这个process。如果disalbe process发生在仿真过程中，就无需其他动作，只需要继续执行下去。
+的列表中移除这个process。如果disable process发生在仿真过程中，就无需其他动作，只需要继续执行下去。
 如果disable_process的请求来自线程本身，disable_process并不会立即生效，而是会继续执行，直到
-此线程被阻塞朱，然后让渡出CPU执行权为止。
+此线程被阻塞住，然后让渡出CPU执行权为止。
 
 这么设计的原因还暂时不清楚。
 
@@ -2147,6 +2770,231 @@ suspend-resume机制不太适合用于clock驱动的process，因为使用clock�
 很那理解这种把suspend期间发生的事件推迟到resume时候的概念。suspend-resume
 一般用来抽象调度器。
 
+=== kill
+[[concept::process::control::kill]]
+
+与disable/enable, suspend/resume相比，kill一个process并没有与之配对的函数，这是因为
+一但一个Process被kill，就进入zombie状态，等待资源被回收。killed的process是无法
+恢复执行的。
+
+kill一个process主要通过sc_process_b的接口类kill_process实现，Thread和Method有着不同
+的实现方式。
+
+==== Thread/CThread
+[[concept::process::control::kill::thread]]
+
+Thread的kill_process实现如下：
+
+.src/sysc/kernel/sc_thread_process.cpp
+[source,cpp]
+----
+//------------------------------------------------------------------------------
+//"sc_thread_process::kill_process"
+//
+// This method removes this object instance from use. It calls the
+// sc_process_b::kill_process() method to perform low level clean up. Then
+// it aborts this process if it is the active process.
+//------------------------------------------------------------------------------
+void sc_thread_process::kill_process(sc_descendant_inclusion_info descendants )
+{
+
+    // IF THE SIMULATION HAS NOT BEEN INITIALIZED YET THAT IS AN ERROR:
+
+    if ( !sc_is_running() )
+    {
+        report_error( SC_ID_KILL_PROCESS_WHILE_UNITIALIZED_ );
+        return;
+    }
+
+    // IF NEEDED PROPOGATE THE KILL REQUEST THROUGH OUR DESCENDANTS:
+
+    if ( descendants == SC_INCLUDE_DESCENDANTS )
+    {
+        const std::vector<sc_object*> children = get_child_objects();
+        int                           child_n  = children.size();
+
+        for ( int child_i = 0; child_i < child_n; child_i++ )
+        {
+            sc_process_b* child_p = dynamic_cast<sc_process_b*>(children[child_i]);
+            if ( child_p ) child_p->kill_process(descendants);
+        }
+    }
+
+    // IF THE PROCESS IS CURRENTLY UNWINDING OR IS ALREADY A ZOMBIE
+    // IGNORE THE KILL:
+
+    if ( m_unwinding )
+    {
+        SC_REPORT_WARNING( SC_ID_PROCESS_ALREADY_UNWINDING_, name() );
+        return;
+    }
+
+    if ( m_state & ps_bit_zombie )
+        return;
+
+    // SET UP TO KILL THE PROCESS IF SIMULATION HAS STARTED:
+    //
+    // If the thread does not have a stack don't try the throw!
+
+    if ( sc_is_running() && m_has_stack )
+    {
+        m_throw_status = THROW_KILL;
+        m_wait_cycle_n = 0;
+        simcontext()->preempt_with(this);
+    }
+
+    // IF THE SIMULATION HAS NOT STARTED REMOVE TRACES OF OUR PROCESS FROM
+    // EVENT QUEUES, ETC.:
+
+    else
+    {
+        disconnect_process();
+    }
+}
+----
+
+函数实现最开始是一些简单的检查，以及按需求kill子对象。
+
+''''
+
+如果simulation正在跑，并且 m_has_stack为true（意味着thread已经开始运行，参见
+<<api::sc_process_b::semantics, semantics>>部分的设置），那么
+就将m_throw_status设置为THROW_KILL，m_wait_cycle_n清零，并调用
+<<api::sc_simcontext::preempt_with::thread, preempt_with>>立即调度执行当前的Thread线程。
+
+立即被调度执行的当前线程会从上次的suspend_me中的yield处返回，然后
+抛出一个sc_unwind_exception异常，设置为kill，参见
+<<api::sc_thread_process::suspend_me, suspend_me>>部分的介绍。
+
+抛出来的异常会在 <<api::sc_thread_cor_fn, `sc_thread_cor_fn`>> 中捕获，结束while
+循环，并执行如下代码：
+
+[source,cpp]
+----
+    sc_process_b*    active_p = sc_get_current_process_b();
+
+    // REMOVE ALL TRACES OF OUR THREAD FROM THE SIMULATORS DATA STRUCTURES:
+
+    thread_h->disconnect_process();
+
+    // IF WE AREN'T ACTIVE MAKE SURE WE WON'T EXECUTE:
+
+    if ( thread_h->next_runnable() != 0 )
+    {
+	simc_p->remove_runnable_thread(thread_h);
+    }
+
+    // IF WE ARE THE ACTIVE PROCESS ABORT OUR EXECUTION:
+
+
+    if ( active_p == (sc_process_b*)thread_h )
+    {
+
+        sc_core::sc_cor* x = simc_p->next_cor();
+	simc_p->cor_pkg()->abort( x );
+    }
+----
+
+如果是因为kill原因导致sc_thread_cor_fn中的while退出，那么这里的 `active_p`
+的值应当等于当前线程的值 `thread_h`。这里主要调用了线程的
+<<api::sc_process_b::disconnect_process, disconnect_process>>函数。如果当前
+thread在runnable列表中，则从中移除。接下来完全结束(abort)当前线程的执行，转而调度
+下一个线程。
+
+这样一来，就完成了simulation过程中，一个已经开始运行并挂起的thread的kill动作。
+
+''''
+
+如果被kill的process并没有执行过（因而也没有被挂起），或者simulation已经结束，这里只需要简单调用
+process的<<api::sc_process_b::disconnect_process, disconnect_process>>
+函数即可。
+
+==== Method
+[[concept::process::control::kill::method]]
+
+Method的kill_process相比而言，实现比较简单：
+
+.src/sysc/kernel/sc_method_process.cpp
+[source,cpp]
+----
+//------------------------------------------------------------------------------
+//"sc_method_process::kill_process"
+//
+// This method removes throws a kill for this object instance. It calls the
+// sc_process_b::kill_process() method to perform low level clean up.
+//------------------------------------------------------------------------------
+void sc_method_process::kill_process(sc_descendant_inclusion_info descendants)
+{
+
+    // IF THE SIMULATION HAS NOT BEEN INITIALIZED YET THAT IS AN ERROR:
+
+    if ( !sc_is_running() )
+    {
+        report_error( SC_ID_KILL_PROCESS_WHILE_UNITIALIZED_ );
+        return;
+    }
+
+    // IF NEEDED, PROPOGATE THE KILL REQUEST THROUGH OUR DESCENDANTS:
+
+    if ( descendants == SC_INCLUDE_DESCENDANTS )
+    {
+        const std::vector<sc_object*> children = get_child_objects();
+        int                           child_n  = children.size();
+
+        for ( int child_i = 0; child_i < child_n; child_i++ )
+        {
+            sc_process_b* child_p = dynamic_cast<sc_process_b*>(children[child_i]);
+            if ( child_p ) child_p->kill_process(descendants);
+        }
+    }
+
+    // IF THE PROCESS IS CURRENTLY UNWINDING OR IS ALREADY A ZOMBIE
+    // IGNORE THE KILL:
+
+    if ( m_unwinding )
+    {
+        SC_REPORT_WARNING( SC_ID_PROCESS_ALREADY_UNWINDING_, name() );
+        return;
+    }
+
+    if ( m_state & ps_bit_zombie )
+        return;
+
+
+    // REMOVE OUR PROCESS FROM EVENTS, ETC., AND IF ITS THE ACTIVE PROCESS
+    // THROW ITS KILL.
+    //
+    // Note we set the throw status to kill regardless if we throw or not.
+    // That lets check_for_throws stumble across it if we were in the call
+    // chain when the kill call occurred.
+
+    if ( next_runnable() != 0 )
+        simcontext()->remove_runnable_method( this );
+    disconnect_process();
+
+    m_throw_status = THROW_KILL;
+    if ( sc_get_current_process_b() == this )
+    {
+        throw sc_unwind_exception( this, false );
+    }
+}
+----
+
+函数体之前部分比较简单，和thread的处理基本一致。由于Method不存在挂起的问题，所以在从
+runnable中移除可能的method之后，立即调用<<api::sc_process_b::disconnect_process, disconnect_process>>。接下来将m_throw_status置为THROW_KILL。
+
+如果当前运行的线程就是这个method，即kill请求来源自本线程，直接抛出一个sc_unwind_exception。这个
+异常会在<<api::sc_method_process::run_process, method的run_process>>
+中被catch住，**立即**结束当前的执行。并且由于接下来要分析的原因，这个method永远也不会被调度执行。
+
+如果当前运行的线程不是要被kill的线程，那么要被kill的线程只是被标记为THROW_KILL。
+由于被kill的线程已经被从当前runnable list中移除，因此当前delta cycle之后不会执行这个被kill
+的method线程了。
+同时被kill的线程
+调用了disconnect_process，这个method未来也不会再被调度执行了。这就达到了kill method process
+的目的。
+
+
 === prepare_to_simulate中的状态判断
 [[use::process::control::prepare_to_simulate]]
 
@@ -2579,3 +3427,348 @@ auto sc_cref( T&& v )
 
 sc_bind(可以认为就是std::bind)返回的是一个functor，天然重载了 `operator()` ，无需
 显式重载 `operator()` 。
+
+== preempt_with
+[[api::sc_simcontext::preempt_with]]
+
+preempt_with实现了“抢占”执行的概念，实际上SystemC仍然使用协程调度的方式，所谓的抢占
+执行，只不过是把当前的process现场保存下来，然后调度需要抢占执行的协程而已。
+
+
+根据要抢占执行的对象不同，preempt_with分为两种重载形式：
+
+* 要抢占执行的是thread
+* 要抢占执行的是method
+
+=== thread重载形式
+[[api::sc_simcontext::preempt_with::thread]]
+
+当要抢占执行的是一个thread的时候，分三种情况：
+
+* 被抢占的process是一个method
+* 被抢占的process是其他thread
+* 被抢占的process就是要抢占的thread
+
+.src/sysc/kernel/sc_simcontext_int.h
+[source,cpp]
+----
+// +----------------------------------------------------------------------------
+// |"sc_simcontext::preempt_with"
+// |
+// | This method executes the supplied thread immediately, suspending the
+// | caller. After executing the supplied thread the caller's execution will
+// | be restored. It is used to allow a thread to immediately throw an
+// | exception, e.g., when the thread's kill_process() method was called.
+// | There are three cases to consider:
+// |   (1) The caller is a method, e.g., murder by method.
+// |   (2) The caller is another thread instance, e.g., murder by thread.
+// |   (3) The caller is this thread instance, e.g., suicide.
+// |
+// | Arguments:
+// |     thread_h -> thread to be executed.
+// +----------------------------------------------------------------------------
+inline
+void
+sc_simcontext::preempt_with( sc_thread_handle thread_h )
+{
+    sc_thread_handle  active_p;    // active thread or null.
+    sc_curr_proc_info caller_info; // process info for caller.
+
+    // Determine the active process and take the thread to be run off the
+    // run queue, if its there, since we will be explicitly causing its
+    // execution.
+
+    active_p = dynamic_cast<sc_thread_handle>(sc_get_current_process_b()); <1>
+    if ( thread_h->next_runnable() != NULL ) <2>
+	remove_runnable_thread( thread_h );
+
+    // THE CALLER IS A METHOD:
+    //
+    //   (a) Set the current process information to our thread.
+    //   (b) If the method was called by an invoker thread push that thread
+    //       onto the front of the run queue, this will cause the method
+    //       to be resumed after this thread waits.
+    //   (c) Invoke our thread directly by-passing the run queue.
+    //   (d) Restore the process info to the caller.
+    //   (e) Check to see if the calling method should throw an exception
+    //       because of activity that occurred during the preemption.
+
+    if ( active_p == NULL ) <3>
+    {
+	std::vector<sc_thread_handle>* invokers_p;  // active invokers stack.
+	sc_thread_handle           invoke_thread_p; // latest invocation thread.
+        sc_method_handle           method_p;        // active method.
+
+	method_p = dynamic_cast<sc_method_handle>(sc_get_current_process_b());
+	invokers_p = &get_active_invokers();
+	caller_info = m_curr_proc_info;
+	if ( invokers_p->size() != 0 )
+	{
+	    invoke_thread_p = invokers_p->back();
+	    DEBUG_MSG( DEBUG_NAME, invoke_thread_p,
+	        "queueing invocation thread to execute next" );
+	    execute_thread_next(invoke_thread_p);
+	}
+        DEBUG_MSG( DEBUG_NAME, thread_h, "preempting method with thread" );
+	set_curr_proc( (sc_process_b*)thread_h );
+	m_cor_pkg->yield( thread_h->m_cor_p );
+	m_curr_proc_info = caller_info;
+        DEBUG_MSG(DEBUG_NAME, thread_h, "back from preempting method w/thread");
+	method_p->check_for_throws();
+    }
+
+    // CALLER IS A THREAD, BUT NOT THE THREAD TO BE RUN:
+    //
+    //   (a) Push the calling thread onto the front of the runnable queue
+    //       so it be the first thread to be run after this thread.
+    //   (b) Push the thread to be run onto the front of the runnable queue so
+    //       it will execute when we suspend the calling thread.
+    //   (c) Suspend the active thread.
+
+    else if ( active_p != thread_h )
+    {
+        DEBUG_MSG( DEBUG_NAME, thread_h,
+	           "preempting active thread with thread" );
+        execute_thread_next( active_p );
+	execute_thread_next( thread_h );
+	active_p->suspend_me();
+    }
+
+    // CALLER IS THE THREAD TO BE RUN:
+    //
+    //   (a) Push the thread to be run onto the front of the runnable queue so
+    //       it will execute when we suspend the calling thread.
+    //   (b) Suspend the active thread.
+
+    else
+    {
+        DEBUG_MSG(DEBUG_NAME,thread_h,"self preemption of active thread");
+	execute_thread_next( thread_h );
+	active_p->suspend_me();
+    }
+}
+----
+<1> active_p保存的就是被抢占的process的handle
+<2> 要抢占的process的next_runnable不为空，意味着被抢占的process就在接下来的runnable list中等待被调度执行，这种情况下需要从runnable list中先将被抢占的process移除出去
+<3> 如果强制cast成 sc_thread_process指针，获得一个空指针，那么当前的process一定是一个method，因为preempt_with只能从process中被调用，不能从其他地方被调用
+
+''''
+
+如果被抢占的是一个method，执行如下代码序列：
+
+[source,cpp]
+----
+	invokers_p = &get_active_invokers();
+	caller_info = m_curr_proc_info; <1>
+	if ( invokers_p->size() != 0 )
+	{
+	    invoke_thread_p = invokers_p->back();
+	    DEBUG_MSG( DEBUG_NAME, invoke_thread_p,
+	        "queueing invocation thread to execute next" );
+	    execute_thread_next(invoke_thread_p);
+	}
+        DEBUG_MSG( DEBUG_NAME, thread_h, "preempting method with thread" );
+	set_curr_proc( (sc_process_b*)thread_h ); <2>
+	m_cor_pkg->yield( thread_h->m_cor_p ); <3>
+	m_curr_proc_info = caller_info; <4>
+        DEBUG_MSG(DEBUG_NAME, thread_h, "back from preempting method w/thread");
+	method_p->check_for_throws(); <5>
+----
+<1> 保存被抢占的method process的information
+<2> 设置抢占的thread为当前process
+<3> 调度执行抢占的thread
+<4> 恢复method process的信息
+<5> 检查method
+
+抢占的thread需要执行，就必须使用协程调度的方式。抢占的thread被恢复执行的时候，从
+上一次的suspend_me处返回，检查thread本身的状态已决定是否需要抛出异常。
+例如，在从<<api::sc_thread_process::throw_reset, thread线程的throw_reset>>
+中，首先将线程 m_throw_status 置位同步或者异步reset，然后如果是异步reset，并且simulation
+正在EVALUATE阶段，调用 preempt_with，这样一来当前线程会立马
+从上次阻塞的 suspend_me恢复过来，检查得到需要抛出一个reset形式的异常。这个异常在
+<<api::sc_thread_cor_fn, sc_thread_cor_fn>>中被捕获，从而重新运行
+此thread线程，直到遇到suspend_me为止。而thread被重新执行，遇到suspend_m需要挂起，
+需要恢复的地方是simc中下一个coroutine，下一个coroutine会是哪个？这点存疑。
+
+理论上来说，一个method process，被thread process抢占，这个method process调用
+`m_cor_pkg->yield(thread_h->m_cor_p);` 之后，thread process得到执行。这个
+thread process应当在被阻塞的时候，将执行权交回给method process才对。但目前看来
+这个thread process在阻塞的时候，suspend_me里，会寻找下一个runnable 的 thread来执行，
+直到所有runnable thread process都执行完毕，才将执行权返回给method process。
+这意味着不止有被reset的线程得到执行，所有其他runnable且未被执行的thread也都会被
+执行，这点有点不太符合常理。如果SyseteC希望保证只有被reset的线程重新执行，那么是如何
+做到的呢？
+
+
+''''
+
+如果被抢占的process是一个其他的thread process，则执行如下代码：
+
+[source,cpp]
+----
+        DEBUG_MSG( DEBUG_NAME, thread_h,
+	           "preempting active thread with thread" );
+        execute_thread_next( active_p );
+	execute_thread_next( thread_h );
+	active_p->suspend_me();
+----
+
+`execute_thread_next` 可以将一个thread process放入runnable list的最前边。
+这里首先将被抢占的thread process放回runnable，然后将要抢占的thread process放入runnable。
+接下来调用被抢占的 thread的suspend_me，被抢占thread被挂起，simc接下来立马执行
+要抢占的thread process，并在阻塞后，继续调度下一个runnable的thread process。由于
+runnable中，被抢占的thread process就在要抢占的thread process之后，这回继续执行
+被抢占的thread process，即被抢占的thread process调用的suspend_me在这里返回。
+
+这样达到的效果就是，要抢占的thread在被抢占的thread suspend_me之后得到一次执行机会，
+并在要抢占的thread阻塞后，恢复到被抢占的thread的suspend_me处，返回，继续执行。
+
+''''
+
+如果被抢占的process就是本thread process，则执行如下代码：
+
+[source,cpp]
+----
+        DEBUG_MSG(DEBUG_NAME,thread_h,"self preemption of active thread");
+	execute_thread_next( thread_h );
+	active_p->suspend_me();
+----
+
+将本thread放入runnable最开始，接下来的suspend_me。但这次，suspend_me并不会把
+本thread挂起，因为在suspend_me中：
+
+[source,cpp]
+----
+    sc_cor*         cor_p = simc_p->next_cor();
+
+    // do not switch, if we're about to execute next (e.g. suicide)
+
+    if( m_cor_p != cor_p )
+    {
+        DEBUG_MSG( DEBUG_NAME , this, "suspending thread");
+        simc_p->cor_pkg()->yield( cor_p );
+        DEBUG_MSG( DEBUG_NAME , this, "resuming thread");
+    }
+----
+
+只有接下来要执行的线程不等于当前线程，才会挂起当前线程，执行下一个线程。如果当前线程
+等于接下来要执行的线程，这里只会简单走过去，进入接下来的suspend_me中的 `m_throw_status`
+判断。如果m_throw_status显示需要一个同步或者异步的reset，那么这里就会抛出一个异常，
+在<<api::sc_thread_cor_fn, sc_thread_cor_fn>>中截获，从头开始执行此线程。
+
+所以，如果是线程抢占本线程，在reset的情况下 `active_p->suspend_me()` 从不会返回。
+这表现为一个线程如果在内部reset了自己, reset立马生效，之后的代码不会执行。
+
+这个行为需要确认。
+
+=== method重载形式
+[[api::sc_simcontext::preempt_with::method]]
+
+method重载形式的preempt_with的代码如下：
+
+.src/sysc/kernel/sc_simcontext.cpp
+[source,cpp]
+----
+// +----------------------------------------------------------------------------
+// |"sc_simcontext::preempt_with"
+// |
+// | This method executes the supplied method immediately, suspending the
+// | caller. After executing the supplied method the caller's execution will
+// | be restored. It is used to allow a method to immediately throw an
+// | exception, e.g., when the method's kill_process() method was called.
+// | There are three cases to consider:
+// |   (1) The caller is a method, e.g., murder by method.
+// |   (2) The caller is a thread instance, e.g., murder by thread.
+// |   (3) The caller is this method instance, e.g., suicide.
+// |
+// | Arguments:
+// |     method_h -> method to be executed.
+// +----------------------------------------------------------------------------
+void
+sc_simcontext::preempt_with( sc_method_handle method_h )
+{
+    sc_curr_proc_info caller_info;     // process info for caller.
+    sc_method_handle  active_method_h; // active method or null.
+    sc_thread_handle  active_thread_h; // active thread or null.
+
+    // Determine the active process and take the thread to be run off the
+    // run queue, if its there, since we will be explicitly causing its
+    // execution.
+
+    active_method_h = dynamic_cast<sc_method_handle>(sc_get_current_process_b());
+    active_thread_h = dynamic_cast<sc_thread_handle>(sc_get_current_process_b());
+    if ( method_h->next_runnable() != NULL )
+	remove_runnable_method( method_h );
+
+    // CALLER IS THE METHOD TO BE RUN:
+    //
+    // Should never get here, ignore it unless we are debugging.
+
+    if ( method_h == active_method_h )
+    {
+        DEBUG_MSG(DEBUG_NAME,method_h,"self preemption of active method");
+    }
+
+    // THE CALLER IS A METHOD:
+    //
+    //   (a) Set the current process information to our method.
+    //   (b) Invoke our method directly by-passing the run queue.
+    //   (c) Restore the process info to the caller.
+    //   (d) Check to see if the calling method should throw an exception
+    //       because of activity that occurred during the preemption.
+
+    else if ( active_method_h != NULL )
+    {
+	caller_info = m_curr_proc_info;
+        DEBUG_MSG( DEBUG_NAME, method_h,
+	           "preempting active method with method" );
+	sc_get_curr_simcontext()->set_curr_proc( (sc_process_b*)method_h );
+	method_h->run_process();
+	sc_get_curr_simcontext()->set_curr_proc((sc_process_b*)active_method_h);
+	active_method_h->check_for_throws();
+    }
+
+    // CALLER IS A THREAD:
+    //
+    //   (a) Use an invocation thread to execute the method.
+
+    else if ( active_thread_h != NULL )
+    {
+        DEBUG_MSG( DEBUG_NAME, method_h,
+	           "preempting active thread with method" );
+	m_method_invoker_p->invoke_method(method_h);
+    }
+
+    // CALLER IS THE SIMULATOR:
+    //
+    // That is not allowed.
+
+    else
+    {
+	caller_info = m_curr_proc_info;
+        DEBUG_MSG( DEBUG_NAME, method_h,
+	           "preempting no active process with method" );
+	sc_get_curr_simcontext()->set_curr_proc( (sc_process_b*)method_h );
+	method_h->run_process();
+	m_curr_proc_info = caller_info;
+    }
+}
+----
+
+method的抢占执行相对来说还是比较加单的，因为method不需要协程的支持，每次method
+运行都是一次完整的运行。
+
+这里我们重点关注method抢占thread的执行：
+
+[source,cpp]
+----
+    else if ( active_thread_h != NULL )
+    {
+        DEBUG_MSG( DEBUG_NAME, method_h,
+	           "preempting active thread with method" );
+	m_method_invoker_p->invoke_method(method_h);
+    }
+----
+
+这里为了在执行thread的时候，抢占执行一个method，而设计了一个 `m_method_invoker_p`
+的方式。
