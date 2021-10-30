@@ -1389,13 +1389,74 @@ Thread挂起/恢复机制。
 这里主要是处理调用method函数体(即semantics)过程中抛出的异常。除了reset会让函数体重新执行
 以外，其他的异常都会中断执行，并根据情况返回状态位。
 
+==== check_for_throws
+[[api::sc_method_process::check_for_throws]]
+
+method process的check_for_throws主要用在<<api::sc_simcontext::preempt_with, simc的preempt_with>>中。当一个Method正在运行时，如果被抢占执行，无论抢占执行的是另一个Method，还是
+另一个Thread，都有可能在抢占执行的过程中改变被抢占的Method的对象，例如，调用被抢占method的
+sc_process_handle的kill/reset等。所以抢占执行的method/thread执行完毕之后，method需要检查
+自己的状态，看是否有需要抛出异常：
+
+.src/sysc/kernel/sc_method_process.h
+[source,cpp]
+----
+// +----------------------------------------------------------------------------
+// |"sc_method_process::check_for_throws"
+// |
+// | This method checks to see if this method process should throw an exception
+// | or not. It is called from sc_simcontext::preempt_with() to see if the
+// | thread that was executed during the preemption did a kill or other
+// | manipulation on this object instance that requires it to throw an
+// | exception.
+// +----------------------------------------------------------------------------
+void sc_method_process::check_for_throws()
+{
+    if ( !m_unwinding )
+    {
+	switch( m_throw_status )
+	{
+	  case THROW_ASYNC_RESET:
+	    simcontext()->preempt_with(this);
+	    break;
+          case THROW_KILL:
+	    throw sc_unwind_exception( this, false );
+	  default:
+	    break;
+	}
+    }
+}
+----
+
+目前看在被抢占执行的时候，method只会被改变为异步reset，或者kill。因此这里只处理这两种
+情况。
+
+check_for_throws的具体设计用途，以及为什么没有同步reset，目前还不是很清楚。从注释来看，似乎
+的确是考虑到被抢占时，抢占的thread可能对被抢占的method做出kill/reset等动作而导致的。
+
 == sc_cthread_process
 [[data::sc_cthread_process]]
+
+sc_cthread_process是一种特殊的thread_process。cthread中的c，意思是clock-drived。
+sc_cthread_process直接继承自sc_thread_process。
+
+sc_cthread_process概念的提出是在因为在SystemC早期版本中，sc_thread_process设计不完善的时候，为了补充
+时钟驱动的能力，而设计的。目前sc_cthread_process的能力已经可以被sc_thread_process完全取代了。
+相比于sc_thread_process，使用sc_cthread_process建模目前为数不多的优点只有：
+
+* API上有约束，例如必须通过特定形式设置时钟上升沿/下降沿敏感
+* 默认无需初始化，并且不能使用 dont_initialize来设置(会报出warning)
+
+在目前最新的SystemC版本中，建议使用sc_thread_process代替sc_cthread_process。sc_cthread_process
+概念只作为兼容性部分，保留在最新的SystemC代码中。
 
 === 成员变量
 
 sc_cthread_process在基类 `sc_thread_process` 基础上，没有新增加其他的
 成员变量。
+
+=== 成员函数
+
+sc_cthread_process并没有新增比较重要的成员函数。
 
 == reset机制
 
@@ -3578,7 +3639,7 @@ sc_simcontext::preempt_with( sc_thread_handle thread_h )
 <2> 设置抢占的thread为当前process
 <3> 调度执行抢占的thread
 <4> 恢复method process的信息
-<5> 检查method
+<5> 检查method是否需要抛出异常，因为抢占执行的thread执行过程中有可能改变被抢占的method的状态的
 
 抢占的thread需要执行，就必须使用协程调度的方式。抢占的thread被恢复执行的时候，从
 上一次的suspend_me处返回，检查thread本身的状态已决定是否需要抛出异常。
