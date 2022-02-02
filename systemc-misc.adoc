@@ -386,3 +386,17 @@ simc delta event列表中的事件都会调度其trigger函数，从而调度pro
 函数，将这个process handle放入下一个delta cycle的runnable列表中。
 
 至此，sc_clock的pos()完成了将所有对这个事件敏感的process handle的调度工作。
+
+== CALLBACK
+
+=== sc_module的callback
+
+sc_module为派生类提供了四个虚函数，派生类实现这些函数后，可以在合适的
+时机做需要的事情：
+
+1. `void before_end_of_elaboration(void)`
+2. `void end_of_elaboration(void)`
+3. `void start_of_simulation(void)`
+4. `void end_of_simulation(void)`
+
+=== PHASE CALLBACK机制

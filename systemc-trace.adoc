@@ -5,3 +5,11 @@
 SystemC中的Trace组件
 
 == 引言
+
+SystemC中的trace组件，为SystemC提供了类似于Verilog HDL, VHDL等语言的仿真器中，dump出
+波形相关的能力，为Debug并行逻辑提供了有力的支持。
+
+SystemC支持将trace的结果dump成常见的开源波形文件格式，如VCD和WIF。而在vcs等商业EDA软件中经常使用的诸如fsdb等波形文件格式是带有
+专利的，SystemC并不支持这些商业EDA软件专有的波形文件格式。
+
+可以使用开源软件gtkwave打开vcd文件，来观察相关的波形。

@@ -1410,7 +1410,7 @@ sc_event_finder里指定了一个成员函数指针 `&in_if_type::posedge_event`
 [NOTE]
 ====
 
-对于每一个继承自sc_interface的派生类而言，接口函数default_event能够返回一个event是事件。这个
+对于每一个继承自sc_interface的派生类而言，接口函数default_event能够返回一个event事件。这个
 default_event返回的event事件能够参与到SystemC内部，用以静态或者动态触发进程的调度（在SystemC
 的EVALUATE-UPDATE-NOTIFICATION框架中实现具体功能）。sc_event_finder的提出，则是在这个
 default_event接口类不满足需求的情况下（例如，对于sc_clock，即需要上升沿的事件，
@@ -1427,4 +1427,5 @@ sc_port和sc_export是作为module之间互联而提出的数据结构，这两�
 情况下在elaboration done之前阶段起作用，elaboration done之后，就转变成了
 sc_port/sc_export所代表的的interface指针，以及一些与之关联的event起主要作用了。
 
-sc_port和sc_export更多的是为SystemC中module提供更好的封装特性。
+sc_port和sc_export概念是为SystemC中module提供更好的封装特性而设计的，属于SystemC
+易用性的一部分。

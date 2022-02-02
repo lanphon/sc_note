@@ -2828,7 +2828,7 @@ ready to run，而不会真正放入runnable列表。
 表现起来好像这段suspend期间从未存在过一样。
 
 suspend-resume机制不太适合用于clock驱动的process，因为使用clock驱动的process
-很那理解这种把suspend期间发生的事件推迟到resume时候的概念。suspend-resume
+很难理解这种把suspend期间发生的事件推迟到resume时候的概念。suspend-resume
 一般用来抽象调度器。
 
 === kill
@@ -3833,3 +3833,16 @@ method的抢占执行相对来说还是比较加单的，因为method不需要�
 
 这里为了在执行thread的时候，抢占执行一个method，而设计了一个 `m_method_invoker_p`
 的方式。
+
+== Process小结
+
+Process是SystemC中非常重要的一个概念，是SystemC执行调度的基础。两种不同类型的Process也分别
+适合建模不同的逻辑：Method适合建模组合逻辑，Thread适合建模时序逻辑，当然这种适合并非意味
+着只能建模相应的逻辑。
+
+Process也是使用SystemC最直观的部分。Process和Primitive Channel, Event一起，组成了
+SystemC调度核心三要素，分别参与到delta cycle中的EVALUATE, NOTIFICATION, UPDATE
+阶段。
+
+对于Process的控制，SystemC也提供了非常多的方式，诸如suspend/resume, disable/enable, reset,
+kill等，极大地方便了SystemC的使用。
