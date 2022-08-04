@@ -425,9 +425,9 @@ sc_fifo中的write event和read event都属于使用这种方式创建的kernel 
 kernel event，这局限了这种构造函数的使用场景。对于kernel event，我们只需要
 了解即可。
 
-在构造函数中，sc_event会调用成员函数 `register_event` 将自己注册都
+在构造函数中，sc_event会调用成员函数 `register_event` 将自己注册到
 SystemC的内核中。这个注册动作主要是做一些hierarchy管理行为，例如将sc_event
-名字加入到名城管理系统中，将sc_event本身加入所属的父模块的child event列表中等动作。
+名字加入到名称管理系统中，将sc_event本身加入所属的父模块的child event列表中等动作。
 对于kernel event则不做这些，可以认为kernel event游离于SystemC管理普通
 sc_event的体系之外，这也是称之为kernel event的原因。
 [[api::sc_event::register_event]]
@@ -527,7 +527,7 @@ sc_event::~sc_event()
 }
 ----
 
-析构函数主要完成了分配资源的释放。此外，对于动态等待在本事件上的process handle而言，
+析构函数主要完成了所分配资源的释放。此外，对于动态等待在本事件上的process handle而言，
 还需要把内部保存的事件指针 `m_event_p` 置为空。
 
 === 与process handle交互的成员函数
@@ -555,7 +555,7 @@ handle的成员变量一共有四个，所以每一组对应的成员函数也�
 ----
 
 这8个成员函数的实现是比较简单的。 `add_*` 只是简单地将函数参数放入对应的成员变量中。
-`remove_*` 检索对应的成员边来那个，如果存在则去除。
+`remove_*` 检索对应的成员变量，如果存在则去除。
 
 这四个函数可以在elaboration阶段，或者simulation阶段被调用。
 
