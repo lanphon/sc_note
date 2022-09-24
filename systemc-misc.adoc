@@ -47,7 +47,7 @@ sc_sensitive::operator << ( const sc_interface& interface_ )
 <1> 使用sc_interface作为敏感源，其本质就是要使用sc_interface的默认事件作为敏感事件
 
 sc_interface的概念非常重要，是连接sc_fifo/sc_signal等primitive channel和sc_port/sc_export接口的重要桥梁。
-简单来说，sc_port/sc_export的模板参数必须是一个sc_interface类，或者继承sc_interface的类。而在
+简单来说，sc_port/sc_export的模板参数必须是一个sc_interface类，或者继承sc_interface的派生类。而在
 sc_port/sc_export中，也只保存指向这些sc_interface或者sc_interface子类的指针。sc_port/sc_export
 表现为指向primitive channel的指针，但本质上表象的更多的像是指向sc_interface或子类的指针，只使用
 这些sc_interface或者子类提供的接口函数。而primitive channel则需要继承sc_interface或者子类，并

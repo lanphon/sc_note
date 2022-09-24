@@ -97,8 +97,8 @@ PA绑定PB的时候，Systemc内部只会暂时将这个信息记录下来。等
 
 sc_port_base定义了如下几个接口函数：
 
-* `get_interface` 包括const类型的重载形式，用已返回一个sc_interface指针。根据其后的实现，这里
-返回的是第一个绑定的interface的指针。
+* `get_interface` 包括const类型的重载形式，用以返回一个sc_interface指针。根据其后的实现，这里
+返回的是第一个绑定的interface的指针
 * `get_interface_type` 用以做类型识别，这部分在具体的模板继承中，需要根据模板参数的类型，返回不同的
 类型信息
 * `add_interface` 将一个interface加入到自己保存的列表中
@@ -627,6 +627,22 @@ class sc_port_b
 sc_fifo_outonly_if，那么对于sc_port_b<sc_fifo_outonly_if>而言（以及继承类sc_port<sc_fifo_outonly_if>)，只能访问这个write函数，而无法访问本身sc_fifo就能
 提供的read函数。这也是sc_port提出来的意义所在：限制通过port进行的访问，从而提供更加
 具体的抽象。
+
+sc_port_b<IF>中的IF的约束，是通过函数get_interface体现出来的：
+
+.src/sysc/communication/sc_port.h
+[source,cpp]
+----
+    // get the first interface without checking for nil
+
+    virtual sc_interface* get_interface()
+        { return m_interface; }
+
+    virtual const sc_interface* get_interface() const
+        { return m_interface; }
+----
+
+这里应该是用{cpp}20的concept来描述模板参数IF的能力会更加合适。
 
 === 成员变量
 
