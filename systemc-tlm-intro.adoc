@@ -5,3 +5,1054 @@
 SystemC中的TLM介绍
 
 == 引言
+
+== 基础数据结构
+
+=== tlm_mm_interface
+[[api::tlm_mm_interface]]
+
+tlm_mm_interfashice是一个接口基类，只要求实现接口函数 `free` 即可：
+
+.src/tlm_core/tlm_2/tlm_generic_payload/tlm_gp.h
+[source,cpp]
+----
+class tlm_mm_interface {
+public:
+  virtual void free(tlm_generic_payload*) = 0; <1>
+  virtual ~tlm_mm_interface() {}
+};
+----
+<1> 纯虚类的成员函数free，是tlm_mm_interface唯一要求的接口函数，接受一个指向tlm_generic_payload
+的指针，返回void类型
+
+=== tlm_extension
+[[api::tlm_extension]]
+
+tlm_extension，包括一个基类tlm_extension_base，和一个模板基类tlm_extension，其主要作用是为能够被
+tlm_generic_payload持有的extension对象提供基本的接口信息。换言之，只有继承自tlm_extension的派生类
+才可以被tlm_generic_payload作为extension所持有。
+
+tlm_extension_base的定义非常简单：
+
+.src/tlm_core/tlm_2/tlm_generic_payload/tlm_gp.h
+[source,cpp]
+----
+class SC_API tlm_extension_base
+{
+public:
+    virtual tlm_extension_base* clone() const = 0; <1>
+    virtual void free() { delete this; } <2>
+    virtual void copy_from(tlm_extension_base const &) = 0; <3>
+protected:
+    virtual ~tlm_extension_base() {} <4>
+    static unsigned int register_extension(const std::type_info&); <5>
+};
+----
+<1> 接口函数clone，用来实现clone功能
+<2> 虚函数free，默认实现是释放自己
+<3> 接口函数copy_from，实现需要的拷贝功能
+<4> 析构函数是虚函数，注意析构函数是protected，这意味着析构函数只能被派生类调用
+<5> 这里有一个静态成员函数，register_extension，接受一个 `std::type_info` 作为参数，返回一个
+`unsigned int` 类型的数据，这是tlm_generic_payload自己实现类型管理一套机制
+
+之所以将tlm_extension_base定义出来（或者说，定义一个非模板类作为基类），其思想和systemc中其他部分的设计
+是一样的：如果需要使用一个未知类型的tlm_extension_base的派生类，只需要将指针类型设置为tlm_extension_base
+即可，不需要加任何模板类型参数。
+
+按照一贯的设计，接下来的tlm_extension继承自tlm_extension_base，还增加了模板参数的选项：
+[[api::tlm_extension]]
+
+.src/tlm_core/tlm_2/tlm_generic_payload/tlm_gp.h
+[source,cpp]
+----
+template <typename T>
+class tlm_extension : public tlm_extension_base
+{
+public:
+    virtual tlm_extension_base* clone() const = 0;
+    virtual void copy_from(tlm_extension_base const &ext) = 0;
+    virtual ~tlm_extension() {}
+    const static unsigned int ID;
+};
+
+template <typename T>
+const unsigned int tlm_extension<T>::ID
+  = tlm_extension_base::register_extension(typeid(T));
+----
+
+这里继续保持clone和copy_from作为接口函数不变，同时额外增加了一个静态成员变量ID。注意，这个静态成员
+变量ID是根据模板参数T而决定的，如果T发生变化，那么对应的静态成员变量ID也就不同。这个ID的赋值非常有
+技巧，调用了基类tlm_extension_base的 `register_extension` 函数。注意，这并不意味着 `register_extension`
+需要是一个编译期就能执行的函数。这主要是因为模板类的静态成员变量初始化并不像普通类的静态成员变量初始化
+一样，这个问题我们后续讨论。
+
+这样一来对于类型T, `tlm_extension<T>::ID` 就是一个 `unsigned int` 类型，可以用来标识类型的标识符。
+tlm_generic_payload借助这个功能，实现了不同类型的extension数据保存到同一个数组的能力，即实现了
+类型擦除的功能。
+
+对于编译系统中，所有继承自tlm_extension的模板参数T，都在 `tlm_extension_base::register_extension`
+函数中，被注册进来：
+
+.src/tlm_core/tlm_2/tlm_generic_payload/tlm_gp.cpp
+[source,cpp]
+----
+unsigned int
+tlm_extension_base::register_extension(const std::type_info& type)
+{
+    return tlm_extension_registry::instance().register_extension(type);
+}
+----
+
+其中 `tlm_extension_registry::instance()` 是一个单件实现。本部分的实现后续补充。
+
+=== tlm_generic_payload
+[[api::tlm_generic_payload]]
+
+tlm_generic_payload是一个没有继承自其它类的基类：
+
+.src/tlm_core/tlm_2/tlm_generic_payload/tlm_gp.h
+[source,cpp]
+----
+class SC_API tlm_generic_payload {
+
+public:
+    //---------------
+    // Constructors
+    //---------------
+
+    // Default constructor
+    tlm_generic_payload();
+    explicit tlm_generic_payload(tlm_mm_interface* mm);
+----
+
+tlm_generic_payload的构造函数有两种，一种是空的构造，另一种则是接受一个
+tlm_mm_interface的指针。空构造的tlm_generic_payload也需要后续使用
+set_mm成员函数来设置mm，因为在tlm_generic_payload的很多成员函数中
+都会显式检查这个成员变量是否为空:
+
+.src/tlm_core/tlm_2/tlm_generic_payload/tlm_gp.h
+[source,cpp]
+----
+   void set_mm(tlm_mm_interface* mm) { m_mm = mm; }
+   bool has_mm() const { return m_mm != 0; }
+----
+
+tlm_generic_payload不允许拷贝或者赋值，因此拷贝构造函数和赋值函数均为空。
+
+tlm_generic_payload可以作为虚基类使用，因此析构函数是虚函数。
+
+==== 成员变量
+
+tlm_generic_payload中的成员变量可以分为两大类，基本成员变量，以及控制成员变量。
+
+基本成员变量包括如下:
+
+.src/tlm_core/tlm_2/tlm_generic_payload/tlm_gp.h
+[source,cpp]
+----
+    sc_dt::uint64        m_address;
+    tlm_command          m_command;
+    unsigned char*       m_data;
+    unsigned int         m_length;
+    tlm_response_status  m_response_status;
+    bool                 m_dmi;
+    unsigned char*       m_byte_enable;
+    unsigned int         m_byte_enable_length;
+    unsigned int         m_streaming_width;
+    tlm_gp_option        m_gp_option;
+----
+
+其中的tlm_gp_option为枚举类型，包括：
+
+.src/tlm_core/tlm_2/tlm_generic_payload/tlm_gp.h
+[source,cpp]
+----
+enum tlm_gp_option {
+    TLM_MIN_PAYLOAD,
+    TLM_FULL_PAYLOAD,
+    TLM_FULL_PAYLOAD_ACCEPTED
+};
+----
+
+基本成员变量可以用一系列类似getter/setter的API成员函数进行访问和控制：
+
+.src/tlm_core/tlm_2/tlm_generic_payload/tlm_gp.h
+[source,cpp]
+----
+    //----------------
+    // API (including setters & getters)
+    //---------------
+
+    // Command related method
+    bool                 is_read() const {return (m_command == TLM_READ_COMMAND);}
+    void                 set_read() {m_command = TLM_READ_COMMAND;}
+    bool                 is_write() const {return (m_command == TLM_WRITE_COMMAND);}
+    void                 set_write() {m_command = TLM_WRITE_COMMAND;}
+    tlm_command          get_command() const {return m_command;}
+    void                 set_command(const tlm_command command) {m_command = command;}
+
+    // Address related methods
+    sc_dt::uint64        get_address() const {return m_address;}
+    void                 set_address(const sc_dt::uint64 address) {m_address = address;}
+
+    // Data related methods
+    unsigned char*       get_data_ptr() const {return m_data;}
+    void                 set_data_ptr(unsigned char* data) {m_data = data;}
+
+    // Transaction length (in bytes) related methods
+    unsigned int         get_data_length() const {return m_length;}
+    void                 set_data_length(const unsigned int length) {m_length = length;}
+
+    // Response status related methods
+    bool                 is_response_ok() const {return (m_response_status > 0);}
+    bool                 is_response_error() const {return (m_response_status <= 0);}
+    tlm_response_status  get_response_status() const {return m_response_status;}
+    void                 set_response_status(const tlm_response_status response_status)
+        {m_response_status = response_status;}
+    std::string          get_response_string() const;
+
+    // Streaming related methods
+    unsigned int         get_streaming_width() const {return m_streaming_width;}
+    void                 set_streaming_width(const unsigned int streaming_width) {m_streaming_width = streaming_width; }
+
+    // Byte enable related methods
+    unsigned char*       get_byte_enable_ptr() const {return m_byte_enable;}
+    void                 set_byte_enable_ptr(unsigned char* byte_enable){m_byte_enable = byte_enable;}
+    unsigned int         get_byte_enable_length() const {return m_byte_enable_length;}
+    void                 set_byte_enable_length(const unsigned int byte_enable_length){m_byte_enable_length = byte_enable_length;}
+
+    // This is the "DMI-hint" a slave can set this to true if it
+    // wants to indicate that a DMI request would be supported:
+    void                 set_dmi_allowed(bool dmi_allowed) { m_dmi = dmi_allowed; }
+    bool                 is_dmi_allowed() const { return m_dmi; }
+
+    // Use full set of attributes in DMI/debug?
+    tlm_gp_option get_gp_option() const { return m_gp_option; }
+    void          set_gp_option( const tlm_gp_option gp_opt ) { m_gp_option = gp_opt; }
+----
+
+控制成员变量则有如下三个：
+
+.src/tlm_core/tlm_2/tlm_generic_payload/tlm_gp.h
+[source,cpp]
+----
+    tlm_array<tlm_extension_base*> m_extensions;
+    tlm_mm_interface*              m_mm;
+    unsigned int                   m_ref_count;
+----
+
+m_ref_count是一个引用计数器，和memory manager类接口变量m_mm一起配合使用：
+
+.src/tlm_core/tlm_2/tlm_generic_payload/tlm_gp.h
+[source,cpp]
+----
+    void acquire() { sc_assert(m_mm != 0); m_ref_count++; }
+
+    void release() {
+        sc_assert(m_mm != 0 && m_ref_count > 0);
+        if (--m_ref_count==0)
+            m_mm->free(this);
+    }
+
+    int get_ref_count() const { return m_ref_count; }
+----
+
+成员函数acquire用来增加引用计数，而成员函数release则用来减少引用计数。当引用计数器值
+到0的时候，调用注册的m_mm的free接口函数，传入 `this` 指针，释放相关资源。
+
+m_extensions是tlm_generic_payload用来放置extensions的数组。所有放置到m_extensions
+的数据类型必须是tlm_extension_base的子类。注意，m_extensions的大小在tlm_generic_payload
+构建的时候，是初始化好的：
+
+.src/tlm_core/tlm_2/tlm_generic_payload/tlm_gp.cpp
+[source,cpp]
+----
+// Default constructor
+tlm_generic_payload::tlm_generic_payload()
+  : m_address(0)
+  , m_command(TLM_IGNORE_COMMAND)
+  , m_data(0)
+  , m_length(0)
+  , m_response_status(TLM_INCOMPLETE_RESPONSE)
+  , m_dmi(false)
+  , m_byte_enable(0)
+  , m_byte_enable_length(0)
+  , m_streaming_width(0)
+  , m_gp_option(TLM_MIN_PAYLOAD)
+  , m_extensions(max_num_extensions()) <1>
+  , m_mm(0)
+  , m_ref_count(0)
+{}
+----
+<1> m_extensions的大小又max_num_extensions决定，这个函数返回的是所有注册类型的
+总得个数
+
+
+我们来看一下extension的使用，比如用来设置extension的API：
+
+.src/tlm_core/tlm_2/tlm_generic_payload/tlm_gp.h
+[source,cpp]
+----
+    // Stick the pointer to an extension into the vector, return the
+    // previous value:
+    template <typename T> T* set_extension(T* ext)
+    {
+        return static_cast<T*>(set_extension(T::ID, ext));
+    }
+
+    // non-templatized version with manual index:
+    tlm_extension_base* set_extension(unsigned int index,
+                                      tlm_extension_base* ext);
+----
+
+模板成员函数 `template<typename T> T* set_extension(T* ext)` 接受一个类型
+T的指针，然后调用另一个非模板的成员函数 set_extension，将 `T::ID` 作为第一个参数，
+指针作为第二个参数传递进去，这意味着T必须是tlm_extensions的子类，否则 `T::ID`
+无法通过编译。
+[[api::tlm_generic_payload::set_extension]]
+
+.src/tlm_core/tlm_2/tlm_generic_payload/tlm_gp.cpp
+[source,cpp]
+----
+tlm_extension_base*
+tlm_generic_payload::set_extension(unsigned int index,
+                                   tlm_extension_base* ext)
+{
+    sc_assert(index < m_extensions.size());
+    tlm_extension_base* tmp = m_extensions[index];
+    m_extensions[index] = ext;
+    return tmp;
+}
+----
+
+从这里可以看出，`m_extensions` 对于一种extension（tlm_extension<T>），只能保存一个
+数据。对于 `set_extension`，将数据设置到 m_extensions后，将原来保存的数据返回。
+
+除了一个 `set_extension` 外，还有一对类似的 `set_auto_extension` 函数，主要实现如下：
+[[api::tlm_generic_payload::set_auto_extension]]
+
+.src/tlm_core/tlm_2/tlm_generic_payload/tlm_gp.cpp
+[source,cpp]
+----
+tlm_extension_base*
+tlm_generic_payload::set_auto_extension(unsigned int index,
+                                        tlm_extension_base* ext)
+{
+    sc_assert(index < m_extensions.size());
+    tlm_extension_base* tmp = m_extensions[index];
+    m_extensions[index] = ext;
+    if (!tmp) m_extensions.insert_in_cache(&m_extensions[index]);
+    sc_assert(m_mm != 0);
+    return tmp;
+}
+----
+
+相比于 `set_extension` 而言，主要在于，如果原先要被替换的位置费控，那么就将这个位置的指针
+传入 `m_extensions` 的insert_in_cache成员函数中：
+[[api::tlm_array::insert_in_cache]]
+[[api::tlm_array::free_entire_cache]]
+
+
+.src/tlm_core/tlm_2/tlm_generic_payload/tlm_array.h
+[source,cpp]
+----
+
+    // this function shall get a pointer to a array slot
+    // it stores this slot in a cache of active slots
+    void insert_in_cache(T* p)
+    {
+        //sc_assert( (p-&(*this)[0]) < size() );
+        m_entries.push_back( p-&(*this)[0] );
+    }
+
+    //this functions clears all active slots of the array
+    void free_entire_cache()
+    {
+        while(m_entries.size())
+        {
+            if ((*this)[m_entries.back()])      //we make sure no one cleared the slot manually
+              (*this)[m_entries.back()]->free();//...and then we call free on the content of the slot
+            (*this)[m_entries.back()]=0;        //afterwards we set the slot to NULL
+            m_entries.pop_back();
+        }
+    }
+----
+
+`insert_in_cache` 是 `tlm_array` 在vector的基础上增加的成员函数，主要在一个 `m_entries`
+内部成员变量中保存了位置信息（这里其实保存的相当于数组下标），并且在 `free_entrie_cache`
+成员阿汉湖中使用这个数组下标，调用所有有效指针的 free成员函数，这样一来就自动释放掉了内部的
+对象。在tlm_generic_payload的reset成员函数中，调用了 `m_extensions` 的这个成员函数：
+[[api::tlm_generic_payload::reset]]
+
+.src/tlm_core/tlm_2/tlm_generic_payload/tlm_gp.cpp
+[source,cpp]
+----
+void tlm_generic_payload::reset() {
+    //should the other members be reset too?
+    m_gp_option = TLM_MIN_PAYLOAD;
+    m_extensions.free_entire_cache(); <1>
+}
+----
+<1> 调用了 tlm_array的free_entire_cache成员函数，自动释放所有的成员变量
+
+此外，在<<api::tlm_generic_payload::free_all_extensions, free_all_extensions>>中，也调用了
+free_entire_cache成员函数，来释放那些通过set_auto_extension设置过来的extension对象。
+
+==== 成员函数
+
+tlm_generic_payload除了成员变量以及上述介绍的和成员变量打交道的成员函数外，还存在其他成员函数，
+包括
+
+.src/tlm_core/tlm_2/tlm_generic_payload/tlm_gp.h
+[source,cpp]
+----
+   // non-virtual deep-copying of the object
+    void deep_copy_from(const tlm_generic_payload & other);
+
+    // To update the state of the original generic payload from a deep copy
+    // Assumes that "other" was created from the original by calling deep_copy_from
+    // Argument use_byte_enable_on_read determines whether to use or ignores byte enables
+    // when copying back the data array on a read command
+
+    void update_original_from(const tlm_generic_payload & other,
+                              bool use_byte_enable_on_read = true);
+
+    void update_extensions_from(const tlm_generic_payload & other);
+
+    // Free all extensions. Useful when reusing a cloned transaction that doesn't have memory manager.
+    // normal and sticky extensions are freed and extension array cleared.
+    void free_all_extensions();
+----
+
+
+其中， `deep_copy_from` 成员函数实现了tlm_generic_payload的深拷贝：
+[[api::tlm_generic_payload::deep_copy_from]]
+
+.src/tlm_core/tlm_2/tlm_generic_payload/tlm_gp.cpp
+[source,cpp]
+----
+// non-virtual deep-copying of the object
+void
+tlm_generic_payload::deep_copy_from(const tlm_generic_payload & other)
+{
+    m_command =            other.get_command();
+    m_address =            other.get_address();
+    m_length =             other.get_data_length();
+    m_response_status =    other.get_response_status();
+    m_byte_enable_length = other.get_byte_enable_length();
+    m_streaming_width =    other.get_streaming_width();
+    m_gp_option =          other.get_gp_option();
+    m_dmi =                other.is_dmi_allowed();
+
+    // deep copy data
+    // there must be enough space in the target transaction!
+    if(m_data && other.m_data)
+    {
+        std::memcpy(m_data, other.m_data, m_length); <1>
+    }
+    // deep copy byte enables
+    // there must be enough space in the target transaction!
+    if(m_byte_enable && other.m_byte_enable)
+    {
+        std::memcpy(m_byte_enable, other.m_byte_enable, m_byte_enable_length); <2>
+    }
+    // deep copy extensions (sticky and non-sticky)
+    if(m_extensions.size() < other.m_extensions.size()) {
+        m_extensions.expand(other.m_extensions.size());
+    }
+    for(unsigned int i=0; i<other.m_extensions.size(); i++)
+    {
+        if(other.m_extensions[i])
+        {                       //original has extension i
+            if(!m_extensions[i]) <3>
+            {                   //We don't: clone.
+                tlm_extension_base *ext = other.m_extensions[i]->clone();
+                if(ext)     //extension may not be clonable.
+                {
+                    if(has_mm())
+                    {           //mm can take care of removing cloned extensions
+                        set_auto_extension(i, ext);
+                    }
+                    else
+                    {           // no mm, user will call free_all_extensions().
+                        set_extension(i, ext);
+                    }
+                }
+            }
+            else <4>
+            {                   //We already have such extension. Copy original over it.
+                m_extensions[i]->copy_from(*other.m_extensions[i]);
+            }
+        }
+    }
+}
+----
+<1> 深拷贝，拷贝m_data指针指向的buffer
+<2> 深拷贝，拷贝m_byte_enable指针指向的buffer
+<3> 对于extension部分，深拷贝策略是，对于某个类型的extension，如果拷贝源有，而拷贝目的对象没有，则直接拷贝
+<4> 对于extension部分，深拷贝策略是，对于某个类型的extension，如果拷贝源有，同事拷贝目的对象也有，则调用对象的copy_from
+
+从这个成员函数的底线可以看出，`deep_copy_from` 主要处理的是两个buffer的深拷贝，以及extension的拷贝策略。
+
+
+tlm_generic_payload的 `update_original_from` 成员函数，主要用来从一个深拷贝获取的对象中，更新源
+对象的一些状态。从注释中可以看出，这里假设update_original_from的对象是之前从本对象使用deep_copy_from
+创建出来的一个对象。参数use_byte_enable_on_read则决定了在read command的时候，是否拷贝byte enable信息。
+这个函数的实现如下：
+[[api::tlm_generic_payload::update_original_from]]
+[[api::tlm_generic_payload::update_extension_from]]
+
+.src/tlm_core/tlm_2/tlm_generic_payload/tlm_gp.cpp
+[source,cpp]
+----
+// To update the state of the original generic payload from a deep copy
+// Assumes that "other" was created from the original by calling deep_copy_from
+// Argument use_byte_enable_on_read determines whether to use or ignores byte enables
+// when copying back the data array on a read command
+
+void
+tlm_generic_payload::update_original_from(const tlm_generic_payload & other,
+                                          bool use_byte_enable_on_read)
+{
+    // Copy back extensions that are present on the original
+    update_extensions_from(other); <1>
+
+    // Copy back the response status and DMI hint attributes
+    m_response_status = other.get_response_status();
+    m_dmi             = other.is_dmi_allowed();
+
+    // Copy back the data array for a read command only
+    // deep_copy_from allowed null pointers, and so will we
+    // We assume the arrays are the same size
+    // We test for equal pointers in case the original and the copy share the same array
+
+    if(is_read() && m_data && other.m_data && m_data != other.m_data) <2>
+    {
+        if (m_byte_enable && use_byte_enable_on_read) <3>
+        {
+            if (m_byte_enable_length == 8 && m_length % 8 == 0 ) <4>
+            {
+                // Optimized implementation copies 64-bit words by masking
+                for (unsigned int i = 0; i < m_length; i += 8)
+                {
+                    typedef sc_dt::uint64* u;
+                    *reinterpret_cast<u>(&m_data[i]) &= ~*reinterpret_cast<u>(m_byte_enable);
+                    *reinterpret_cast<u>(&m_data[i]) |= *reinterpret_cast<u>(&other.m_data[i]) &
+                                                        *reinterpret_cast<u>(m_byte_enable);
+                }
+            }
+            else if (m_byte_enable_length == 4 && m_length % 4 == 0 ) <5>
+            {
+                // Optimized implementation copies 32-bit words by masking
+                for (unsigned int i = 0; i < m_length; i += 4)
+                {
+                    typedef unsigned int* u;
+                    *reinterpret_cast<u>(&m_data[i]) &= ~*reinterpret_cast<u>(m_byte_enable);
+                    *reinterpret_cast<u>(&m_data[i]) |= *reinterpret_cast<u>(&other.m_data[i]) &
+                                                        *reinterpret_cast<u>(m_byte_enable);
+                }
+            }
+            else <6>
+                // Unoptimized implementation
+                for (unsigned int i = 0; i < m_length; i++)
+                    if ( m_byte_enable[i % m_byte_enable_length] )
+                        m_data[i] = other.m_data[i];
+        }
+        else
+          std::memcpy(m_data, other.m_data, m_length); <7>
+    }
+}
+
+void
+tlm_generic_payload::update_extensions_from(const tlm_generic_payload & other)
+{
+    // deep copy extensions that are already present
+    sc_assert(m_extensions.size() <= other.m_extensions.size());
+    for(unsigned int i=0; i<m_extensions.size(); i++) <8>
+    {
+        if(other.m_extensions[i])
+        {                       //original has extension i
+            if(m_extensions[i])
+            {                   //We have it too. copy.
+                m_extensions[i]->copy_from(*other.m_extensions[i]);
+            }
+        }
+    }
+}
+----
+<1> 首先使用update_extensions_from，更新本对象的extensions状态
+<2> update_original_from主要处理核心是对于read的处理
+<3> 如果byte_enable打开，以及传入的参数指定根据byte enable拷贝的时候，才选择进行拷贝
+<4> 如果byte_enable是8的倍数，即按照QW来拷贝，那么之后就可以一个QW一个QW拷贝
+<5> 如果byte_enable是4的倍数，就按照DW来拷贝，之后可以一个DW一个DW来拷贝
+<6> 否则，就只能一个byte一个byte拷贝了
+<7> 如果byte_enable没打开，或者入参指定不需要byte enable，直接拷贝data部分即可
+<8> update_extensions_from中，只有当拷贝源和拷贝目的对象相同类型的extension都有效，才会将extension从源拷贝到墓地中，调用的是
+extension自己的copy_from成员函数
+
+
+tlm_generic_payloa的 `free_all_extensions` 成员函数，主要用来释放所有的extensions。这些extensions
+主要分为两类：使用set_auto_extensions插入的extensions，使用<<api::tlm_array::free_entire_cache, tlm_array的free_entire_cache>>
+释放；使用set_extensions插入的extension，则调用自带的free函数，进行释放，参考如下：
+[[api::tlm_generic_payload::free_all_extensions]]
+
+.src/tlm_core/tlm_2/tlm_generic_payload/tlm_gp.cpp
+[source,cpp]
+----
+// Free all extensions. Useful when reusing a cloned transaction that doesn't have memory manager.
+// normal and sticky extensions are freed and extension array cleared.
+void tlm_generic_payload::free_all_extensions()
+{
+    m_extensions.free_entire_cache();
+    for(unsigned int i=0; i<m_extensions.size(); i++)
+    {
+        if(m_extensions[i])
+        {
+            m_extensions[i]->free();
+            m_extensions[i] = 0;
+        }
+    }
+}
+----
+
+=== tlm_fw_transport_if
+[[api::tlm_fw_transport_if]]
+
+tlm_fw_transport_if是一个模板类，模板接受一个TYPES类型，默认为tlm_base_protocol_types：
+
+.src/tlm_core/tlm_2/tlm_2_interfaces/tlm_fw_bw_ifs.h
+[source,cpp]
+----
+// The forward interface:
+template <typename TYPES = tlm_base_protocol_types>
+class tlm_fw_transport_if
+  : public virtual tlm_fw_nonblocking_transport_if<typename TYPES::tlm_payload_type,
+                                                   typename TYPES::tlm_phase_type>
+  , public virtual tlm_blocking_transport_if<typename TYPES::tlm_payload_type>
+  , public virtual tlm_fw_direct_mem_if<typename TYPES::tlm_payload_type>
+  , public virtual tlm_transport_dbg_if<typename TYPES::tlm_payload_type>
+{
+public:
+  typedef TYPES protocol_types;
+};
+----
+
+可以看出，实际上tlm_fw_transport_if是4个不同的interface的combination:
+* tlm_fw_nonblocking_transport_if
+* tlm_blocking_transport_if
+* tlm_fw_direct_mem_if
+* tlm_transport_dbg_if
+
+其中TYPES类的两个成员类型tlm_payload_type和tlm_phase_type，主要用来为这四个模板类提供实例化
+类型参数信息。
+
+tlm_base_protocol_types只是个简单的类定义，用来提供两个不同的类型信息，分别是tlm_payload_type，指定
+tlm的payload类型，这里指定是tlm_generic_payload。以及一个tlm_phase_type，默认是
+<<api::tlm_phase, tlm_phase>>:
+[[api::tlm_base_protocol_types]]
+
+.src/tlm_core/tlm_2/tlm_2_interfaces/tlm_fw_bw_ifs.h
+[source,cpp]
+----
+struct tlm_base_protocol_types
+{
+  typedef tlm_generic_payload tlm_payload_type;
+  typedef tlm_phase tlm_phase_type;
+};
+----
+
+注意，4个基类都是虚继承，这是因为这四个基类本身都直接继承自sc_interface。如果这里不采用虚继承，那么就会有不同的
+sc_interface instance.
+
+==== tlm_fw_nonblocking_transport_if
+[[api::tlm_fw_nonblocking_transport_if]]
+
+tlm_fw_nonblocking_transport_if直接继承自sc_core::sc_interface，只定义
+了一个叫 nb_transport_fw的接口函数：
+
+.src/tlm_core/tlm_2/tlm_2_interfaces/tlm_fw_bw_ifs.h
+[source,cpp]
+----
+template <typename TRANS = tlm_generic_payload,
+          typename PHASE = tlm_phase>
+class tlm_fw_nonblocking_transport_if : public virtual sc_core::sc_interface {
+public:
+  virtual tlm_sync_enum nb_transport_fw(TRANS& trans,
+                                        PHASE& phase,
+                                        sc_core::sc_time& t) = 0;
+};
+----
+
+nb_transport_fw接口函数接受一个传输类型TRANS，默认是<<api::tlm_generic_payload, tlm_generic_payload>>
+，同时接受一个PHASE类型，默认是<<api::tlm_phase, tlm_phase>>，以及一个时间戳t，返回一个tlm_sync_enum信息。
+
+
+tlm_sync_enum是个枚举类，定义了TLM_ACCEPTED, TLM_UPDATED, TLM_COMPLETED三个状态信息：
+[[api::tlm_sync_enum]]
+
+.src/tlm_core/tlm_2/tlm_2_interfaces/tlm_fw_bw_ifs.h
+[source,cpp]
+----
+enum tlm_sync_enum { TLM_ACCEPTED, TLM_UPDATED, TLM_COMPLETED };
+----
+
+==== tlm_blocking_transport_if
+[[api::tlm_blocking_transport_if]]
+
+tlm_blocing_transport_if同样直接继承自sc_core::sc_interface，定义了一个
+接口函数b_transport：
+
+.src/tlm_core/tlm_2/tlm_2_interfaces/tlm_fw_bw_ifs.h
+[source,cpp]
+----
+template <typename TRANS = tlm_generic_payload>
+class tlm_blocking_transport_if : public virtual sc_core::sc_interface {
+public:
+  virtual void b_transport(TRANS& trans,
+                           sc_core::sc_time& t) = 0;
+};
+----
+
+注意tlm_blocking_transport_if不区分fw/bw，同时也没有PHASE信息，只有TRANS类型
+信息，默认为<<api::tlm_generic_payload, tlm_generic_payload>>。接口函数b_transport
+接受一个TRANS类型的数据和一个时间戳，返回空。
+
+b_transport的含义是blocking地传送数据，所以不需要返回状态信息，因为blocking地传送数据返回的时候
+肯定数据已经发送完毕。同时这里也不需要PHASE信息。
+
+==== tlm_fw_direct_mem_if
+[[api::tlm_fw_direct_mem_if]]
+
+模板类tlm_fw_direct_mem_if直接继承自sc_core::sc_interface，定义了一个
+接口类get_direct_mem_ptr:
+
+.src/tlm_core/tlm_2/tlm_2_interfaces/tlm_fw_bw_ifs.h
+[source,cpp]
+----
+//////////////////////////////////////////////////////////////////////////
+// DMI interfaces for getting and invalidating DMI pointers:
+//////////////////////////////////////////////////////////////////////////
+
+// The semantics of the forward interface are as follows:
+//
+// - An initiator that wants to get direct access to a target's memory region
+//   can call the get_direct_mem_ptr method with the 'trans' parameter set to
+//   the address that it wants to gain access to. It sets the trans.m_command
+//   to specify if the initiator intended use (read or write)
+//   to the target's DMI region. The initiator is responsible for calling the
+//   method with a freshly initialized tlm_dmi object either by using a newly
+//   constructed object, or by calling an existing object's init() method.
+// - Although a reference to a complete 'TRANS' type is passed to the get_
+//   direct_mem_ptr call, only the address command, and extension fields are of
+//   interest in most cases.
+// - Read and write ranges are not necessarily identical. If they are, a target
+//   can specify that the range is valid for all accesses with the tlm_data
+//   m_type attribute in the.
+// - The interconnect, if any, needs to decode the address and forward the
+//   call to the corresponding target. It needs to handle the address exactly
+//   as the target would expect on a transaction call, e.g. mask the address
+//   according to the target's address width.
+// - If the target supports DMI access for the given address, it sets the
+//   data fields in the DMI struct and returns true.
+// - If a target does not support DMI access it needs to return false.
+//   The target can either set the correct address range in the DMI struct
+//   to indicate the memory region where DMI is disallowed, or it can specify
+//   the complete address range if it doesn't know it's memory range. In this
+//   case the interconnect is responsible for clipping the address range to
+//   the correct range that the target serves.
+// - The interconnect must always translate the addresses to the initiator's
+//   address space. This must be the inverse operation of what the
+//   interconnect needed to do when forwarding the call. In case the
+//   component wants to change any member of the tlm_dmi object, e.g. for
+//   its own latency to the target's latency, it must only do so *after* the
+//   target has been called. The target is always allowed to overwrite all
+//   values in the tlm_dmi object.
+// - In case the slave returned with an invalid region the bus/interconnect
+//   must fill in the complete address region for the particular slave in the
+//   DMI data structure.
+//
+// DMI hint optimization:
+//
+// Initiators may use the DMI hint in the tlm_generic_payload to avoid
+// unnecessary DMI attempts. The recommended sequence of interface
+// method calls would be:
+//
+// - The initiator first tries to check if it has a valid DMI region for the
+//   address that it wants to access next.
+// - If not, it performs a normal transaction.
+// - If the DMI hint in this transaction is true, the initiator can try and
+//   get the DMI region.
+//
+// Note that the DMI hint optimization is completely optional and every
+// initiator model is free to ignore the DMI hint. However, a target is
+// required to set the DMI hint to true if a DMI request on the given address
+// with the given transaction type (read or write) would have succeeded.
+
+template <typename TRANS = tlm_generic_payload>
+class tlm_fw_direct_mem_if : public virtual sc_core::sc_interface
+{
+public:
+  virtual bool get_direct_mem_ptr(TRANS& trans,
+                                  tlm_dmi&  dmi_data) = 0;
+};
+----
+
+get_direct_mem_ptr接受一个TRANS类型的数据，以及一个<<api::tlm_dmi, tlm_dmi>>
+类型的数据，返回一个bool值。
+
+==== tlm_transport_dbg_if
+[[api::tlm_transport_dbg_if]]
+
+从名字就可以看出，tlm_transport_dbg_if主要实现的是debug功能。这个模板类同样接受一个TRANS
+类型信息，默认类是<<api::tlm_generic_payload, tlm_generic_pyalod>>，定义了一个接口
+函数transport_dbg:
+
+.src/tlm_core/tlm_2/tlm_2_interfaces/tlm_fw_bw_ifs.h
+[source,cpp]
+----
+/////////////////////////////////////////////////////////////////////
+// debug interface for memory access
+/////////////////////////////////////////////////////////////////////
+//
+// This interface can be used to gain access to a targets memory or registers
+// in a non-intrusive manner. No side effects, waits or event notifications
+// must happen in the course of the method.
+//
+// Semantics:
+// - The initiator calls the transport_dbg method with transaction 'trans' as
+//   argument. The commonly used parts of trans for debug are:
+//   . address: The start address that it wants to peek or poke.
+//   . length:  The number of bytes that it requests to read or write.
+//   . command: Indicates a read or write access.
+//   . data:    A pointer to the initiator-allocated data buffer, which must
+//              be at least num_bytes large. The data is always organized in
+//              the endianness of the machine.
+//   . extensions: Any extension that could affect the transaction.
+// - The interconnect, if any, will decode the address and forward the call to
+//   the appropriate target.
+// - The target must return the number of successfully transmitted bytes, where
+//   this number must be <= num_bytes. Thus, a target can safely return 0 if it
+//   does not support debug transactions.
+//
+template <typename TRANS = tlm_generic_payload>
+class tlm_transport_dbg_if : public virtual sc_core::sc_interface
+{
+public:
+  // The return value of defines the number of bytes successfully
+  // transferred.
+  virtual unsigned int transport_dbg(TRANS& trans) = 0;
+};
+----
+
+接口函数transport_dbg接受一个TRANS类的数据，并且返回一个 `unsigned int` 类型数据，根据
+注释，应该返回成功传输的字节数。
+
+
+=== tlm_bw_transport_if
+[[api::tlm_bw_transport_if]]
+
+与<<api::tlm_fw_transport_if, tlm_fw_transport_if>>定义比较类似，tlm_bw_transport_if
+继承自两个虚基类，分别是tlm_bw_nonblocking_transport_if和tlm_bw_direct_mem_if:
+
+.src/tlm_core/tlm_2/tlm_2_interfaces/tlm_fw_bw_ifs.h
+[source,cpp]
+----
+// The backward interface:
+template <typename TYPES = tlm_base_protocol_types>
+class tlm_bw_transport_if
+  : public virtual tlm_bw_nonblocking_transport_if<typename TYPES::tlm_payload_type,
+                                                   typename TYPES::tlm_phase_type>
+  , public virtual tlm_bw_direct_mem_if
+{
+public:
+  typedef TYPES protocol_types;
+};
+----
+
+==== tlm_bw_nonblocking_transport_if
+[[api::tlm_bw_nonblocking_transport_if]]
+
+和<<api::tlm_fw_nonblocking_transport_if, tlm_fw_nonblocking_transport_if>>
+类似，tlm_bw_nonblocking_transport_if同样直接继承
+自sc_core::sc_interface，定义了一个叫nb_transport_bw的接口函数:
+
+.src/tlm_core/tlm_2/tlm_2_interfaces/tlm_fw_bw_ifs.h
+[source,cpp]
+----
+template <typename TRANS = tlm_generic_payload,
+          typename PHASE = tlm_phase>
+class tlm_bw_nonblocking_transport_if : public virtual sc_core::sc_interface {
+public:
+  virtual tlm_sync_enum nb_transport_bw(TRANS& trans,
+                                        PHASE& phase,
+                                        sc_core::sc_time& t) = 0;
+};
+----
+
+接口函数nb_transport_bw和nonblocking的fw的nb_transport_fw函数类型基本一致，这里就不再多做介绍了。
+
+==== tlm_bw_direct_mem_if
+[[api::tlm_bw_direct_mem_if]]
+
+tlm_bw_direct_mem_if是一个比较特殊的定义，这是fw/bw transport interface的4个虚基类中，唯一一个
+不是模板类的实现。tlm_bw_direct_mem_if直接继承自sc_core::sc_interface，定义了一个接口函数invalidate_direct_mem_ptr:
+
+.src/tlm_core/tlm_2/tlm_2_interfaces/tlm_fw_bw_ifs.h
+[source,cpp]
+----
+// The semantics of the backwards call is as follows:
+//
+// - An interconnect component or a target is required to invalidate all
+//   affected DMI regions whenever any change in the regions take place.
+//   The exact rule is that a component must invalidate all those DMI regions
+//   that it already reported, if it would answer the same DMI request
+//   with any member of the tlm_dmi data structure set differently.
+// - An interconnect component must forward the invalidate_direct_mem_ptr call
+//   to all initiators that could potentially have a DMI pointer to the region
+//   specified in the method arguments. A safe implementation is to call
+//   every attached initiator.
+// - An interconnect component must transform the address region of an
+//   incoming invalidate_direct_mem_ptr to the corresponding address space
+//   for the initiators. Basically, this is the same address transformation
+//   that the interconnect does on the DMI ranges on the forward direction.
+// - Each initiator must check if it has a pointer to the given region and
+//   throw this away. It is recommended that the initiator throws away all DMI
+//   regions that have any overlap with the given regions, but this is not a
+//   hard requirement.
+//
+// - A full DMI pointer invalidation, e.g. for a bus remap can be signaled
+//   by setting the range: 0x0 - 0xffffffffffffffffull = (sc_dt::uint64)-1
+// - An initiator must throw away all DMI pointers in this case.
+//
+// - Under no circumstances a model is allowed to call the get_direct_mem_ptr
+//   from within the invalidate_direct_mem_ptr method, directly or indirectly.
+//
+class tlm_bw_direct_mem_if : public virtual sc_core::sc_interface
+{
+public:
+  virtual void invalidate_direct_mem_ptr(sc_dt::uint64 start_range,
+                                         sc_dt::uint64 end_range) = 0;
+};
+----
+
+接口函数invalidate_direct_mem_ptr分别接受两个64位的数据，作为start_range和end_range，不返回
+任何信息。因为接口函数中不需要任何模板信息，所以tlm_bw_direct_mem_if被设计为一个类，而不是模板类。
+
+=== tlm_phase
+[[api::tlm_phase]]
+
+
+=== tlm_dmi
+[[api::tlm_dmi]]
+
+== socket
+
+=== tlm_base_socket_if
+[[api::tlm_base_socket_if]]
+
+tlm_base_socket_if是一个纯虚的基类，实现如下：
+
+.src/tlm_core/tlm_2/tlm_sockets/tlm_base_socket_if.h
+[source,cpp]
+----
+class tlm_base_socket_if
+{
+public:
+  virtual sc_core::sc_port_base &         get_base_port() = 0;
+  virtual sc_core::sc_port_base const &   get_base_port() const = 0;
+  virtual sc_core::sc_export_base &       get_base_export() = 0;
+  virtual sc_core::sc_export_base const & get_base_export() const = 0;
+
+#ifdef SC_ENABLE_COVARIANT_VIRTUAL_BASE
+  // co-variant return types don't mix with virtual base classes
+  // (like sc_interface) on Microsoft Visual C++ compilers
+  // -> keep all APIs depending on this as an opt-in for now
+  virtual sc_core::sc_interface &         get_base_interface() = 0;
+  virtual sc_core::sc_interface const &   get_base_interface() const = 0;
+#endif // SC_ENABLE_COVARIANT_VIRTUAL_BASE
+
+  virtual unsigned int                    get_bus_width() const = 0;
+  virtual sc_core::sc_type_index          get_protocol_types() const = 0;
+  virtual tlm_socket_category             get_socket_category() const = 0;
+
+protected:
+  virtual ~tlm_base_socket_if() {}
+};
+----
+
+可以看出，这个虚基类需要的接口函数有：
+
+* get_base_port，返回一个sc_core::sc_port_base引用
+* get_base_export，返回一个sc_core::sc_export_base引用
+* get_base_interface，返回一个sc_core::sc_interface引用
+* get_bus_width，返回整型数据
+* get_protocol_types，返回一个sc_core::sc_type_index
+* get_socket_category，返回tlm_socket_category
+
+其中，tlm_socket_category同样定义在这个文件中，是一个枚举类：
+[[api::tlm_socket_category]]
+
+.src/tlm_core/tlm_2/tlm_sockets/tlm_base_socket_if.h
+[source,cpp]
+----
+enum tlm_socket_category
+{
+    TLM_UNKNOWN_SOCKET = 0,
+    TLM_INITIATOR_SOCKET = 0x1,
+    TLM_TARGET_SOCKET = 0x2,
+
+    TLM_MULTI_SOCKET = 0x10,
+
+    TLM_MULTI_INITIATOR_SOCKET = TLM_INITIATOR_SOCKET | TLM_MULTI_SOCKET,
+    TLM_MULTI_TARGET_SOCKET = TLM_TARGET_SOCKET | TLM_MULTI_SOCKET
+};
+----
+从这个枚举类可以看出，实际可用的枚举类型大概只有5种，分别是
+
+* 未知类型，值为0
+* socket的发起端，值为0x1
+* socket的接收端，值为0x2
+* socket的多个发起端，值为0x11
+* socket的多个接收端，值为0x12
+
+
+=== tlm_initiator_socket
+[[api::tlm_initiator_socket]]
+[[api::tlm_base_initiator_socket_b]]
+
+在定义 tlm_initiator_socket之前，先定义一个tlm_base_initiator_socket_b的模板虚基类：
+
+.src/tlm_core/tlm_2/tlm_sockets/tlm_initiator_socket.h
+[source,cpp]
+----
+template <unsigned int BUSWIDTH = 32,
+          typename FW_IF = tlm_fw_transport_if<>,
+          typename BW_IF = tlm_bw_transport_if<> >
+class tlm_base_initiator_socket_b
+  : public tlm_base_socket_if
+{
+public:
+  virtual ~tlm_base_initiator_socket_b() {}
+
+  virtual sc_core::sc_port_b<FW_IF> &       get_base_port() = 0;
+  virtual sc_core::sc_port_b<FW_IF> const & get_base_port() const = 0;
+  virtual sc_core::sc_export<BW_IF> &       get_base_export() = 0;
+  virtual sc_core::sc_export<BW_IF> const & get_base_export() const = 0;
+  virtual                    BW_IF  &       get_base_interface() = 0;
+  virtual                    BW_IF  const & get_base_interface() const = 0;
+};
+----
+
+tlm_base_initiator_socket_b有3个模板参数，分别对应是BUSWIDTH，默认值32，
+FW_IF类型，默认值是<<api::tlm_fw_transport_if, tlm_fw_transport_if<> >>，
+以及BW_IF，默认值是<<api::tlm_bw_transport_if, tlm_bw_transport_if<> >>。
+tlm_base_initiator_socket_b模板继承自tlm_base_socket_if，不过将需要实现的几个接口
+函数的原型做了些改动（主要是返回值类型的改动）：
+* get_base_port不再返回sc_core::sc_port_base引用，而是返回sc_core_sc_prot_b<FW_IF>引用，后者
+同样是一个sc_core::sc_port_base的子类
+* get_base_export不再返回sc_core::sc_export_base的引用，而是返回sc_core::sc_export<BW_IF>的引用，
+后者同样是sc_core::sc_export_base的子类
+* get_base_interface不再返回sc_core::sc_interface引用，而是返回一个BW_IF的引用，这就需要模板参数
+BW_IF是sc_core::sc_interface的子类
+
+=== tlm_target_socket
