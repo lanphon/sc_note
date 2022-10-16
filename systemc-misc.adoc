@@ -3,13 +3,14 @@
 :toc: left
 
 SystemC中的其他组件和用例分析
+[[chap::misc]]
 
 == sc_interface
 [[data::sc_interface]]
 
 sc_interface是一个抽象基类，提供了带interface能力类的接口信息。
 
- DEFINITION: A SystemC interface is an abstract class that inherits from sc_interface and provides only pure virtual declarations of methods refer- enced by SystemC channels and ports. No implementations or data are provided in a SystemC interface.
+ DEFINITION: A SystemC interface is an abstract class that inherits from sc_interface and provides only pure virtual declarations of methods referenced by SystemC channels and ports. No implementations or data are provided in a SystemC interface.
  -- <<SystemC: from ground up>>
 
 sc_interface提供的接口包括：
@@ -45,6 +46,63 @@ sc_sensitive::operator << ( const sc_interface& interface_ )
 }
 ----
 <1> 使用sc_interface作为敏感源，其本质就是要使用sc_interface的默认事件作为敏感事件
+
+sc_interface的完整定义如下：
+
+.src/sysc/communication/sc_interface.h
+[source,cpp]
+----
+class SC_API sc_interface
+{
+public:
+
+    // register a port with this interface (does nothing by default)
+    virtual void register_port( sc_port_base& port_,
+				const char*    if_typename_ );
+
+    // get the default event
+    virtual const sc_event& default_event() const;
+
+    // destructor (does nothing)
+    virtual ~sc_interface();
+
+protected:
+
+    // constructor (does nothing)
+    sc_interface();
+
+private:
+
+    // disabled
+    sc_interface( const sc_interface& );
+    sc_interface& operator = ( const sc_interface& );
+};
+----
+
+sc_interface的两个虚函数的实现如下：
+
+.src/sysc/communication/sc_interface.cpp
+[source,cpp]
+----
+void
+sc_interface::register_port( sc_port_base&, const char* )
+{}
+
+
+// get the default event
+
+const sc_event&
+sc_interface::default_event() const
+{
+    SC_REPORT_WARNING( SC_ID_NO_DEFAULT_EVENT_, 0 );
+    return sc_event::none;
+}
+----
+
+从这里也可以看出，register_port函数可以直接使用，但实现为空。与之相对应，default_event
+则必须由派生类自行实现，否则会报出warning。当然，如果interface不需要返回event的话，
+派生类不重新实现default_event也是允许的。
+
 
 sc_interface的概念非常重要，是连接sc_fifo/sc_signal等primitive channel和sc_port/sc_export接口的重要桥梁。
 简单来说，sc_port/sc_export的模板参数必须是一个sc_interface类，或者继承sc_interface的派生类。而在

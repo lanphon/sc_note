@@ -827,6 +827,7 @@ m_bind_info指针为空，只会发生在elaboration done之后。这种时候�
 也不用深究这部分的实现。
 
 == sc_port
+[[data::sc_port]]
 
 sc_port继承自sc_port_b<IF>，同时增加了更多的模板参数和功能：
 
@@ -1022,6 +1023,7 @@ sc_out 相关函数的实现基本都是转交给了基类，也就是 `sc_inout
 
 == sc_export
 [[api::sc_export]]
+[[data::sc_export]]
 
 对于只有sc_port和sc_interface（例如sc_signal或者sc_fifo）的体系而言，模块之间互联是这样的。模块MA
 内部有一个sc_port PA，模块B内部有另一个sc_port PB。如果需要从PA传递信息到PB，我们需要在TOP模块中
@@ -1044,6 +1046,7 @@ sc_export，模板参数是sc_interface类（类似于sc_port）。PB内部的sc
 即可。对于PA而言，PB暴露出来的只是一个sc_export接口而已，PA可以将自己的PA绑定到这个
 暴露出来的sc_export上。
 
+[[api::sc_export::operator_IF]]
 sc_export<IF>模板类提供了隐式转换功能，可以将自己转成一个 `IF&` 或者 `const IF&`
 
 .src/sysc/communication/sc_export.cpp
@@ -1097,11 +1100,12 @@ MB.EB已经完成了到 sc_interface的绑定工作。对于sc_port而言这是�
 相比于sc_port，sc_export的缺点有：
 
 * 无法做到一对多绑定，只能一对一，也即一个sc_export只能bind一个interface。只能提供一对一的绑定，这是由于sc_export具有隐式转换的能力决定的。如果sc_export能够绑定多个interface，那么隐式转换应当转换成为哪个interface，就成为了一个非常棘手的设计模式问题了。为了避免这种问题的出现，sc_export被设计为只能做一对一的绑定。
+* 无法提供延迟绑定的能力，这是因为当需要将一个sc_export转为一个interface的时候，这个sc_export必须已经绑定一个interface了（即持有一个interface的指针），而不能做到在sc_export没有持有interface的指针前提下转为interface。与之相比，一个sc_port可以绑定到另一个sc_port，而后者在被绑定的时候无需要求完成绑定，因为sc_port有个complete_binding的机制，会在合适的时机resolve所有的binding信息。相比于sc_port，sc_export是无法这么使用的
 
 优点则有：
 
 * 能够隐式cast成sc_interface类型，因此基本可以代替sc_interface的使用，例如可以直接作为static sensitive源（存疑，文档里说不能这么做，但我发现从语法上来说应该是可以这么干的）
-* 隐藏实现细节
+* 隐藏实现细节，sc_export作为一个module暴露的接口，只需要提供interface信息即可，而无需具体制定实现了此interface能力的实现究竟是一个FIFO，还是一个Buffer，还是其他，因此可以很好地隐藏module的实现细节
 * 效率更高，因为sc_export的绑定本质上就是保存sc_interface继承类指针，通过sc_export访问sc_interface继承类的接口函数更快（其实和sc_port直接访问效果是一样的）
 
 在多层次的绑定中，如hierarchy有多层的嵌套的时候，sc_export的效率和一层绑定是一致的。例如，MA内部

@@ -661,6 +661,10 @@ struct tlm_base_protocol_types
 };
 ----
 
+tlm_base_protocol_types所需要指定的两个类型，tlm_payload_type和tlm_phase_type，决定了TLM系统中
+所使用的数据类型和phase类型。如果这两个不同，则socket的连接会出现不兼容情况。在<<api::tlm_base_initiator_socket, tlm_base_initiator_socket>>
+的接口函数get_protocol_types的实现中，使用的就是TYPES的typeid，作为类型的识别符。
+
 注意，4个基类都是虚继承，这是因为这四个基类本身都直接继承自sc_interface。如果这里不采用虚继承，那么就会有不同的
 sc_interface instance.
 
@@ -669,6 +673,7 @@ sc_interface instance.
 
 tlm_fw_nonblocking_transport_if直接继承自sc_core::sc_interface，只定义
 了一个叫 nb_transport_fw的接口函数：
+[[api::tlm_fw_nonblocking_transport_if::nb_transport_fw]]
 
 .src/tlm_core/tlm_2/tlm_2_interfaces/tlm_fw_bw_ifs.h
 [source,cpp]
@@ -701,6 +706,7 @@ enum tlm_sync_enum { TLM_ACCEPTED, TLM_UPDATED, TLM_COMPLETED };
 
 tlm_blocing_transport_if同样直接继承自sc_core::sc_interface，定义了一个
 接口函数b_transport：
+[[api::tlm_blocking_transport_if::b_transport]]
 
 .src/tlm_core/tlm_2/tlm_2_interfaces/tlm_fw_bw_ifs.h
 [source,cpp]
@@ -725,6 +731,7 @@ b_transport的含义是blocking地传送数据，所以不需要返回状态信�
 
 模板类tlm_fw_direct_mem_if直接继承自sc_core::sc_interface，定义了一个
 接口类get_direct_mem_ptr:
+[[api::tlm_fw_direct_mem_if::get_direct_mem_ptr]]
 
 .src/tlm_core/tlm_2/tlm_2_interfaces/tlm_fw_bw_ifs.h
 [source,cpp]
@@ -806,6 +813,7 @@ get_direct_mem_ptr接受一个TRANS类型的数据，以及一个<<api::tlm_dmi,
 从名字就可以看出，tlm_transport_dbg_if主要实现的是debug功能。这个模板类同样接受一个TRANS
 类型信息，默认类是<<api::tlm_generic_payload, tlm_generic_pyalod>>，定义了一个接口
 函数transport_dbg:
+[[api::tlm_transport_dbg_if::transport_dbg]]
 
 .src/tlm_core/tlm_2/tlm_2_interfaces/tlm_fw_bw_ifs.h
 [source,cpp]
@@ -875,6 +883,7 @@ public:
 和<<api::tlm_fw_nonblocking_transport_if, tlm_fw_nonblocking_transport_if>>
 类似，tlm_bw_nonblocking_transport_if同样直接继承
 自sc_core::sc_interface，定义了一个叫nb_transport_bw的接口函数:
+[[api::tlm_bw_nonblocking_transport_if::nb_transport_bw]]
 
 .src/tlm_core/tlm_2/tlm_2_interfaces/tlm_fw_bw_ifs.h
 [source,cpp]
@@ -935,6 +944,7 @@ public:
 };
 ----
 
+[[api::tlm_bw_direct_mem_if::invalidate_direct_mem_ptr]]
 接口函数invalidate_direct_mem_ptr分别接受两个64位的数据，作为start_range和end_range，不返回
 任何信息。因为接口函数中不需要任何模板信息，所以tlm_bw_direct_mem_if被设计为一个类，而不是模板类。
 
@@ -1017,8 +1027,9 @@ enum tlm_socket_category
 
 
 === tlm_initiator_socket
-[[api::tlm_initiator_socket]]
 [[api::tlm_base_initiator_socket_b]]
+
+==== tlm_base_initiator_socket_b
 
 在定义 tlm_initiator_socket之前，先定义一个tlm_base_initiator_socket_b的模板虚基类：
 
@@ -1054,5 +1065,315 @@ tlm_base_initiator_socket_b模板继承自tlm_base_socket_if，不过将需要�
 后者同样是sc_core::sc_export_base的子类
 * get_base_interface不再返回sc_core::sc_interface引用，而是返回一个BW_IF的引用，这就需要模板参数
 BW_IF是sc_core::sc_interface的子类
+
+默认的FW_IF和BW_IF分别是<<api::tlm_fw_transport_if, tlm_fw_transport_if<> >和
+<<api::tlm_bw_transport_if, tlm_bw_transport_if<> >，这两个Interface各自继承了自己的
+虚基类，需要实现的接口函数如下：
+
+* BW_IF需要实现<<api::tlm_bw_nonblocking_transport_if::nb_transport_bw, nb_transport_bw>>
+* BW_IF需要实现<<api::tlm_bw_direct_mem_if::invalidate_direct_mem_ptr, invalidate_direct_mem_ptr>>
+* FW_IF需要实现<<api::tlm_fw_nonblocking_transport_if::nb_transport_fw, nb_transport_fw>>
+* FW_IF需要实现<<api::tlm_fw_blocking_transport_if::b_transport, b_transport>>
+* FW_IF需要实现<<api::tlm_fw_direct_mem_if::get_direct_mem_ptr, get_direct_mem_ptr>>
+* FW_IF需要实现<<api::api::tlm_transport_dbg_if::transport_dbg, transport_dbg>>
+
+==== tlm_base_initiator_socket
+
+从tlm_base_initiator_socket_b可以定义出tlm_base_initiator_socket:
+[[api::tlm_base_initiator_socket]]
+
+.src/tlm_core/tlm_2/tlm_sockets/tlm_initiator_socket.h
+[source,cpp]
+----
+template <unsigned int BUSWIDTH = 32,
+          typename FW_IF = tlm_fw_transport_if<>,
+          typename BW_IF = tlm_bw_transport_if<>,
+          int N = 1,
+          sc_core::sc_port_policy POL = sc_core::SC_ONE_OR_MORE_BOUND>
+class tlm_base_initiator_socket : public tlm_base_initiator_socket_b<BUSWIDTH, FW_IF, BW_IF>,
+                                  public sc_core::sc_port<FW_IF, N, POL> <1>
+{
+public:
+  typedef FW_IF fw_interface_type;
+  typedef BW_IF bw_interface_type;
+  typedef sc_core::sc_port<fw_interface_type,N,POL>   port_type;
+
+  typedef sc_core::sc_export<bw_interface_type> export_type;
+
+  typedef tlm_base_target_socket_b<BUSWIDTH,
+                                   fw_interface_type,
+                                   bw_interface_type> base_target_socket_type;
+  typedef tlm_base_initiator_socket_b<BUSWIDTH,
+                                      fw_interface_type,
+                                      bw_interface_type> base_type;
+
+  template <unsigned int, typename, typename, int, sc_core::sc_port_policy>
+  friend class tlm_base_target_socket;
+
+  // blabla
+protected:
+  export_type m_export; <2>
+};
+----
+<1> tlm_base_initiator_socket **is a** sc_core::sc_port<FW_IF>
+<2> tlm_base_initiator_socket **has a** sc_core::sc_export<BW_IF>
+
+tlm_base_initiator_socket本身也是个模板类，模板参数相比于基类tlm_base_initiator_socket_b的三个
+，增加了额外的两个。增加的两个参数是为了初始化另一个基类sc_core::sc_port。
+
+从tlm_base_initiator_socket来看，tlm_base_initiator_socket本身是(is a)sc_core::sc_port<FW_IF>，
+且拥有一个唯一的成员变量 m_export，类型是sc_core::sc_export<BW_IF>。
+
+tlm_base_initiator_socket实现了tlm_base_socket_if所定义的接口函数：
+
+.src/tlm_core/tlm_2/tlm_sockets/tlm_initiator_socket.h
+[source,cpp]
+----
+  // Implementation of tlm_base_socket_if functions
+  virtual unsigned int                    get_bus_width() const
+    { return BUSWIDTH; }
+  virtual sc_core::sc_type_index          get_protocol_types() const
+    { return typeid(typename BW_IF::protocol_types); }
+  virtual tlm_socket_category             get_socket_category() const
+    { return TLM_INITIATOR_SOCKET; }
+
+  // Implementation of tlm_base_target_socket_b functions
+  virtual sc_core::sc_port_b<FW_IF> &       get_base_port()
+    { return *this; }
+  virtual sc_core::sc_port_b<FW_IF> const & get_base_port() const
+    { return *this; }
+
+  virtual                    BW_IF  &       get_base_interface()
+    { return m_export; }
+  virtual                    BW_IF  const & get_base_interface() const
+    { return m_export; }
+
+  virtual sc_core::sc_export<BW_IF> &       get_base_export()
+    { return m_export; }
+  virtual sc_core::sc_export<BW_IF> const & get_base_export() const
+    { return m_export; }
+----
+
+对于tlm_base_initiator_socket来说，get_bus_width和get_socket_category两个接口函数实现都比较简单。
+而get_protocol_types，其实解释得到的结果是<<api::tlm_base_protocol_types, tlm_base_protocol_types>>
+的typeid，这是因为BW_IF::protocol_types的定义默认其实就是<<api::tlm_base_protocol_types, tlm_base_protocol_types>>
+，参考<<api::tlm_bw_transport_if, tlm_bw_transport_if>>部分。
+
+由于tlm_base_initiator_socket本身继承自sc_port<FW_IF>，所以get_base_port的返回，只需要返回自身即可。
+而get_base_export，则返回成员变量m_export即可。这里需要额外注意的一点是，对于get_base_interface，返回的
+也是m_export。这是因为对于sc_export<BW_IF>，实现了 `operator IF& ()` ，可以转换为对应的sc_interface的引用
+类型，参考<<api::sc_export::operator_IF, sc_export>>部分的说明。
+
+tlm_base_initiator_socket的构造函数都比较简单：
+
+.src/tlm_core/tlm_2/tlm_sockets/tlm_initiator_socket.h
+[source,cpp]
+----
+  tlm_base_initiator_socket()
+  : port_type(sc_core::sc_gen_unique_name("tlm_base_initiator_socket"))
+  , m_export(sc_core::sc_gen_unique_name("tlm_base_initiator_socket_export"))
+  {
+  }
+
+  explicit tlm_base_initiator_socket(const char* name)
+  : port_type(name)
+  , m_export(sc_core::sc_gen_unique_name((std::string(name) + "_export").c_str()))
+  {
+  }
+----
+
+两种类型的构造函数（空构造，以及使用literal字符串构造），实际上都只是给tlm_base_initiator_socket本身以及
+唯一的成员变量m_export赋予名字而已。因为tlm_base_initiator_socket继承自sc_port，所以同样属于systemc
+范畴内的component，需要有一个名字用来构造hierarchy名字。同样，作为systemc的component，tlm_base_initiator_socket
+也实现了kind函数：
+
+.src/tlm_core/tlm_2/tlm_sockets/tlm_initiator_socket.h
+[source,cpp]
+----
+  virtual const char* kind() const
+  {
+    return "tlm_base_initiator_socket";
+  }
+----
+
+tlm_base_initiator_socket作为一个sc_port的派生类，同样实现了TLM语义下的bind。在TLM下，一个tlm_base_initiator_socket
+可以做如下绑定：
+
+* initiator socket绑定到一个target socket
+* initiator socket绑定到另一个initiator socket（hierarchy bind）
+* initiator socket绑定到一个interface
+
+当initiator socket绑定到一个target socket的时候，绑定的实现如下：
+
+.src/tlm_core/tlm_2/tlm_sockets/tlm_initiator_socket.h
+[source,cpp]
+----
+  //
+  // Bind initiator socket to target socket
+  // - Binds the port of the initiator socket to the export of the target
+  //   socket
+  // - Binds the port of the target socket to the export of the initiator
+  //   socket
+  //
+  virtual void bind(base_target_socket_type& s)
+  {
+    // initiator.port -> target.export
+    (get_base_port())(s.get_base_interface());
+    // target.port -> initiator.export
+    (s.get_base_port())(get_base_interface());
+  }
+
+  void operator() (base_target_socket_type& s)
+  {
+    bind(s);
+  }
+----
+
+当一个initiator socket绑定到一个target socket的时候，可以看出此时相当于将
+本initiator socket作为一个sc_port，绑定了target socket的interface。与此同时，将
+taregt socket作为一个sc_port，绑定了本initiator的interface（本initiator socket的
+interface实际上是从m_export这个sc_export转出来的）。这样一来，initiator socket
+作为sc_port绑定了target socket的interface（介绍到target socket的时候我们会看到，target
+socket是一个sc_export，所以interface也是从自己，而不是成员变量，转出来的），而target socket
+的port（其实是target socket内部的成员变量）绑定到本initiator socket的m_export上。
+
+注意，`bind` 函数是一个虚函数，这是因为sc_base_initiator_socket是一个sc_port（派生自
+sc_port，而 base_target_socket_type（一般就是 sc_base_target_socket）则是一个
+sc_export（派生自sc_export），所以这个bind实际上override了sc_port_b的这个bind函数：
+
+
+.src/sysc/communication/sc_port.h
+[source,cpp]
+----
+    // bind an interface of type IF to this port
+
+    SC_VIRTUAL_ void bind( IF& interface_ )
+	{ base_type::bind( interface_ ); }
+
+    void operator () ( IF& interface_ )
+	{ this->bind( interface_ ); }
+----
+
+这是因为sc_export提供了到对应的 `IF&` 的默认转换函数。注意sc_port_b的 `void operator()(IF&)`
+并不是一个虚函数，所以 tlm_base_initiator_socket 的 `void operator() (bse_target_socket_type&)`
+也不是虚函数。
+
+当initiator socket绑定到另一个initiator socket的时候，绑定实现如下：
+
+.src/tlm_core/tlm_2/tlm_sockets/tlm_initiator_socket.h
+[source,cpp]
+----
+  //
+  // Bind initiator socket to initiator socket (hierarchical bind)
+  // - Binds both the export and the port
+  //
+  virtual void bind(base_type& s)
+  {
+    // port
+    (get_base_port())(s.get_base_port());
+    // export
+    (s.get_base_export())(get_base_export());
+  }
+
+  void operator() (base_type& s)
+  {
+    bind(s);
+  }
+----
+
+当一个initiator socket绑定到另一个initiator socket的时候，实际上相当于本initiator
+socket作为一个sc_port，绑定到了第二个initiator socket上（第二个initiator socket也作为
+一个sc_port）。此外，第二个socket的m_export成员变量，绑定到本initiator socket上的export上。
+但由于一个sc_export绑定到另一个sc_export上的时候，被绑定对象会默认转为interface类型，所以这相当于
+第二个initiator socket的m_export绑定到了本m_export内部的interface上。
+
+同样的， `void bind(base_type&)` 是一个虚函数，是因为sc_port_b本身的这个bind
+是虚函数：
+
+.src/sysc/communication/sc_port.h
+[source,cpp]
+----
+    // bind a parent port with type IF to this port
+
+    SC_VIRTUAL_ void bind( port_type& parent_ )
+	{ base_type::bind( parent_ ); }
+
+    void operator () ( port_type& parent_ )
+	{ this->bind( parent_ ); }
+----
+
+
+当一个initiator socket绑定到一个interface类型（initiator socket只能绑定到一个BW_IF类型
+的interface）时，绑定的实现如下：
+
+.src/tlm_core/tlm_2/tlm_sockets/tlm_initiator_socket.h
+[source,cpp]
+----
+  //
+  // Bind interface to socket
+  // - Binds the interface to the export of this socket
+  //
+  virtual void bind(bw_interface_type& ifs)
+  {
+    (get_base_export())(ifs);
+  }
+
+  void operator() (bw_interface_type& s)
+  {
+    bind(s);
+  }
+----
+
+实际上绑定发生的结果是，本initiator socket的m_export绑定到了interface上。注意，这种绑定发生
+的时候，本initiator socket作为一个sc_port，并没有参与到绑定过程中。
+
+
+
+==== tlm_initiator_socket
+[[api::tlm_initiator_socket]]
+
+tlm_initiator_socket作为一个模板类，直接继承自tlm_base_initiator_socket。相比于
+基类tlm_base_initiator_socket，tlm_initiator_socket并没有增加额外的函数实现等，而
+更多的是给tlm_base_initiator_socket的模板参数提供了更加实用化的默认值。准确来说，是
+将tlm_base_initiator_socket模板参数中的FW_IF默认值指定为 `tlm_fw_transport_if<TYPES>`
+，且将BW_IF的默认值指定为 `tlm_bw_transport_if<TYPES>`。这样一来，如果使用了tlm_initiator_socket
+的定义，那么就固定使用了<<api::tlm_fw_transport_if, tlm_fw_transport_if>>和
+<<api::tlm_bw_transport_if, tlm_bw_transport_if>>两个模板类了:
+
+.src/tlm_core/tlm_2/tlm_sockets/tlm_initiator_socket.h
+[source,cpp]
+----
+template <unsigned int BUSWIDTH = 32,
+          typename TYPES = tlm_base_protocol_types,
+          int N = 1,
+          sc_core::sc_port_policy POL = sc_core::SC_ONE_OR_MORE_BOUND>
+class tlm_initiator_socket :
+  public tlm_base_initiator_socket<BUSWIDTH,
+                               tlm_fw_transport_if<TYPES>,
+                               tlm_bw_transport_if<TYPES>,
+                               N, POL>
+{
+  typedef tlm_base_initiator_socket<BUSWIDTH,
+                                    tlm_fw_transport_if<TYPES>,
+                                    tlm_bw_transport_if<TYPES>,
+                                    N, POL> base_socket_type;
+public:
+  tlm_initiator_socket()
+    : base_socket_type()
+  {}
+
+  explicit tlm_initiator_socket(const char* name)
+    : base_socket_type(name)
+  {}
+
+  virtual const char* kind() const <1>
+  {
+    return "tlm_initiator_socket";
+  }
+
+};
+----
+<1> 相比于基类tlm_base_initiator_socket，tlm_initiator_socket唯一不同的就只有这个 `kind`
+函数的实现了
 
 === tlm_target_socket

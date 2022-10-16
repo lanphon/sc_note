@@ -7,6 +7,7 @@ order,
 1. process，process类使用汇总
 3. primitive-channel，primitive channel类的设计，以及其 `request_update -> update `框架
 4. port，为hierarchy结构提出的port类
+4. interface-port-export，再次讨论communication部分，这部分是TLM中比较核心的部件
 4. sensitive，如何设置静态敏感事件
 4. trace
 5. misc，杂项
