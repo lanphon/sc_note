@@ -951,9 +951,181 @@ public:
 === tlm_phase
 [[api::tlm_phase]]
 
+tlm_phase是一个类定义（不是模板，也不是虚基类）：
+
+.src/tlm_core/tlm_2/tlm_generic_payload/tlm_phase.h
+[source,cpp]
+----
+class SC_API tlm_phase
+{
+public:
+  tlm_phase();
+  tlm_phase(unsigned int id); // TODO: should be dropped
+
+  tlm_phase(tlm_phase_enum standard);
+  tlm_phase& operator=(tlm_phase_enum standard);
+
+  operator unsigned int() const { return m_id; }
+  const char* get_name() const;
+
+protected:
+  // register extended phase
+  tlm_phase( const std::type_info & type, const char* name ); <1>
+
+private:
+  unsigned int m_id;
+};
+----
+<1> 这个protected的构造函数可以用来注册新的phase
+
+从这个定义可以看出，tlm_phase的主要功能是实现了一个类似time-stamp的功能。
+
+其中，tlm_phase_enum的枚举值有：
+[[api::tlm_phase_enum]]
+
+.src/tlm_core/tlm_2/tlm_generic_payload/tlm_phase.h
+[source,cpp]
+----
+enum SC_API tlm_phase_enum
+{
+  UNINITIALIZED_PHASE=0,
+  BEGIN_REQ=1,
+  END_REQ,
+  BEGIN_RESP,
+  END_RESP
+};
+----
+
+tlm_phase有一个protected的构造函数，可以用来构造新的phase名称，这个函数的实现如下：
+
+.src/tlm_core/tlm_2/tlm_generic_payload/tlm_phase.h
+[source,cpp]
+----
+tlm_phase::tlm_phase( const std::type_info& type, const char* name )
+  : m_id( tlm_phase_registry::instance().register_phase(type, name) )
+{}
+----
+
+这里实际上调用的是<<api::tlm_phase_registry::register_phase, tlm_phase_registry的register_phase>>
+成员函数完成注册的，具体细节可以参考register_phase函数的介绍。 `get_name` 成员函数也是使用了tlm_phase_registry
+的id-string之间的对应关系获取的：
+
+.src/tlm_core/tlm_2/tlm_generic_payload/tlm_phase.h
+[source,cpp]
+----
+const char*
+tlm_phase::get_name() const
+{
+  return tlm_phase_registry::instance().get_name( m_id );
+}
+----
+
+==== tlm_phase_registry
+
+tlm_phase_registry是实现在cpp文件中的一个私有类，因此这个类只能在SystemC内部使用。
+这个类主要管理了tlm_phase的注册事项：
+[[data::tlm_phase_registry]]
+
+.src/tlm_core/tlm_2/tlm_generic_payload/tlm_phase.cpp
+[source,cpp]
+----
+private:
+  typedef std::map<sc_type_index, key_type> type_map;
+  typedef std::vector<std::string> name_table;
+
+  type_map   ids_;
+  name_table names_;
+
+  tlm_phase_registry() <1>
+    : names_( END_RESP+1 )
+  {
+#   define BUILTIN_PHASE(phase) \
+      names_[phase] = #phase
+
+    BUILTIN_PHASE( UNINITIALIZED_PHASE );
+    BUILTIN_PHASE( BEGIN_REQ );
+    BUILTIN_PHASE( END_REQ );
+    BUILTIN_PHASE( BEGIN_RESP );
+    BUILTIN_PHASE( END_RESP );
+  }
+----
+<1> 为一个的构造函数是私有函数，因此这个类不能被其他部分create出来，其实这是为了保护这个类的单件实现
+
+tlm_phase_registry的构造函数往  `names_` 这个string的vector中分别放入了5个tlm_phase_enum的
+字符串表达形式。
+
+tlm_phase_registry的主要核心部分实现是一个register_phase函数：
+
+[[api::tlm_phase_registry::register_phase]]
+
+.src/tlm_core/tlm_2/tlm_generic_payload/tlm_phase.cpp
+[source,cpp]
+----
+  unsigned int register_phase(sc_type_index type, sc_string_view name)
+  {
+    type_map::const_iterator it = ids_.find( type );
+
+    if( name.empty() ) {
+      SC_REPORT_FATAL( sc_core::SC_ID_INTERNAL_ERROR_,
+                       "unexpected empty tlm_phase name" );
+      return UNINITIALIZED_PHASE;
+    }
+
+    if( it == ids_.end() ) { // new phase - generate/store ID and name 
+      type_map::value_type v( type, static_cast<key_type>(names_.size()) ); <1>
+      names_.push_back( name_table::value_type(name.data(), name.size()) );
+      ids_.insert( v );
+      return v.second; <2>
+    }
+
+    if( names_[it->second] != name ) {
+      SC_REPORT_FATAL( sc_core::SC_ID_INTERNAL_ERROR_,
+                       "tlm_phase registration failed: duplicate type info" );
+      sc_core::sc_abort();
+    }
+    return it->second; <3>
+  }
+----
+<1> 如果map里没有type，那么就构造type，并将值设定为names_的长度，将name放入names_中，并将构造的
+type-id对（id值就是名字在names_里的下表）插入到map中
+<2> 返回的值实际上对应新插入的type所对应的名字在names_里的下表
+<3> 如果map里已经有type，直接返回所记录的下标值即可
+
+由于 `names_` 成员变量在初始化的时候已经插入了5个名字（即<<api::tlm_phase_enum, tlm_phase_enum>>
+的5个枚举值对应的字符串，因而后续所有使用register_phase所注册的phase，其ID值将不小于5.
+
+tlm_phase的get_name调用到了tlm_phase_registry的get_name成员函数，这个成员函数的实现是：
+
+.src/tlm_core/tlm_2/tlm_generic_payload/tlm_phase.h
+[source,cpp]
+----
+  const char* get_name( key_type id ) const
+  {
+    sc_assert( id < names_.size() );
+    return names_[id].c_str();
+  }
+----
+
+这个成员函数不仅可以返回自定义（自己使用register_phase注册的phase）的名称，还可以返回
+预定义的5个<<api::tlm_phase_enum, tlm_phase_enum>>的名称，这是因为5个tlm_phase_enum
+的枚举名称已经在tlm_phase_registry构造的时候放入进去了。
+
 
 === tlm_dmi
 [[api::tlm_dmi]]
+
+.src/tlm_core/tlm_2/tlm_generic_payload/tlm_phase.h
+[source,cpp]
+----
+enum SC_API tlm_phase_enum
+{
+  UNINITIALIZED_PHASE=0,
+  BEGIN_REQ=1,
+  END_REQ,
+  BEGIN_RESP,
+  END_RESP
+};
+----
 
 == socket
 
@@ -1124,6 +1296,9 @@ tlm_base_initiator_socket本身也是个模板类，模板参数相比于基类t
 从tlm_base_initiator_socket来看，tlm_base_initiator_socket本身是(is a)sc_core::sc_port<FW_IF>，
 且拥有一个唯一的成员变量 m_export，类型是sc_core::sc_export<BW_IF>。
 
+.tlm_base_initiator_socket的数据结构
+image::tlm_base_initiator_socket.png[]
+
 tlm_base_initiator_socket实现了tlm_base_socket_if所定义的接口函数：
 
 .src/tlm_core/tlm_2/tlm_sockets/tlm_initiator_socket.h
@@ -1237,6 +1412,10 @@ interface实际上是从m_export这个sc_export转出来的）。这样一来，
 socket是一个sc_export，所以interface也是从自己，而不是成员变量，转出来的），而target socket
 的port（其实是target socket内部的成员变量）绑定到本initiator socket的m_export上。
 
+.initiator socket绑定到target socket
+image::binding_initiator_to_target.png[]
+
+
 注意，`bind` 函数是一个虚函数，这是因为sc_base_initiator_socket是一个sc_port（派生自
 sc_port，而 base_target_socket_type（一般就是 sc_base_target_socket）则是一个
 sc_export（派生自sc_export），所以这个bind实际上override了sc_port_b的这个bind函数：
@@ -1287,6 +1466,10 @@ socket作为一个sc_port，绑定到了第二个initiator socket上（第二个
 但由于一个sc_export绑定到另一个sc_export上的时候，被绑定对象会默认转为interface类型，所以这相当于
 第二个initiator socket的m_export绑定到了本m_export内部的interface上。
 
+.initiator socket绑定到另一个initiator socket
+image::binding_initiator_to_initiator.png[]
+
+
 同样的， `void bind(base_type&)` 是一个虚函数，是因为sc_port_b本身的这个bind
 是虚函数：
 
@@ -1327,6 +1510,8 @@ socket作为一个sc_port，绑定到了第二个initiator socket上（第二个
 实际上绑定发生的结果是，本initiator socket的m_export绑定到了interface上。注意，这种绑定发生
 的时候，本initiator socket作为一个sc_port，并没有参与到绑定过程中。
 
+.initiator socket绑定到BW_IF上
+image::binding_initiator_to_BW.png[]
 
 
 ==== tlm_initiator_socket
@@ -1377,3 +1562,332 @@ public:
 函数的实现了
 
 === tlm_target_socket
+
+tlm_target_socket的定义方式和tlm_initiator_socket的定义方式基本一样，也是分为tlm_base_target_socket_b
+，tlm_base_target_socket和tlm_taregt_socket三层。
+
+==== tlm_base_target_socket_b
+
+tlm_base_target_socket_b继承自tlm_base_socket_if，并且添加了额外的三个模板参数：
+[[api::tlm_base_target_socket_b]]
+
+.src/tlm_core/tlm_2/tlm_sockets/tlm_target_socket.h
+[source,cpp]
+----
+template <unsigned int BUSWIDTH = 32,
+          typename FW_IF = tlm_fw_transport_if<>,
+          typename BW_IF = tlm_bw_transport_if<> >
+class tlm_base_target_socket_b
+  : public tlm_base_socket_if
+{
+public:
+  virtual ~tlm_base_target_socket_b() {}
+
+  virtual sc_core::sc_port_b<BW_IF> &       get_base_port() = 0;
+  virtual sc_core::sc_port_b<BW_IF> const & get_base_port() const = 0;
+  virtual sc_core::sc_export<FW_IF> &       get_base_export() = 0;
+  virtual sc_core::sc_export<FW_IF> const & get_base_export() const = 0;
+  virtual                    FW_IF  &       get_base_interface() = 0;
+  virtual                    FW_IF  const & get_base_interface() const = 0;
+};
+----
+
+三个额外的模板参数和<<api::tlm_base_initiator_socket_b, tlm_base_initiator_socket_b>>
+一样，一个BUSWIDTH，一个FW_IF和一个BW_IF，后两者的默认模板类型则分别是
+<<api::tlm_fw_transport_if, tlm_fw_transport_if<> >>
+和<<api::tlm_bw_transport_if, tlm_bw_transport_if<> >>。相比于
+基类<<api::tlm_base_socket_if, tlm_base_socket_if>>，
+tlm_base_target_socket_b将几个接口函数的返回值类型进行了细化。`get_base_port`
+返回的是 `sc_port_b<BW_IF>`  引用，而 `get_base_export`
+的类型则是 `sc_export<FW_IF>` 引用。对比下<<api::tlm_base_initiator_socket_b, tlm_base_initiator_socket_b>>
+细化的类型(initiator socket里，get_base_port返回的是 `sc_port_b<FW_IF`, 而get_base_export
+返回的是`sc_export<BW_IF>`)，可以看出target socket的返回值类型和initiator socket刚好相反的。
+当然，`get_base_interface` 返回的是FW_IF的引用。
+
+
+==== tlm_base_target_socket
+
+tlm_base_target_socket直接继承自tlm_base_target_socket_b，同时
+还继承自<<api::sc_export, sc_core::sc_export>>。所以，tlm_base_target_socket
+本身就是一个 `sc_export<FW_IF>`:
+[[api::tlm_base_target_socket]]
+
+.src/tlm_core/tlm_2/tlm_sockets/tlm_target_socket.h
+[source,cpp]
+----
+template <unsigned int BUSWIDTH = 32,
+          typename FW_IF = tlm_fw_transport_if<>,
+          typename BW_IF = tlm_bw_transport_if<>,
+          int N = 1,
+          sc_core::sc_port_policy POL = sc_core::SC_ONE_OR_MORE_BOUND>
+class tlm_base_target_socket : public tlm_base_target_socket_b<BUSWIDTH, FW_IF, BW_IF>,
+                               public sc_core::sc_export<FW_IF>
+{
+public:
+  typedef FW_IF fw_interface_type;
+  typedef BW_IF bw_interface_type;
+  typedef sc_core::sc_port<bw_interface_type, N , POL> port_type;
+
+  typedef sc_core::sc_export<fw_interface_type> export_type;
+  typedef tlm_base_initiator_socket_b<BUSWIDTH,
+                                      fw_interface_type,
+                                      bw_interface_type>  base_initiator_socket_type;
+
+  typedef tlm_base_target_socket_b<BUSWIDTH,
+                                   fw_interface_type,
+                                   bw_interface_type> base_type;
+
+  template <unsigned int, typename, typename, int, sc_core::sc_port_policy>
+  friend class tlm_base_initiator_socket;
+
+  // blabla
+protected:
+  port_type m_port;
+};
+----
+
+除此之外，tlm_base_target_socket还持有唯一一个成员变量，即类型为
+`sc_port<BW_IF>` 的成员变量 m_port，所以tlm_base_target_socket的构成如下图所示：
+
+.tlm_base_target_socket的数据结构
+image::tlm_base_target_socket.png[]
+
+tlm_base_target_socket继承自tlm_base_target_socket_b虚基类，并且实现了对应的
+接口函数：
+
+.src/tlm_core/tlm_2/tlm_sockets/tlm_target_socket.h
+[source,cpp]
+----
+  // Implementation of tlm_base_socket_if functions
+  virtual unsigned int                    get_bus_width() const
+    { return BUSWIDTH; }
+  virtual sc_core::sc_type_index          get_protocol_types() const
+    { return typeid(typename FW_IF::protocol_types); }
+  virtual tlm_socket_category             get_socket_category() const
+    { return TLM_TARGET_SOCKET; }
+
+  // Implementation of tlm_base_target_socket_b functions
+  virtual sc_core::sc_port_b<BW_IF> &       get_base_port()
+    { return m_port; }
+  virtual sc_core::sc_port_b<BW_IF> const & get_base_port() const
+    { return m_port; }
+
+  virtual                    FW_IF  &       get_base_interface()
+    { return *this; }
+  virtual                    FW_IF  const & get_base_interface() const
+    { return *this; }
+
+  virtual sc_core::sc_export<FW_IF> &       get_base_export()
+    { return *this; }
+  virtual sc_core::sc_export<FW_IF> const & get_base_export() const
+    { return *this; }
+----
+
+其中 `get_bus_width`, `get_protocol_types` 和 `get_socket_category` 的实现和
+<<api::tlm_base_initiator_socket, tlm_base_initiator_socket>>中的实现是类似的。
+而 `get_base_port` 返回的是成员变量 `m_port`， `get_base_interface` 和
+`get_base_export` 返回的都是tlm_base_target_socket本身。
+
+
+tlm_base_target_socket的构造函数如下所示：
+
+.src/tlm_core/tlm_2/tlm_sockets/tlm_target_socket.h
+[source,cpp]
+----
+  tlm_base_target_socket()
+  : export_type(sc_core::sc_gen_unique_name("tlm_base_target_socket"))
+  , m_port(sc_core::sc_gen_unique_name("tlm_base_target_socket_port"))
+  {
+  }
+
+  explicit tlm_base_target_socket(const char* name)
+  : export_type(name)
+  , m_port(sc_core::sc_gen_unique_name((std::string(name) + "_port").c_str()))
+  {
+  }
+
+  virtual const char* kind() const<1>
+  {
+    return "tlm_base_target_socket";
+  }
+----
+<1> tlm_base_target_socket的kind明确指定为 `"tlm_base_target_socket"`
+
+这两个构造函数，实际上就只是用来为自己（本身是一个sc_export）和
+唯一的成员变量 m_port 赋予一个名字，用来构造这两部分的hierarchy名字。
+
+与initiator socket类似，target socket的绑定有三种：
+
+* target socket绑定到initiator socket上
+* target socket绑定到另一个target socket上
+* target socket绑定到一个FW_IF上
+
+当一个target socket绑定到一个initiator socket的时候，实现如下：
+
+.src/tlm_core/tlm_2/tlm_sockets/tlm_target_socket.h
+[source,cpp]
+----
+  //
+  // Bind target socket to initiator socket
+  // - Binds the port of the initiator socket to the export of the target
+  //   socket
+  // - Binds the port of the target socket to the export of the initiator
+  //   socket
+  //
+  virtual void bind(base_initiator_socket_type& s)
+  {
+    // initiator.port -> target.export
+    (s.get_base_port())(get_base_interface());
+    // target.port -> initiator.export
+    get_base_port()(s.get_base_interface());
+  }
+
+  void operator() (base_initiator_socket_type& s)
+  {
+    bind(s);
+  }
+----
+
+这里绑定的效果和一个initiator socket绑定到一个target socket的效果是一模一样的。
+
+当一个target socket绑定到另一个target socket上的时候，实现如下：
+
+.src/tlm_core/tlm_2/tlm_sockets/tlm_target_socket.h
+[source,cpp]
+----
+  //
+  // Bind target socket to target socket (hierarchical bind)
+  // - Binds both the export and the port
+  //
+  virtual void bind(base_type& s)
+  {
+    // export
+    (get_base_export())(s.get_base_export());
+    // port
+    (s.get_base_port())(get_base_port());
+  }
+
+  void operator() (base_type& s)
+  {
+    bind(s);
+  }
+----
+
+当一个target socket绑定到另一个target socket（主要为了hierarchy bind）的时候，
+实现的效果则如下图所示：
+
+.target socket绑定到另一个target socket
+image::binding_target_to_target.png[]
+
+
+当一个target socket绑定到一个FW_IF上的实现如下所示：
+
+.src/tlm_core/tlm_2/tlm_sockets/tlm_target_socket.h
+[source,cpp]
+----
+  //
+  // Bind interface to socket
+  // - Binds the interface to the export
+  //
+  virtual void bind(fw_interface_type& ifs)
+  {
+    export_type* exp = &get_base_export();
+    if( this == exp ) {
+      export_type::bind( ifs ); // non-virtual function call
+    } else {
+      exp->bind( ifs );
+    }
+  }
+
+  void operator() (fw_interface_type& s)
+  {
+    bind(s);
+  }
+----
+
+绑定达到的效果如下图所示：
+
+.target socket绑定到一个FW
+image::binding_target_to_FW.png[]
+
+除了这些绑定函数之外，tlm_base_target_socket还实现了三个成员函数，分别是 `size`
+`operator->` 和 `operator[]`，实际上都是将这三个函数转发给唯一的成员变量
+m_port，实现的是 m_port对应的功能：
+
+.src/tlm_core/tlm_2/tlm_sockets/tlm_target_socket.h
+[source,cpp]
+----
+  //
+  // Forward to 'size()' of port class
+  //
+  int size() const
+  {
+    return m_port.size();
+  }
+
+  //
+  // Forward to 'operator->()' of port class
+  //
+  bw_interface_type* operator->()
+  {
+    return m_port.operator->();
+  }
+
+  //
+  // Forward to 'operator[]()' of port class
+  //
+  bw_interface_type* operator[](int i)
+  {
+    return m_port.operator[](i);
+  }
+----
+
+其中，`size` 返回的是 m_port绑定的interface的总数（sc_port可以绑定多个interface，但tlm_base_initiator_socket
+内的成员变量m_export是无法绑定多个interface）。这也是为了<<api::tlm_base_initiator_socket, tlm_base_initiator_socket>>
+上无需实现成员变量m_export的功能的原因。
+
+==== tlm_target_socket
+
+tlm_target_socket继承自tlm_base_target_socket，主要改动是模板参数变化:
+[[api::tlm_target_socket]]
+
+.src/tlm_core/tlm_2/tlm_sockets/tlm_target_socket.h
+[source,cpp]
+----
+template <unsigned int BUSWIDTH = 32,
+          typename TYPES = tlm_base_protocol_types,
+          int N = 1,
+          sc_core::sc_port_policy POL = sc_core::SC_ONE_OR_MORE_BOUND>
+class tlm_target_socket :
+  public tlm_base_target_socket <BUSWIDTH,
+                            tlm_fw_transport_if<TYPES>,
+                            tlm_bw_transport_if<TYPES>,
+                            N, POL>
+{
+  typedef tlm_base_target_socket<BUSWIDTH,
+                                 tlm_fw_transport_if<TYPES>,
+                                 tlm_bw_transport_if<TYPES>,
+                                 N, POL> base_socket_type;
+public:
+  tlm_target_socket()
+    : base_socket_type()
+  {}
+
+  explicit tlm_target_socket(const char* name)
+    : base_socket_type(name)
+  {}
+
+  virtual const char* kind() const
+  {
+    return "tlm_target_socket";
+  }
+};
+----
+
+tlm_target_socket和<<api::tlm_initiator_socket, tlm_initiator_socket>>
+一样，和其基类相比，并没有实现更多的功能，设计的初衷主要是为了修改模板类型。tlm_target_socket
+和tlm_initiator_socket都是完全的模板类，其模板参数都提供了默认值，因而在使用的时候，可以
+无需指定任何模板参数，而直接使用 `tlm_target_socket<>` 和 `tlm_initiator_socket<>`
+这种类型。
+
+=== initiator和target socket
