@@ -152,8 +152,7 @@ simple_initiator_socket包括一系列sockets定义，同样有着一套复杂�
 * 从simple_initiator_socket_b，派生出
 - simple_initiator_socket
 - simple_initiator_socket_optional
-* 从simple_initiator_socket，派生出
-- simple_initiator_socket_tagged_b
+* simple_initiator_socket_tagged_b继承自tlm_initiator_socket和simple_socket_base
 * 从simple_initiator_socket_tagged_b，派生出
 - simple_initiator_socket_tagged
 - simple_initiator_socket_tagged_optional
@@ -245,7 +244,7 @@ MODULE的指针，以及两个成员函数指针均为空。这三个成员变�
         return (m_mod->*m_transport_ptr)(trans, phase, t);
       }
       display_error("no transport callback registered"); <1>
-      return tlm::TLM_COMPLETED; <1>
+      return tlm::TLM_COMPLETED; <2>
     }
 
     void invalidate_direct_mem_ptr(sc_dt::uint64 start_range,
@@ -290,12 +289,15 @@ public:
   typedef tlm::tlm_initiator_socket<BUSWIDTH,TYPES,1,POL> base_type;
   // blabla
 private:
-  process m_process; <3>
+  const sc_core::sc_object* get_socket() const { return this; } <3>
+private:
+  process m_process; <4>
 };
 ----
 <1> simple_initiator_socket_b继承自<<api::tlm_initiator_socket, tlm_initiator_socket>>, 最后两个参数1和POL用来给<<api::sc_port, sc_port>>提供参数，因为tlm_initiator_socket本身也是一个sc_port，1的含义是，如果绑定策略是SC_ALL_BOUND，那么就只能精确绑定一个。对于不是SC_ALL_BOUND绑定策略的情况，1这个数字无意义
 <2> simple_initiator_socket_b同时也继承自<<data::simple_socket_base, simple_socket_base>>，注意是protected继承
-<3> 唯一一个成员变量就是<<data::simple_initiator_socket_b::process, process>>了
+<3> get_socket实现了simple_socket_base所需要的接口函数定义
+<4> 唯一一个成员变量就是<<data::simple_initiator_socket_b::process, process>>了
 
 
 simple_initiator_socket_b之所以需要继承simple_socket_base，是为了提供display_warning和display_error
@@ -338,6 +340,8 @@ cast成为 `tlm_bw_transport_if*` 类型，进而调用tlm_bw_transport_if所定
 register_nb_transport_bw和register_invalidate_direct_mem_ptr两个
 成员函数，注意这两个成员函数的类型和prcess的同名成员函数是一样的，所以函数本身的实现
 只是一个转发而已：
+[[data::simple_initiator_socket_b::register_nb_transport_bw]]
+[[data::simple_initiator_socket_b::register_invalidate_direct_mem_ptr]]
 
 .src/tlm_utils/simple_initiator_socket.h
 [source,cpp]
@@ -415,6 +419,258 @@ class simple_initiator_socket_optional
 public:
   simple_initiator_socket_optional() : socket_b() {}
   explicit simple_initiator_socket_optional(const char* name) : socket_b(name) {}
+};
+----
+
+==== simple_initiator_socket_tagged_b::process
+
+simple_initiator_socket_tagged_b内部有一个类process，实现了和
+<<data::simple_initiator_socket_b::process, simple_initiator_socket_b中的process类>>
+同样的功能：
+[[data::simple_initiator_socket_tagged_b::process]]
+
+.src/tlm_utils/simple_initiator_socket.h
+[source,cpp]
+----
+  class process
+    : public tlm::tlm_bw_transport_if<TYPES>
+    , protected convenience_socket_cb_holder
+  {
+  public:
+    typedef sync_enum_type (MODULE::*TransportPtr)(int, <1>
+                                                   transaction_type&,
+                                                   phase_type&,
+                                                   sc_core::sc_time&);
+    typedef void (MODULE::*InvalidateDirectMemPtr)(int, <1>
+                                                   sc_dt::uint64,
+                                                   sc_dt::uint64);
+  // blabla
+  private:
+    MODULE* m_mod;
+    TransportPtr m_transport_ptr;
+    InvalidateDirectMemPtr m_invalidate_direct_mem_ptr;
+    int m_transport_user_id; <2>
+    int m_invalidate_direct_mem_user_id; <2>
+  };
+----
+<1> 注意，成员函数指针的类型中，函数参数相比于<<data::simple_initiator_socket_b::process, simple_initiator_socket_b中的process类>>
+多了第一个 `int` 型的参数
+<2> 成员变量也增加了两个 `int` 型变量
+
+process类同样继承自<<api::tlm_bw_transport_if, tlm_bw_transport_if>>和
+<<data::convenience_socket_cb_holder, convenience_socket_cb_holder>>。继承自前者，意味着
+需要实现接口函数nb_transport_bw和invalidate_direct_mem_ptr。继承自后者，主要是为了实现
+在process内部调用display_warning和display_error函数的功能。
+
+注意，这里的成员函数指针的类型TransportPtr和InvalidateDirectMmePtr，与
+<<data::simple_initiator_socket_b::process, simple_initiator_socket_b中的process类>>
+的成员函数指针类型不一样：这里的函数指针类型，都增加了第一个 `int` 型的参数。此外，成员变量
+也多了两个 `int` 型的 m_transport_user_id和m_invalidate_direct_mem_user_id。
+
+在实现tlm_bw_transport_if的时候，这两个id被用来作为相应成员函数调用时候的第一个参数：
+
+.src/tlm_utils/simple_initiator_socket.h
+[source,cpp]
+----
+    sync_enum_type nb_transport_bw(transaction_type& trans, phase_type& phase, sc_core::sc_time& t)
+    {
+      if (m_transport_ptr) {
+        // forward call
+        sc_assert(m_mod);
+        return (m_mod->*m_transport_ptr)(m_transport_user_id, trans, phase, t); <1>
+      }
+      display_error("no transport callback registered");
+      return tlm::TLM_COMPLETED;
+    }
+
+    void invalidate_direct_mem_ptr(sc_dt::uint64 start_range,
+                                   sc_dt::uint64 end_range)
+    {
+      if (m_invalidate_direct_mem_ptr) {
+        // forward call
+        sc_assert(m_mod);
+        (m_mod->*m_invalidate_direct_mem_ptr)(m_invalidate_direct_mem_user_id, start_range, end_range); <2>
+      }
+    }
+----
+<1> 调用注册的成员函数m_transport_ptr时候，传入第一个参数时保存的 `int` 型成员变量m_transport_user_id
+<2> 调用注册的成员函数m_invalidate_direct_mem_ptr的时候，传入第一个参数是保存的 `int` 型成员变量m_invalidate_direct_mem_user_id
+
+而process提供四个额外的函数，用来注册成员函数指针，以及为两个 `int` 型成员变量（也就是tag值）提供值：
+[[data::simple_initiator_socket_tagged_b::process::set_transport_user_id]]
+[[data::simple_initiator_socket_tagged_b::process::set_invalidate_dmi_user_id]]
+[[data::simple_initiator_socket_tagged_b::process::set_transport_ptr]]
+[[data::simple_initiator_socket_tagged_b::process::set_invalidate_direct_mem_ptr]]
+
+.src/tlm_utils/simple_initiator_socket.h
+[source,cpp]
+----
+    void set_transport_user_id(int id) { m_transport_user_id = id; }
+    void set_invalidate_dmi_user_id(int id) { m_invalidate_direct_mem_user_id = id; }
+
+    void set_transport_ptr(MODULE* mod, TransportPtr p)
+    {
+      if (m_transport_ptr) {
+        display_warning("non-blocking callback already registered");
+        return;
+      }
+      sc_assert(!m_mod || m_mod == mod);
+      m_mod = mod;
+      m_transport_ptr = p;
+    }
+
+    void set_invalidate_direct_mem_ptr(MODULE* mod, InvalidateDirectMemPtr p)
+    {
+      if (m_invalidate_direct_mem_ptr) {
+        display_warning("invalidate DMI callback already registered");
+        return;
+      }
+      sc_assert(!m_mod || m_mod == mod);
+      m_mod = mod;
+      m_invalidate_direct_mem_ptr = p;
+    }
+----
+
+这四个成员函数会在
+<<data::simple_initiator_socket_tagged_b::register_nb_transport_bw, simple_initiator_socket_tagged_b的register_nb_transport_bw>>
+和
+<<data::simple_initiator_socket_tagged_b::register_invalidate_direct_mem_ptr, simple_initiator_socket_tagged_b的register_invalidate_direct_mem_ptr>>
+
+==== simple_initiator_socket_tagged_b
+
+simple_initiator_socket_tagged_b，是实现带tagged功能的simple initiator socket的基础。
+这个所谓的tag，实际上就是在
+<<data::simple_initiator_socket_tagged_b::process, simple_initiator_socket_tagged_b::process>>
+里，我们展示的那个额外的integer值。
+[[data::simple_initiator_socket_tagged_b]]
+
+simple_initiator_socket_tagged_b，和<<data::simple_initiator_socket_b, simple_initiator_socket_b>>
+一样，也是继承自tlm_initiator_socket和simple_socket_base
+
+.src/tlm_utils/simple_initiator_socket.h
+[source,cpp]
+----
+template< typename MODULE, unsigned int BUSWIDTH, typename TYPES
+        , sc_core::sc_port_policy POL = sc_core::SC_ONE_OR_MORE_BOUND >
+class simple_initiator_socket_tagged_b
+  : public tlm::tlm_initiator_socket<BUSWIDTH, TYPES, 1, POL> <1>
+  , protected simple_socket_base <2>
+{
+public:
+  typedef typename TYPES::tlm_payload_type                transaction_type;
+  typedef typename TYPES::tlm_phase_type                  phase_type;
+  typedef tlm::tlm_sync_enum                              sync_enum_type;
+  typedef tlm::tlm_fw_transport_if<TYPES>                 fw_interface_type;
+  typedef tlm::tlm_bw_transport_if<TYPES>                 bw_interface_type;
+  typedef tlm::tlm_initiator_socket<BUSWIDTH,TYPES,1,POL> base_type;
+  // blabla
+private:
+  const sc_core::sc_object* get_socket() const { return this; } <3>
+private:
+  process m_process; <4>
+};
+----
+<1> 继承自tlm_initiator_socket
+<2> 继承自simple_socket_base，主要是提供了display_warning和display_error函数的使用能力
+<3> get_socket实现了simple_socket_base所定义的接口函数
+<4> 拥有唯一一个成员变量，就是<<data::simple_initiator_socket_tagged_b::process, simple_initiator_socket_tagged_b::process>>
+
+simple_initiator_socket_tagged_b的构造非常简单：
+
+.src/tlm_utils/simple_initiator_socket.h
+[source,cpp]
+----
+  static const char* default_name()
+    { return sc_core::sc_gen_unique_name("simple_initiator_socket_tagged"); }
+
+  explicit simple_initiator_socket_tagged_b(const char* n = default_name())
+    : base_type(n)
+    , m_process(this)
+  {
+    this->m_export.bind(m_process); <1>
+  }
+----
+<1> 将tlm_initiator_socket的m_export绑定到m_process上
+
+这里的绑定和<<data::simple_initiator_socket_b, simple_initiator_socket_b>>基本一样。simple_initiator_socket_tagged_b
+同样提供了注册函数register_nb_trasnport_bw和register_invalidate_direct_mem_ptr，用来为m_process的成员变量提供值：
+
+[[data::simple_initiator_socket_tagged_b::register_nb_transport_bw]]
+[[data::simple_initiator_socket_tagged_b::register_invalidate_direct_mem_ptr]]
+
+.src/tlm_utils/simple_initiator_socket.h
+[source,cpp]
+----
+  void register_nb_transport_bw(MODULE* mod,
+                                sync_enum_type (MODULE::*cb)(int,
+                                                             transaction_type&,
+                                                             phase_type&,
+                                                             sc_core::sc_time&),
+                                int id)
+  {
+    m_process.set_transport_ptr(mod, cb);
+    m_process.set_transport_user_id(id);
+  }
+
+  void register_invalidate_direct_mem_ptr(MODULE* mod,
+                                          void (MODULE::*cb)(int, sc_dt::uint64, sc_dt::uint64),
+                                           int id)
+  {
+    m_process.set_invalidate_direct_mem_ptr(mod, cb);
+    m_process.set_invalidate_dmi_user_id(id);
+  }
+----
+
+只是需要注意，register_nb_transport_bw和register_invalidate_direct_mem_ptr在调用的时候就需要
+提供一个 `int` 型的数据，来设置m_process中的相应的值。这个值就是所谓的tagged了。
+
+==== simple_initiator_socket_tagged
+
+simple_initiator_socket_tagged和
+<<data::simple_initiator_socket_tagged_b, simple_initiator_socket_tagged_b>>的关系，就和
+<<data::simple_initiator_socket, simple_initiator_socket>>
+与 <<data::simple_initiator_socket_b, simple_initiator_socket_b>>的关系一样，只是
+为模板参数提供默认值，以及为POL模板参数提供一个值SC_ONE_OR_MORE_BOUND而已：
+[[data::simple_initiator_socket_tagged]]
+
+.src/tlm_utils/simple_initiator_socket.h
+[source,cpp]
+----
+template< typename MODULE, unsigned int BUSWIDTH = 32
+        , typename TYPES = tlm::tlm_base_protocol_types >
+class simple_initiator_socket_tagged
+  : public simple_initiator_socket_tagged_b<MODULE,BUSWIDTH,TYPES> <1>
+{
+  typedef simple_initiator_socket_tagged_b<MODULE,BUSWIDTH,TYPES> socket_b;
+public:
+  simple_initiator_socket_tagged() : socket_b() {}
+  explicit simple_initiator_socket_tagged(const char* name) : socket_b(name) {}
+};
+----
+<1> 这里并没有指定POL，意味着使用<<data::simple_initiator_socket_tagged_b, simple_initiator_socket_tagged_b>>
+默认的POL模板参数值 `sc_core::SC_ONE_OR_MORE_BOUND`
+
+==== simple_initiator_socket_tagged_optional
+
+simple_initiator_socket_tagged_optional和
+<<data::simple_initiator_socket_tagged_b, simple_initiator_socket_tagged_b>>的关系，就和
+<<data::simple_initiator_socket_optional, simple_initiator_socket_optional>>
+与 <<data::simple_initiator_socket_b, simple_initiator_socket_b>>的关系一样，只是
+为模板参数提供默认值，以及为POL模板参数提供一个值SC_ZERO_OR_MORE_BOUND而已：
+[[data::simple_initiator_socket_tagged_optional]]
+
+.src/tlm_utils/simple_initiator_socket.h
+[source,cpp]
+----
+template< typename MODULE, unsigned int BUSWIDTH = 32
+        , typename TYPES = tlm::tlm_base_protocol_types >
+class simple_initiator_socket_tagged_optional
+  : public simple_initiator_socket_tagged_b<MODULE,BUSWIDTH,TYPES,sc_core::SC_ZERO_OR_MORE_BOUND>
+{
+  typedef simple_initiator_socket_tagged_b<MODULE,BUSWIDTH,TYPES,sc_core::SC_ZERO_OR_MORE_BOUND> socket_b;
+public:
+  simple_initiator_socket_tagged_optional() : socket_b() {}
+  explicit simple_initiator_socket_tagged_optional(const char* name) : socket_b(name) {}
 };
 ----
 
