@@ -3,8 +3,21 @@
 :toc: left
 
 SystemC中的TLM介绍
+[[chap::tlm_intro]]
 
 == 引言
+
+TLM，全称是Transaction Level Medel，即事务级传输模型。SystemC的TLM实现有两个版本，1.0的版本和后续的
+2.0.6版本。本部分主要集中于TLM 2.0.6版本的介绍。首先，我们从tlm中的socket概念入手，逐渐探索TLM的
+实现机制。
+
+本部分主要介绍了如下内容：
+
+* tlm_generic_payload
+* tlm_initiator_socket
+* tlm_target_socket
+* tlm_fw_transport_if
+* tlm_bw_transport_if
 
 == 基础数据结构
 
@@ -1114,7 +1127,7 @@ tlm_phase的get_name调用到了tlm_phase_registry的get_name成员函数，这�
 === tlm_dmi
 [[api::tlm_dmi]]
 
-.src/tlm_core/tlm_2/tlm_generic_payload/tlm_phase.h
+.src/tlm_core/tlm_2/tlm_2_interfaces/tlm_dmi.h
 [source,cpp]
 ----
 enum SC_API tlm_phase_enum
@@ -1891,3 +1904,22 @@ tlm_target_socket和<<api::tlm_initiator_socket, tlm_initiator_socket>>
 这种类型。
 
 === initiator和target socket
+
+TLM中的initiator和target socket，是对Systemc原始的sc_port和sc_export的进一步的封装。在封装
+的过程中，整合了socket的概念。initiator socket是一个sc_port，同时也拥有一个sc_export的成员变量。
+target socket是一个sc_export，同时也拥有一个sc_port的成员变量。
+
+initiator socket和target socket互相之间可以绑定，应用有4种绑定关系，再加上initiator socket和
+target socket和SystemC原始的sc_interface之间的绑定，一共有6种绑定关系：
+
+* initiator socket绑定到target socket
+* initiator socket绑定到另一个initiator socket上，这种一般用于层次化绑定
+* initiator socket绑定到一个sc_interface上，注意只能绑定到BW方向的interface上，这种一般用于SystemC和TLM打交道时候绑定
+* target sockeet绑定到initiator socket，这和initiator socket绑定到target socket效果是一样的
+* target socket绑定到另一个target socket上，这种一般用于层次化绑定
+* target sockeet绑定到一个sc_interface上，注意只能绑定到FW方向的interface上，这种一般用于SystemC和TLM打交道时候绑定
+
+socket和sc_interface的绑定一般用来处理TLM和SystemC边界处的数据传输问题。对于TLM内部，一般只绑定socket到socket。
+
+socket完成了TLM中层次化构造，但要构造完整的可运行的例子，目前还缺少实现tlm_fw_transport_if和
+tlm_bw_transport_if的组件，这在下一部分介绍。

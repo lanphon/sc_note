@@ -1,0 +1,421 @@
+:source-highlighter: coderay
+
+:toc: left
+
+SystemC中的TLM 2.0 Sockets
+[[chap::tlm_sockets]]
+
+== 引言
+
+在<<chap::tlm_intro, SystemC中的TLM介绍>>部分，我们简单介绍了TLM中常用的
+一些数据结构，包括initiator socket和target socket的定义，但这些仍然不足以支持
+我们建立一个可运行的仿真环境，我们还缺少具体的实现细节。为此，TLM 2.0种设计了三种类型
+的socket，来方便使用者直接使用。这三种类型的soekct分别是
+
+* simple socket
+* passthrough socket
+* multi socket
+
+而在本部分，我们将逐个介绍者三种socket的实现细节。
+
+== convenience_socket_base
+
+convenience_socket_base是一个纯虚的基类，用来实现一些辅助函数：
+[[data::convenience_socket_base]]
+
+.src/tlm_utils/convenience_socket_bases.h
+[source,cpp]
+----
+// implementation-defined base class helper for convenience sockets
+class SC_API convenience_socket_base
+{
+public:
+  void display_warning(const char* msg) const; <1>
+  void display_error(const char* msg) const; <1>
+protected:
+  virtual ~convenience_socket_base(){}
+private:
+  virtual const char* get_report_type() const = 0; <2>
+  virtual const sc_core::sc_object* get_socket() const = 0; <2>
+};
+----
+<1> convenience_socket_base实现了display_warning和display_error两个辅助函数
+<2> convenience_socket_base要求继承类实现接口函数get_report_type和get_socket
+
+convenience_socket_base两个辅助函数display_warning和display_error的实现如下所示：
+
+.src/tlm_utils/convenience_socket_bases.cpp
+[source,cpp]
+----
+void
+convenience_socket_base::display_warning(const char* text) const
+{
+  std::stringstream s;
+  s << get_socket()->name() << ": " << text;
+  SC_REPORT_WARNING(get_report_type(), s.str().c_str());
+}
+
+void
+convenience_socket_base::display_error(const char* text) const
+{
+  std::stringstream s;
+  s << get_socket()->name() << ": " << text;
+  SC_REPORT_ERROR(get_report_type(), s.str().c_str());
+}
+----
+
+注意，其中用到了接口函数get_report_type和get_socket。所以继承自convenience_socket_base
+的派生类只要实现了两个接口函数，就可以方便地调用display_warning和display_error，来打印
+warning和error信息了。这也是convenience_socket_base设计的初衷所在。
+
+===  convenience_socket_cb_holder
+
+convenience_socket_cb_holder是一个非常简单的用来持有convenience_socket_base指针
+的类，这也是为何名字叫call-back holder的原因了:
+[[data::convenience_socket_cb_holder]]
+
+.src/tlm_utils/convenience_socket_bases.cpp
+[source,cpp]
+----
+// implementation-defined base class for callback helpers
+class SC_API convenience_socket_cb_holder
+{
+public:
+  void display_warning(const char* msg) const;
+  void display_error(const char* msg) const;
+
+protected:
+  explicit convenience_socket_cb_holder(convenience_socket_base* owner) <1>
+    : m_owner(owner) {}
+
+private:
+  convenience_socket_base* m_owner;
+};
+----
+<1> 构造函数只接受一个convenience_socket_base指针，然后将指针保存下来
+
+== simple socket
+
+=== simple_socket_base
+
+simple_socket_base直接继承自convenience_socket_base，且只实现了一个接口函数
+get_report_type，所以simple_socket_base还是一个抽象虚基类：
+[[data::simple_socket_base]]
+
+.src/tlm_utils/convenience_socket_bases.h
+[source,cpp]
+----
+// implementation-defined base class helper for simple sockets
+class SC_API simple_socket_base : public convenience_socket_base
+{
+  virtual const char* get_report_type() const; <1>
+protected:
+  void elaboration_check(const char* action) const; <2>
+};
+----
+<1> 只实现了接口函数get_report_type，没有实现get_socket
+<2> 添加了一个额外的elaboration_check的函数
+
+simple_socket_base所实现的接口函数get_report_type，实际上只是简单返回一个字符串，标识
+这是一个TLM 2.0定义的simple socket:
+
+.src/tlm_utils/convenience_socket_bases.h
+[source,cpp]
+----
+const char*
+simple_socket_base::get_report_type() const {
+  return "/OSCI_TLM-2/simple_socket";
+}
+
+void
+simple_socket_base::elaboration_check(const char* action) const
+{
+  if (sc_core::sc_get_curr_simcontext()->elaboration_done()) {
+    std::stringstream s;
+    s << " elaboration completed, " << action << " not allowed";
+    display_error(s.str().c_str());
+  }
+}
+----
+
+[[api::simple_socket_base::elaboration_check]]
+此外，simple_socket_base还实现了一个elaboration_check的函数。当elaboration_check
+函数被调用的时候，就会打印一个elaboration阶段的报错信息。如果elaboration_check没有
+在elaboration done之后调用，则没有其他作用。这个函数主要是为了确保一些执行过程需要在elaboration
+done之前发生。
+
+=== simple_initiator_socket
+
+simple_initiator_socket包括一系列sockets定义，同样有着一套复杂的继承关系：
+
+* simple_initiator_socket_b继承自tlm_initiator_socket和simple_socket_base
+* 从simple_initiator_socket_b，派生出
+- simple_initiator_socket
+- simple_initiator_socket_optional
+* 从simple_initiator_socket，派生出
+- simple_initiator_socket_tagged_b
+* 从simple_initiator_socket_tagged_b，派生出
+- simple_initiator_socket_tagged
+- simple_initiator_socket_tagged_optional
+
+我们将按照继承体系的顺序，逐步探索这些类的实现细节。
+
+==== simple_initiator_socket_b::process
+
+simple_initiator_socket_b::process是定义在simple_initiator_socket_b模板类
+内部的一个辅助的模板类。process直接继承自<<api::tlm_bw_transport_if, tlm_bw_transport_if>>
+，所以process需要实现接口函数nb_transport_bw和invalidate_direct_mem_ptr。process
+类同时也继承自<<data::convenience_socket_cb_holder, convenience_socket_cb_holder>>，
+其唯一的作用就是用来持有simple_initiator_socket_b本身指针。定义如下：
+[[data::simple_initiator_socket_b::process]]
+
+.src/tlm_utils/simple_initiator_socket.h
+[source,cpp]
+----
+  class process
+    : public tlm::tlm_bw_transport_if<TYPES>
+    , protected convenience_socket_cb_holder
+  {
+  public:
+    typedef sync_enum_type (MODULE::*TransportPtr)(transaction_type&,
+                                                   phase_type&,
+                                                   sc_core::sc_time&);
+    typedef void (MODULE::*InvalidateDirectMemPtr)(sc_dt::uint64,
+                                                   sc_dt::uint64);
+
+    explicit process(simple_socket_base* owner)
+      : convenience_socket_cb_holder(owner), m_mod(0)
+      , m_transport_ptr(0)
+      , m_invalidate_direct_mem_ptr(0)
+    {
+    }
+    //blabla
+    private:
+    MODULE* m_mod;
+    TransportPtr m_transport_ptr;
+    InvalidateDirectMemPtr m_invalidate_direct_mem_ptr;
+  };
+----
+
+为方便起见，process内部定义了两个类指针类型，分别是 `TransportPtr`
+和 `InvalidateDirectMempTR`。注意，这两个类指针的类都是MODULE，这实际上是
+simple_initiator_socket_b的模板参数。 构造函数中，会将传入的simple_socket_base指针
+保存到convenience_socket_cb_holder父类中。构造的时候，3个成员变量都是0，即指向
+MODULE的指针，以及两个成员函数指针均为空。这三个成员变量需要使用额外的
+函数来进行注册才能使用，参考下边：
+
+.src/tlm_utils/simple_initiator_socket.h
+[source,cpp]
+----
+    void set_transport_ptr(MODULE* mod, TransportPtr p)
+    {
+      if (m_transport_ptr) {
+        display_warning("non-blocking callback already registered");
+        return;
+      }
+      sc_assert(!m_mod || m_mod == mod);
+      m_mod = mod;
+      m_transport_ptr = p;
+    }
+
+    void set_invalidate_direct_mem_ptr(MODULE* mod, InvalidateDirectMemPtr p)
+    {
+      if (m_invalidate_direct_mem_ptr) {
+        display_warning("invalidate DMI callback already registered");
+        return;
+      }
+      sc_assert(!m_mod || m_mod == mod);
+      m_mod = mod;
+      m_invalidate_direct_mem_ptr = p;
+    }
+----
+
+函数 `set_transport_ptr` 和 `set_invalidate_direct_mem_ptr` 分别用来注册两个
+成员函数，并且MODULE的指针也需要保持一致。这样一来，实现tlm_bw_transport_if<>接口
+函数的代码也就非常简单了，基本上就是转发给注册的成员函数而已：
+
+.src/tlm_utils/simple_initiator_socket.h
+[source,cpp]
+----
+    sync_enum_type nb_transport_bw(transaction_type& trans, phase_type& phase, sc_core::sc_time& t)
+    {
+      if (m_transport_ptr) {
+        // forward call
+        sc_assert(m_mod);
+        return (m_mod->*m_transport_ptr)(trans, phase, t);
+      }
+      display_error("no transport callback registered"); <1>
+      return tlm::TLM_COMPLETED; <1>
+    }
+
+    void invalidate_direct_mem_ptr(sc_dt::uint64 start_range,
+                                   sc_dt::uint64 end_range)
+    {
+      if (m_invalidate_direct_mem_ptr) {
+        // forward call
+        sc_assert(m_mod);
+        (m_mod->*m_invalidate_direct_mem_ptr)(start_range, end_range);
+      }
+    }
+----
+<1> 调用的display_error实际调用的是基类convenience_socket_cb_holder的display_error，在实现中转发给了
+持有的simple_socket_base对象的display_error函数
+<2> 这里返回TLM_COMPLETED是不会走到的，如果走到就意味着系统出现错误
+
+==== simple_initiator_socket_b
+
+simple_initiator_socket_b是一个模板类，需要4个模板参数:
+
+1. 对象的类型，这个对象是拥有兼容tlm_bw_transport_if接口函数为成员函数的类
+2. 位宽
+3. 类型，即拥有两个成员类型tlm_payload_type和tlm_phase_type的类，默认是<<api:;tlm_base_protocol_types, tlm_base_protocol_types>>
+4. 作为一个sc_port时候的绑定策略
+[[data::simple_initiator_socket_b]]
+
+.src/tlm_utils/simple_initiator_socket.h
+[source,cpp]
+----
+template< typename MODULE, unsigned int BUSWIDTH, typename TYPES
+        , sc_core::sc_port_policy POL = sc_core::SC_ONE_OR_MORE_BOUND >
+class simple_initiator_socket_b
+  : public tlm::tlm_initiator_socket<BUSWIDTH, TYPES, 1, POL> <1>
+  , protected simple_socket_base <2>
+{
+public:
+  typedef typename TYPES::tlm_payload_type                transaction_type;
+  typedef typename TYPES::tlm_phase_type                  phase_type;
+  typedef tlm::tlm_sync_enum                              sync_enum_type;
+  typedef tlm::tlm_fw_transport_if<TYPES>                 fw_interface_type;
+  typedef tlm::tlm_bw_transport_if<TYPES>                 bw_interface_type;
+  typedef tlm::tlm_initiator_socket<BUSWIDTH,TYPES,1,POL> base_type;
+  // blabla
+private:
+  process m_process; <3>
+};
+----
+<1> simple_initiator_socket_b继承自<<api::tlm_initiator_socket, tlm_initiator_socket>>, 最后两个参数1和POL用来给<<api::sc_port, sc_port>>提供参数，因为tlm_initiator_socket本身也是一个sc_port，1的含义是，如果绑定策略是SC_ALL_BOUND，那么就只能精确绑定一个。对于不是SC_ALL_BOUND绑定策略的情况，1这个数字无意义
+<2> simple_initiator_socket_b同时也继承自<<data::simple_socket_base, simple_socket_base>>，注意是protected继承
+<3> 唯一一个成员变量就是<<data::simple_initiator_socket_b::process, process>>了
+
+
+simple_initiator_socket_b之所以需要继承simple_socket_base，是为了提供display_warning和display_error
+两个用来辅助显示warning和error信息的API函数。
+
+simple_initiator_socket_b的唯一一个成员变量是<<data::simple_initiator_socket_b::process, process>>，是一个
+<<api::tlm_bw_transport_if, tlm_bw_transport_if>>的实现。
+
+simple_initiator_socket_b的构造函数比较简单：
+
+.src/tlm_utils/simple_initiator_socket.h
+[source,cpp]
+----
+  static const char* default_name()
+    { return sc_core::sc_gen_unique_name("simple_initiator_socket"); }
+
+  explicit simple_initiator_socket_b(const char* n = default_name())
+    : base_type(n)
+    , m_process(this)
+  {
+    this->m_export.bind(m_process); <1>
+  }
+----
+<1> 这个绑定是这个构造函数最为重要的一个功能
+
+构造函数除了构造基类之外，最重要的是构造m_process成员变量，以及将本类作为一个
+<<api::tlm_initiator_socket, tlm_initiator_socket>>，其m_export成员变量绑定
+到m_process成员变量上。回想一下，对于tlm_initiator_socket，其成员变量m_export
+是一个BW_IF的sc_export:
+
+.tlm_base_initiator_socket的数据结构
+image::tlm_base_initiator_socket.png[]
+
+所以这样的绑定结果是，本类的基类tlm_initiator_socket的成员变量 m_export
+内部持有了一个指向成员变量 m_process的指针，指针类型为 `sc_interface*`，可以被
+cast成为 `tlm_bw_transport_if*` 类型，进而调用tlm_bw_transport_if所定义的
+接口函数nb_transport_bw和invalidate_direct_mem_ptr。
+
+接下来只剩下两个API函数，用来将process注册回调函数的部分同样导出来，即
+register_nb_transport_bw和register_invalidate_direct_mem_ptr两个
+成员函数，注意这两个成员函数的类型和prcess的同名成员函数是一样的，所以函数本身的实现
+只是一个转发而已：
+
+.src/tlm_utils/simple_initiator_socket.h
+[source,cpp]
+----
+  void register_nb_transport_bw(MODULE* mod,
+                                sync_enum_type (MODULE::*cb)(transaction_type&,
+                                                             phase_type&,
+                                                             sc_core::sc_time&))
+  {
+    m_process.set_transport_ptr(mod, cb);
+  }
+
+  void register_invalidate_direct_mem_ptr(MODULE* mod,
+                                          void (MODULE::*cb)(sc_dt::uint64, sc_dt::uint64))
+  {
+    m_process.set_invalidate_direct_mem_ptr(mod, cb);
+  }
+----
+
+---
+
+目前为止，我们已经simple_initiator_socket_b模板代码的学习了。总的来说，
+simple_initiator_socket_b本身是一个tlm_initiator_socket，其tlm_initiator_socket
+的m_export绑定到内部唯一一个成员变量m_process上，而m_process则是一个
+tlm_bw_transport_if的实现，所需要实现的接口函数可以通过
+simple_initiator_socket_b的register_nb_transport_bw
+和register_invalidate_direct_mem_ptr两个成员函数进行注册。
+
+这样一来，对于simple_initiator_socket_b本身，作为一个tlm_initiator_socket，
+get_base_interface/get_base_export所返回的BW_IF指针或者sc_export<BW_IF>，都可以
+用来调用所注册的两个函数（即nb_transport_bw和invalidate_direct_mem_ptr）。这两个
+函数实际保存在simple_initiator_socket_b唯一的成员变量m_process中，实际上是保存了
+一个对象（对象的类型就是simple_initiator_socket_b的第一个模板参数）的指针和两个成员函数指针。
+
+==== simple_initiator_socket
+
+simple_initiator_socket的实现非常简单，直接继承自<<data::simple_initiator_socket_b, simple_initiator_socket_b>>。
+对于基类simple_initiator_socket_b，提供了可选的模板参数BUSWIDTH和TYPES，这样POL模板参数就使用了
+simple_initiator_socket_b的默认值 `sc_core::SC_ONE_OR_MORE_BOUND` ，即sc_port至少要绑定一个interface
+，这部分的内容参考<<api::sc_port::bind::policy, sc_port的绑定策略>>部分:
+[[data::simple_initiator_socket]]
+
+.src/tlm_utils/simple_initiator_socket.h
+[source,cpp]
+----
+template< typename MODULE, unsigned int BUSWIDTH = 32
+        , typename TYPES = tlm::tlm_base_protocol_types >
+class simple_initiator_socket
+  : public simple_initiator_socket_b<MODULE,BUSWIDTH,TYPES>
+{
+  typedef simple_initiator_socket_b<MODULE,BUSWIDTH,TYPES> socket_b;
+public:
+  simple_initiator_socket() : socket_b() {}
+  explicit simple_initiator_socket(const char* name) : socket_b(name) {}
+};
+----
+
+==== simple_initiator_socket_optional
+
+simple_initiator_socket_optional的实现和simple_initiator_socket一样，也非常简单，直接继承
+自simple_initiator_socket_b，提供了可选的模板参数BUSWIDTH和TYPES。而在基类继承的时候，为模板
+参数POL提供了不同于默认值的值 `sc_core::SC_ZERO_OR_MORE_BOUND` ，这就允许simple_initiator_socket_optional
+作为一个sc_port，可以绑定任意数目（包括0个）interface:
+[[data::simple_initiator_socket_optional]]
+
+.src/tlm_utils/simple_initiator_socket.h
+[source,cpp]
+----
+template< typename MODULE, unsigned int BUSWIDTH = 32
+        , typename TYPES = tlm::tlm_base_protocol_types >
+class simple_initiator_socket_optional
+  : public simple_initiator_socket_b<MODULE,BUSWIDTH,TYPES,sc_core::SC_ZERO_OR_MORE_BOUND>
+{
+  typedef simple_initiator_socket_b<MODULE,BUSWIDTH,TYPES,sc_core::SC_ZERO_OR_MORE_BOUND> socket_b;
+public:
+  simple_initiator_socket_optional() : socket_b() {}
+  explicit simple_initiator_socket_optional(const char* name) : socket_b(name) {}
+};
+----
+
+=== simple_target_socket

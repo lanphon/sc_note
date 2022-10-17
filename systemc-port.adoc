@@ -541,6 +541,7 @@ sc_bind_info::max_size() const
 这样一来，如果绑定数目为0，那么永远不会出现绑定数目超出设定数目的情况。所以，如果将绑定数目
 设置为0，实质上设定的是无限制的绑定。
 
+[[api::sc_port::bind::policy]]
 接下来是对绑定策略的检查了：
 
 .src/sysc/communication/sc_port.cpp
@@ -570,7 +571,8 @@ sc_bind_info::max_size() const
 
 如果设定的绑定策略是SC_ONE_OR_MORE_BOUND，那么如果实际绑定数目小于1，即只绑定了0个，就会报
 ERROR。这意味着设定了SC_ONE_OR_MORE_BOUND，就至少要绑定一个。
-如果设定的是SC_ALL_BOUND，那么没有绑定，或者实际绑定的数目小于设定的绑定数目的时候，就会报
+如果设定的是SC_ALL_BOUND，那么没有绑定，或者实际绑定的数目小于设定的绑定数目（设定
+的绑定树木就是模板中提供的整型模板参数）的时候，就会报
 ERROR。这意味着如果设定为SC_ALL_BOUND，那么必须精确地符合设定的绑定数目。
 另一种策略，SC_ZERO_OR_MORE_BOUND，实际上不作任何检查。
 
