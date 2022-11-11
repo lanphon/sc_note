@@ -1,0 +1,11 @@
+:source-highlighter: coderay
+
+:toc: left
+
+SystemC中的TLM 1.0 组件
+[[chap::tlm_sockets]]
+
+== 引言
+
+SystemC的TLM分为1.0版和2.0版本，虽然1.0版本的TLM已经不推荐使用，但在一些legacy的Code
+（例如我们和UVM做仿真的TLM接口定义中）仍然存在。所以本部分我们主要介绍TLM 1.0版本的内容。

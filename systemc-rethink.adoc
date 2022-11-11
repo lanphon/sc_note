@@ -1,0 +1,129 @@
+:source-highlighter: coderay
+
+:toc: left
+
+SystemC: 重新审视
+[[chap::rethink]]
+
+== 引言
+
+在开始TLM的代码学习之前，这里我们对Systemc再次审视一遍，汇总下SystemC其内在的设计组件
+是如何组织，以及如何构成整个仿真体系的。
+
+SystemC的主要构成方式有如下几个部分：
+
+* sc内核调度器
+* method和thread类型的线程构成的SystemC的基本执行单元
+* primitive channel，以及由此派生的sc_fifo，sc_buffer等实用数据类型
+* event
+* sc_interface, sc_port和sc_export构成的层次化接口框架
+* module
+
+---
+
+sc内核调度器，是SystemC中内建的一组单件实例，负责整个SystemC中构造和执行过程。sc内核
+调度器并不只是sc_context单件实例而已，还包括了其他类型的单件，后者往往以registry结尾，
+是sc中用来管理不同类型对象的注册表。例如，所有的primitive channel都被一个primitive 
+channel registry管理，primitive channel的基类在构造的时候，就需要将自己注册到
+registry中。sc内核调度器是实现SystemC功能的基石，包括如下几个单件实例：
+
+* sc_context类型的单件实例，这个是主要的仿真器调度核心
+* 管理所有module的sc_module_registry单件
+* 管理所有primitive channel的sc_primitive_channel_registry单件
+* 管理所有port的sc_port_registry单件
+* 管理所有export的sc_export_registry单件
+
+注意，event并没有一个sc_event_registry，所有的event是被注册到object manager中，进行管理的。
+之所以所有的port和export都需要一个注册表来管理，是为了能够在仿真开始之前检查所有的port/export
+的绑定情况，避免出现未绑定而导致仿真的过程中出现错误。
+
+在sc内核调度器中，一个<<concept::crunch, delta cycle>>的执行包括如下三个阶段：
+1. EVALUATE，执行method和thread等线程
+2. UPDATE，执行primitive channel的update
+3. NOTIFICATION，执行基于event的更新
+
+所以，在sc的内核调度中，只和线程, primitve channel以及event打交道，而并没有任何
+sc_interface/sc_port/sc_export的位置。线程，primitive channel以及event，这就是
+SystemC内核仿真最为重要的三个元素，分别对应了仿真时候的三个阶段。
+
+实际上，sc_interface/sc_port/sc_export
+只是为了满足层次化的绑定需求，而设计出来的一套封装框架而已。从本质上而言，sc_interface
+相当于虚指针，而sc_port则是持有一个或者一组虚指针的包装类而已。sc_export则是只能持有
+一个虚指针的特殊的包装类。
+
+虽然sc_interface, sc_port和sc_export并不是SystemC核心中的一部分，但确实组织
+TLM最重要的部分。所以我们在<<chap::interface_and_port_and_export, 再谈SystemC中的Interface, Port和Export>>
+中，对这部分的内容进行了更为细致的考察和审视。
+
+---
+
+SystemC中的method和thread类型的线程，是SystemC中运行的基本组成单元。所谓的method类型的线程，
+更本质的现象就是一个注册到sc内核的函数片段（准确的说，是成员函数和对象指针组成的一个可供调用执行
+的代码片段）。所以method类型的线程无法提供阻塞的能力，其每一次执行都会从头开始，直到此函数片段
+执行完毕为止。sc的内核调度在EVALUTE阶段，对于所需要执行的method线程，都是像调用一个个普通
+函数一样，挨个执行的。注意，并非所有注册到sc内核的method线程在某次特定的delta cycle内都会
+得到执行，只有那些在前一个delta cycle内，在NOTIFICATION phase中得到唤醒，被sc内核放入到待执行
+列表中的method线程，才会在本delta cycle得到执行。
+
+与之相对应，thread类型的线程则是实现了协程功能的代码片段。这些thread类型的线程一经执行，永不返回。
+而在这些thread类型的线程执行过程中，可以显式或者隐式地调用wait，让渡出自己的执行权，给下一个待
+执行的thread类型的线程。类似地，并非所有注册到sc内核的thread线程在某次delta cycle内都会得到执行，而
+只有那些在上一个delta cycle的NOTIFICATION阶段，被放入到待执行列表中的thread，才会在本delta cycle的
+EVALUATE阶段得到执行。在sc内核执行所有的thread类型的时候，sc内核只调用第一个thread类型，将执行权限
+交给这个thread线程，这个thread线程执行到wait的时候，交给下一个，直到最后一个thread线程执行完毕，将
+执行权交还给sc内核为止。所以，与method线程不同，thread现成在sc内核中的执行只会执行第一个thread线程，
+然后等待其返回即可（如果不是很理解协程的概念，这一点可能难以理解）。
+
+---
+
+<<data::sc_event, event>>，这是另一个SystemC中非常核心的概念。SystemC中的event是一个final的类，
+既不是一个模板类，也无需被继承实现。event是实现所有的method和thread类型的线程调度的基础。当init完成
+之后，只有被event静态或者动态触发的method/thread线程，才会在NOTIFICATION阶段被sc内核放入待执行
+列表，在下一个delta cycle内获得执行。如果一个method/thread类型的线程没有与之关联的event，那么这个
+线程就是一个死的线程，因为它永远不会得到调度执行。
+
+从本质上来讲，sc_event对象只是一个记录与之关联的method/thread线程指针的对象而已。当sc_event被触发
+起来，这个sc_event就被sc内核收集起来，并在NOTIFICATION阶段，调用sc_event对象所提供的接口函数，通知
+所有与之相关联的method/thread线程，检测是否满足现成设置的触发条件（在and list条件下，需要多个
+event同时满足才能触发），如果满足那就将这些线程函数放入待执行队列，以在下一个delta cycle的EVALUATE阶段
+执行这些线程。
+
+除了用来作为delta cycle之间传递信息的对象之外，sc_event同样支持作为一个定时的对象出现。所谓的定时event，
+只是对象约定从此刻开始，间隔一定时间之后，对象会自动触发。这里的自动触发，实际上是sc内核维护了一个定时
+event的列表，按照这些定时event所设定时间的远近进行排序。在一批delta cycle结束，已经没有delta event存在的
+时候，sc内核会从定时event中挑选一个离当前最近的event，触发此事件的发生，来进行下一轮的delta cycles。只有
+定时event参与，仿真时间才会前进。如果只有delta event，没有定时event，那么仿真的时间是无法前进的。
+
+sc_clock就是可以使用定时event的一个典型的例子。sc_clock提供了上升沿事件和下降沿事件，这两个事件本质上就是
+定时事件，可以被周期性地触发。
+
+---
+
+primitive channel，是SystemC核心仿真的三种数据结构中，最为复杂的一种。primitive channel的复杂在于，
+相比于线程的可执行性，以及event管理线程执行的能力，primitive channel有着自己的一套更新机制，以在
+UPDATE阶段执行。这套更新机制还可以支持异步的更新。
+
+primitive channel的这种更新机制设计的目的，是为了解决在仿真过程中，信号在thread中的传递过程。primitive channel
+的值是可以在delta cycle内隔开读和写的。这种隔绝的效果，保证了读写不会发生条件竞争。例如，基于primitive channel
+的fifo，如果一个线程写，另一个线程在同一个delta cycle读，那么如果没有了primitive channel的隔绝作用，读线程
+可能在本delta cycle内就能获得写的数据，也可能无法获得，这就带来了条件竞争。如果是基于primitive channel
+的signal，一个线程写，几个线程读，如若没有primitive channel的隔绝作用，读线程获取的值就完全取决于这些读线程
+在建模的过程中，是在写线程之前还是之后执行了。
+
+primitive channel的隔绝，主要是在一个delta cycle内，对所有的线程（无论是读还是写），都呈现一致的状态。这些
+现成对primitive channel的更新，primitive channel内部会记录下来，但并不会反映到当前delta cycle内的线程
+执行过程，而是直到delta时的UPDATE阶段，才更新所有注册了的primitive channel的状态，将本delta cycle的EVALUATE
+阶段对这些primitive channel的更新全部应用进去。这些primitive channel
+的更新可能导致事件的触发，进而导致下一个delta cycle的可执行线程变化，这正是我们所想要的。
+
+在不同线程之间传递信息，最好总是使用primitive channel，这样可以避免因为调度顺序而带来的潜在bug。
+
+== SystemC中的时间
+
+这里我们考察下SystemC中的时间、时钟，以及由此引发开来的不同的编程模型的区别。
+
+使用SystemC，可以设计如下几种编程模型：
+
+* 时钟精确的模型，Approximate Timed, AT Model
+* 松散时间的模型，Loose Timed, LT Model
+* 无时间的模型，Untimed, UT Model

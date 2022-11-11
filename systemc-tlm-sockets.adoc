@@ -674,4 +674,258 @@ public:
 };
 ----
 
+==== simple initiator socket summary
+
+simple initiator socket，指包括
+<<data::simple_initiator_socket, simple_initiator_socket>>, 
+<<data::simple_initiator_socket_optional, simple_initiator_socket_optional>>, 
+<<data::simple_initiator_socket_tagged, simple_initiator_socket_tagged>>以及
+<<data::simple_initiator_socket_tagged_optional, simple_initiator_socket_tagged_optional>>
+这四种常用的模板类型。这些simple initiator socket都是一个<<api::tlm_initiator_socket, tlm_initiator_socket>>
+，意味着这些socket本身就是一个 `sc_port<FW_IF>` ，同时也提供了一些注册回调函数的功能，来实现
+BW_IF的接口函数注册。
+
+对于simple initiator socket，使用FW_IF的接口函数时，只需要将socket本身作为 `sc_port`
+看待，或者 `get_base_port`。而使用BW_IF的接口函数时，则只需要 `get_base_interface` 或者 `get_base_export`
+就可以了。
+
+simple initiator socket在使用的时候需要绑定到FW_IF上，但不再需要绑定到BW_IF上，这是因为
+这些socket在内部实现了BW_IF的类。外部只需要将接口函数注册进来即可。这样一来，即使实现了
+BW_IF接口函数的类不属于SystemC的对象体系，也可以通过注册回调函数的方式，参与到TLM中来，极大
+扩展了SystemC的适用范围。
+
 === simple_target_socket
+
+simple_target_socket，类似于simple_initiator_socket，同样由多种类型的socket组成：
+
+* simple_target_socket_b继承自tlm_target_socket和simple_socket_base
+* 从simple_target_socket_b，派生出
+- simple_target_socket
+- simple_target_socket_optional
+* simple_target_socket_tagged_b继承自tlm_target_socket和simple_socket_base
+* 从simple_target_socket_tagged_b，派生出
+- simple_target_socket_tagged
+- simple_target_socket_tagged_optional
+
+但与simple_initiator_socket不同，simple_target_socket的实现更为复杂。
+
+==== simple_target_socket_b::bw_process
+
+bw_process是定义在模板类型simple_target_socket_b中的一个辅助类，用来处理后向通路的调用：
+
+[[data::simple_target_socket_b::bw_process]]
+
+.src/tlm_utils/simple_target_socket.h
+[source,cpp]
+----
+  //Helper class to handle bw path calls
+  // Needed to detect transaction end when called from b_transport.
+  class bw_process : public tlm::tlm_bw_transport_if<TYPES>
+  {
+  public:
+    bw_process(simple_target_socket_b *p_own) : m_owner(p_own)
+    {
+    }
+
+  // blabla
+    private:
+    simple_target_socket_b *m_owner;
+  };
+----
+
+bw_process直接继承自 <<api::tlm_bw_transport_if, tlm_bw_transport_if>>，有唯一一个成员变量就是
+指向simple_target_socket_b的指针m_owner。
+
+bw_process实现tlm_bw_transport_if的接口函数invalidate_direct_mem_ptr的
+方式很简单，那就是直接调用simple_target_socket_b提供的接口函数
+<<data::simple_target_process_b::bw_invalidate_direct_mem_ptr, simple_target_process_b::bw_invalidate_direct_mem_ptr>>:
+[[data::simple_target_process_b::bw_process::invalidate_direct_mem_ptr]]
+
+.src/tlm_utils/simple_target_socket.h
+[source,cpp]
+----
+    void invalidate_direct_mem_ptr(sc_dt::uint64 s,sc_dt::uint64 e)
+    {
+      return m_owner->bw_invalidate_direct_mem_ptr(s, e);
+    }
+----
+
+[[data::simple_target_process_b::bw_process::nb_transport_bw]]
+然而，tlm_bw_transport_if的接口函数nb_transport_bw的实现相对而言比较复杂，虽然
+也主要是借用了simple_target_socket_b的成员函数
+<<data::simple_target_process_b::bw_nb_transport, bw_nb_transport>>来实现的：
+
+.src/tlm_utils/simple_target_socket.h
+[source,cpp]
+----
+    sync_enum_type nb_transport_bw(transaction_type &trans, phase_type &phase, sc_core::sc_time &t)
+    {
+      typename std::map<transaction_type*, sc_core::sc_event *>::iterator it =
+        m_owner->m_pending_trans.find(&trans);
+
+      if(it == m_owner->m_pending_trans.end()) {
+        // Not a blocking call, forward.
+        return m_owner->bw_nb_transport(trans, phase, t);
+
+      }
+
+      if (phase == tlm::END_REQ) {
+        m_owner->m_end_request.notify(sc_core::SC_ZERO_TIME);
+        return tlm::TLM_ACCEPTED;
+      }
+      if (phase == tlm::BEGIN_RESP) {
+        if (m_owner->m_current_transaction == &trans) {
+          m_owner->m_end_request.notify(sc_core::SC_ZERO_TIME);
+        }
+        //TODO: add response-accept delay?
+        it->second->notify(t);
+        m_owner->m_pending_trans.erase(it);
+        return tlm::TLM_COMPLETED;
+      }
+      m_owner->display_error("invalid phase received");
+      return tlm::TLM_COMPLETED;
+    }
+----
+
+==== simple_target_socket_b::fw_process
+
+[[data::simple_target_socket_b::fw_process]]
+
+==== simple_target_socket_b
+
+simple_target_socket_b有两个基类，一个是<<api::tlm_target_socket, tlm_target_socket>>，
+另一个则是simple_socket_base，后者主要为了实现display_warning和display_error信息。
+simple_target_socket_b主要继承的是tlm_target_socket的能力，从这方面审视，simple_target_socket_b
+本质上是一个 <<api::sc_export, `sc_core::sc_export` >>:
+[[data::simple_target_socket_b]]
+
+.src/tlm_utils/simple_target_socket.h
+[source,cpp]
+----
+template< typename MODULE, unsigned int BUSWIDTH, typename TYPES
+        , sc_core::sc_port_policy POL = sc_core::SC_ONE_OR_MORE_BOUND >
+class simple_target_socket_b
+  : public tlm::tlm_target_socket<BUSWIDTH, TYPES, 1, POL> <1>
+  , protected simple_socket_base <2>
+{
+  friend class fw_process;
+  friend class bw_process;
+public:
+  typedef typename TYPES::tlm_payload_type              transaction_type;
+  typedef typename TYPES::tlm_phase_type                phase_type;
+  typedef tlm::tlm_sync_enum                            sync_enum_type;
+  typedef tlm::tlm_fw_transport_if<TYPES>               fw_interface_type;
+  typedef tlm::tlm_bw_transport_if<TYPES>               bw_interface_type;
+  typedef tlm::tlm_target_socket<BUSWIDTH,TYPES,1,POL>  base_type;
+
+  // blabla
+
+private:
+  const sc_core::sc_object* get_socket() const { return this; } <3>
+private:
+  fw_process m_fw_process;
+  bw_process m_bw_process;
+  std::map<transaction_type*, sc_core::sc_event *> m_pending_trans;
+  sc_core::sc_event m_end_request;
+  transaction_type* m_current_transaction;
+};
+----
+<1> simple_target_socket_b主要继承自tlm_target_socket
+<2> simple_target_socket_b同样继承自simple_socket_base
+<3> 实现了get_socket接口函数，为基类<<data::convenience_socket_base, convenience_socket_base>>的display_warning和display_error提供获取组件名称的能力
+
+相比于对应的 <<data::simple_initiator_socket_b, simple_initiator_socket_b>>, simple_target_socket_b的
+成员变量更为复杂，这是因为simple_target_socket_b不仅要实现fw_process，还需要实现bw_process。由于需要在fw_process
+中实现可能的阻塞调用和非阻塞调用之间的切换，所以simple_initiator_socket_b不得不保存非常多的数据结构，包括当前的
+transaction，排队的transactions队列，以及结束请求时候发起的事件。
+
+---
+
+simple_target_socket_b的构造函数非常简单，可以是空的，也可以显示给定一个字符串名字：
+
+.src/tlm_utils/simple_target_socket.h
+[source,cpp]
+----
+public:
+  static const char* default_name()
+    { return sc_core::sc_gen_unique_name("simple_target_socket"); }
+
+  explicit simple_target_socket_b(const char* n = default_name())
+    : base_type(n) <1>
+    , m_fw_process(this) <2>
+    , m_bw_process(this) <3>
+  {
+    bind(m_fw_process); <4>
+  }
+
+  using base_type::bind;
+
+  // bw transport must come thru us.
+  tlm::tlm_bw_transport_if<TYPES> * operator ->() {return &m_bw_process;} <5>
+----
+<1> 名字用来构造基类tlm_target_socket
+<2> 将this指针用来构造成员变量m_fw_process
+<3> 将this指针用来构造成员变量m_bw_process
+<4> 调用bind，将m_fw_process绑定到自己身上，这里的bind调用的是tlm_target_socket的bind，所以这里是讲一个实现了tlm_fw_transport_if
+的类绑定到一个作为 `sc_export<FW_IF>` 的tlm_base_socket上
+<5> 重载了 `operator->()` 实现，返回的是m_bw_process指针
+
+---
+
+simple_target_socket_b提供了两个private的成员函数，供自己的友元类fw_process和bw_process使用(
+主要是bw_process实现
+<<data::simple_target_process_b::bw_process::nb_transport_bw, bw_process::nb_transport_bw>>
+以及
+<<data::simple_target_process_b::bw_process::invalidate_direct_mem_ptr, bw_process::invalidate_direct_mem_ptr>>
+这两个tlm_bw_transport_if函数的时候使用
+)：
+[[data::simple_target_process_b::bw_nb_transport]]
+[[data::simple_target_process_b::bw_invalidate_direct_mem_ptr]]
+
+.src/tlm_utils/simple_target_socket.h
+[source,cpp]
+----
+private:
+  //make call on bw path.
+  sync_enum_type bw_nb_transport(transaction_type &trans, phase_type &phase, sc_core::sc_time &t)
+  {
+    return base_type::operator ->()->nb_transport_bw(trans, phase, t);
+  }
+
+  void bw_invalidate_direct_mem_ptr(sc_dt::uint64 s,sc_dt::uint64 e)
+  {
+    base_type::operator ->()->invalidate_direct_mem_ptr(s, e);
+  }
+----
+
+注意这里的 `base_type` 指的是基类 tlm_target_socket（因为simple_target_socket_b自己也实现了
+`operator->()`，所以这里如果不显示指定base_type，调用的则是simple_target_socket_b自己所实现的
+`operator->()`，返回m_bw_process的指针，这样就无法达到所需要的目的了），所以 `base_type::operator ->()`
+实际上调用的是基类tlm_target_socket的 `operator->()`，根据以下的定义，调用的则是tlm_target_socket
+中的类型为sc_port类型的成员变量m_port的 `operator->()`:
+
+.src/tlm_core/tlm_2/tlm_sockets/tlm_target_socket.h
+[source,cpp]
+----
+  //
+  // Forward to 'operator->()' of port class
+  //
+  bw_interface_type* operator->()
+  {
+    return m_port.operator->();
+  }
+----
+
+故而，最后的结果是，调用的是tlm_target_socket中，所绑定的BW_IF（可以是多个）的接口函数
+nb_transport_bw和invalidate_direct_mem_ptr。
+而tlm_target_socket所绑定的BW_IF，在定义simple_target_socket_b的时候并没有提供，这就需要
+应用者自己将simple_target_socket_b作为一个tlm_target_socket，绑定BW_IF。而tlm_target_socket
+的 m_port成员只有在双向绑定（绑定一个tlm_initiator_socket或者一个tlm_target_socket）时候才能
+被绑定。
+
+---
+
+
+==== simple_target_socket
+
+==== simple_target_socket_optional

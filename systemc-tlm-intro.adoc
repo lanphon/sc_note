@@ -8,8 +8,14 @@ SystemC中的TLM介绍
 == 引言
 
 TLM，全称是Transaction Level Medel，即事务级传输模型。SystemC的TLM实现有两个版本，1.0的版本和后续的
-2.0.6版本。本部分主要集中于TLM 2.0.6版本的介绍。首先，我们从tlm中的socket概念入手，逐渐探索TLM的
-实现机制。
+2.0.6版本。 TLM的组织框图如下所示：
+
+.TLM结构，来源自TLM LRM文档
+image::tlm_framework.png[]
+
+
+本部分主要集中于TLM 2.0.6版本中的interoperability layer（互操作层）部分的介绍。
+首先，我们从tlm中的socket概念入手，逐渐探索TLM的实现机制。
 
 本部分主要介绍了如下内容：
 
@@ -1923,3 +1929,5 @@ socket和sc_interface的绑定一般用来处理TLM和SystemC边界处的数据�
 
 socket完成了TLM中层次化构造，但要构造完整的可运行的例子，目前还缺少实现tlm_fw_transport_if和
 tlm_bw_transport_if的组件，这在下一部分介绍。
+
+== Global Quantum

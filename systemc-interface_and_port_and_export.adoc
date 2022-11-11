@@ -13,7 +13,7 @@
 源代码层次介绍<<data::sc_port, sc_core::sc_port>>和
 <<data::sc_export, sc_core::sc_export>>。这些部分的介绍，主要集中在具体的实现细节上，而缺少
 对背后的SystemC的设计思想的思考，在本章，我们将尝试从设计意图等方面，重新审视一下SystemC下的
-interface, port和ejuert的关系。
+interface, port和export的关系。
 
 == Interface
 [[discuss::sc_interface]]
@@ -25,7 +25,7 @@ interface, port和ejuert的关系。
 * sc_port和sc_export中，保存interface信息的时候，只需要保存一个 `sc_interface*`
 即可
 * 当sc_port/sc_export需要使用具体的interface类型信息的时候，可以尝试使用 `dynamic_cast` ，将
-基类指针提升到派生类指针
+基类指针提升到派生类指针（{CPP} 多态性的体现）
 
 从上述可以看出，一般情况下，end-user不应该直接使用sc_interface，因为sc_interface实际上没有实现
 任何功能。sc_interface更多的是作为一个设计上的概念约束而存在的，所有在SystemC中的interfaces都需要
@@ -33,16 +33,16 @@ interface, port和ejuert的关系。
 
 那么，一个interface继承自sc_interface，意味着什么呢？如果设计了一个继承自sc_interface的interface类，
 那么这个interface类需要是一个虚基类，这个interface类一定要有纯虚函数的接口函数，用来让其他派生组件
-实现这些接口函数。这个interface类可以使一个模板类，但这不影响我们之前的结论。
+实现这些接口函数。这个interface类可以是一个模板类，但这不影响我们之前的结论。
 
 这个interface类一般会用到两个地方：
 
 * 组件设计中，继承自这个interface类，并实现对应的接口函数
-* port/export中，使用这个interface类作为模板参数
+* port/export模板实例化的时候，使用这个interface类作为模板参数
 
 这样一来，port/export就可以使用bind，来绑定一个实现了interface类接口函数的组件了。这种绑定的结果是，port/export
-获得了一个指向组件的interface类型的指针（实际上保存的只是一个sc_interface类型的指针，只不过在需要的使用cast成为
-派生类interface的指针而已），并且限制port/export只能使用这个interface类的接口函数，而不能使用实际被绑定的组件
+获得了一个指向组件的interface类型的指针（实际上保存的只是一个sc_interface类型的指针，只不过在需要的使用动态cast成为
+派生类interface的指针而已）。这同样限制port/export只能使用这个interface类的接口函数，而不能使用实际被绑定的组件
 的其他成员函数。
 
 举个例子。在SystemC内部，设计了一系列继承自sc_interface的类，包括
@@ -64,7 +64,14 @@ class sc_fifo
 
 同时在sc_fifo的实现中，将所有的接口函数一一实现（否则实例化一个sc_fifo的时候无法通过编译）。这样一来，一个
 `sc_fifo<T>` 就是一个实现了某种约定（约定的细节由各个sc_interface的派生类所决定）的组件。这个组件的这种
-约定可以被port/export绑定，并在run-time的时候调用。
+约定可以被port/export绑定，并在run-time的时候调用。而需要绑定到一个 `sc_fifo<T>` 的port/export，在
+实例化的时候需要为如下几种：
+
+* `sc_port<sc_fifo<T>>` 或者 `sc_export<sc_fifo<T>>` ，可以使用fifo的输入输出功能
+* `sc_port<sc_fifo_in_if<T>>` 或者 `sc_export<sc_fifo_in_if<T>>` ，只能使用fifo的输入功能
+* `sc_port<sc_fifo_out_if<T>>` 或者 `sc_export<sc_fifo_out_if<T>>` ，只能使用fifo的输出功能
+
+如果需要使用输入或者输出对应的blocking/non-blocking功能，则需要进一步细化模板参数。
 
 === sc_interface的使用
 
@@ -79,7 +86,8 @@ class sc_fifo
 `sc_interface*` 的方法很类似。这时候就可以使用 `sc_interface*`
 或者 `sc_interface&` 作为类型，而在需要具体类型的时候dynamic cast。
 
-== port
+== Port
+[[discuss::sc_port]]
 
 port，并不单纯是一个<<data::sc_port, sc_core::sc_port>>，而是SystemC中涉及的一系列与之相关的核心的
 数据结构。由于SystemC设计的时候CPP还没有 `std::variant<>` 这样的能够做到类型擦除的组件，因而SystemC自己
@@ -88,3 +96,6 @@ port，并不单纯是一个<<data::sc_port, sc_core::sc_port>>，而是SystemC�
 * <<api::sc_port_base, sc_core::sc_port_base>>
 * <<api::sc_port_b, sc_core::sc_port_b<IF> >>
 * <<api::sc_port, sc_core::sc_port<IF, N, POL> >>
+
+== Export
+[[discuss::sc_export]]
