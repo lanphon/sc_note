@@ -9,7 +9,8 @@ SystemC内的Primitive Channel
 
 在 `simc` 的 `crunch` 函数中，UPDATE PHASE只有一个函数调用，就是primitive channel registry的 `perform_update()` 函数。
 primitie channel registry是所有的primitive channel，包括 `sc_signal`, `sc_fifo`, `sc_clock`, `sc_buffer` 等
-继承自 `sc_prim_channel` 的所有对象注册表。
+继承自 `sc_prim_channel` 的所有对象注册表。primitive channel是用来模拟多个线程之间信号传输的工具，为此，primitive channel
+建立了一套复杂但有效的更新机制，避免了信号在primitive channel传递过程中出现丢失，或者提前响应的情况。
 
 == Primitive Channel框架
 
@@ -24,6 +25,7 @@ Primitive Channel有两个类组成，一个负责管理所有注册的primitive
 从而组成一条链表。
 
 ==== request_update
+[[api::sc_prim_channel_registry::request_update]]
 
 `sc_prim_channel_registry` 的 `request_update` 函数接受一个 `sc_prim_channel`
 对象的引用，然后将此对象加入到注册表的链表中：
@@ -112,9 +114,17 @@ sc_prim_channel::request_update()
 ----
 <1> 如果 `m_update_next_p` 有非零值，说明本primitive channel已经存在于registry的链表中了
 
-`sc_prim_channel::request_update` 可能被多次调用。
+sc_prim_channel的request_update函数，实际调用的是 
+<<api::sc_prim_channel_registry::request_update, sc_prim_channel_registry的request_update>>函数。
+`sc_prim_channel::request_update` 在一次delta cycle内部可以被多次调用，这里会检查是否已经在prim channel
+registry中，如果在的话就无需再次放入。
 
-`sc_prim_channel::request_update` 函数应当在EVALUATE PHASE调用。
+`sc_prim_channel::request_update` 函数应当在EVALUATE PHASE调用。其表达的含义是，本primitive channel
+在本次执行过程中被修改了，因此需要被加入到一个待更新的组中（这个待更新的组由primitive channel registry维护，
+实际上是一个链表）。
+
+`sc_prim_channel::request_update` 设计的目的是为了sc_prim_channel的继承类直接使用的。sc_prim_channel
+的继承类无需重新实现request_update，所以这里request_update函数是一个非虚的函数。
 
 ==== perform_update
 [[api::sc_prim_channel::perform_update]]
@@ -130,10 +140,11 @@ void
 sc_prim_channel::perform_update()
 {
     update(); <1>
-    m_update_next_p = 0;
+    m_update_next_p = 0; <2>
 }
 ----
 <1> 核心部分就是这个可以被重载的 `update` 函数
+<2> 将m_update_next_p置为空，这样就从prim channel registry所维护的链表中挪去了
 
 `sc_prim_channel::perform_update` 应当在UPDATE PHASE调用。从这里我们能看出，
 `sc_prim_channel::perform_update`的核心就是那个可以被重载的 `update` 函数。每一个
@@ -177,8 +188,12 @@ sc_prim_channel::update()
 的 <<api::sc_prim_channel::update, `sc_prim_channel::update()`>> 函数。
 
 每个继承 `sc_prim_channel` 的类都需要实现自己的 `update` 函数，完成本primitive channel
-在UPDATE PHASE的工作。这些类可以用 `sc_prim_channel::request_update` ，来和
-primitive channel registry通信。
+在UPDATE PHASE的工作。这些类可以调用基类 sc_prim_channel的成员函数 `request_update` ，来和
+primitive channel registry通信，通知primitive channel registry自己需要更新。sc_prim_channel
+的继承类一般不需要实现自己的request_update函数。
+
+sc_prim_channel的继承类在何时调用 request_update，以及如何实现update接口函数，是这个继承类
+本身的能力所在。不同的primitive channel在这两个问题的选择上有着不同的答案。
 
 == 几种Primitive Channel
 
@@ -229,6 +244,10 @@ sc_fifo<T>::nb_write( const T& val_ )
 }
 ----
 
+这是因为非阻塞的读或者写成功，意味着FIFO的状态发生了改变，这就需要更新内部状态。FIFO的内部状态的更新并不能
+在读写完成之后立马进行，这样会带来潜在的条件竞争（由于线程调度顺序不同而带来的不同结果）。所以这里调用request_update，将更新状态的过程推迟到UPDATE
+PHASE，保证所有的线程都执行完毕之后再更新FIFO的状态。
+
 同时，阻塞版本的读/写则在无法读或者写的时候，等待相对应的event:
 
 * 如果无法读数据，那就等待写事件发生，这样就有足够的数据可以读取
@@ -270,7 +289,7 @@ sc_fifo<T>::write( const T& val_ )
 
 ==== update函数的实现
 
-sc_fifo的update函数主要实现了读和写时间的通知：
+sc_fifo的update函数主要实现了读和写事件的触发，以及内部状态的更新：
 
 .src/sysc/communication/sc_fifo.h
 [source,cpp]
@@ -294,7 +313,7 @@ sc_fifo<T>::update()
 }
 ----
 
-这里读和写时间都使用了 `notify(SC_ZERO_TIME)` ，在UPDATE阶段将阻塞在这两个事件的
+这里读和写事件都使用了 `notify(SC_ZERO_TIME)` ，在UPDATE阶段将阻塞在这两个事件上的
 线程重新放入runnable列表。根据 `request_update` 部分，只有阻塞的读和写才会阻塞在
 这两个事件上。因此：
 
@@ -309,6 +328,39 @@ sc_fifo<T>::update()
 在UPDATE PHASE，读或者写事件的 `trigger()` 可以将可能pending在本时间上的线程纳入调度队列，在下一个
 delta cycle恢复相应的线程。
 
+==== fifo中的计数器
+
+sc_fifo中有几个计数器：
+
+* m_size，本FIFO的深度
+* m_free，buffer的剩余空间大小
+* m_num_readble，初始值为0，只有在update的时候，才会更新为m_size - m_free，这记录的是本delta cycle内，可以被读取的entry的个数
+* m_num_read，本delta cycle内，读取的entry的个数
+* m_num_written，本delta cycle内，写入的entry的个数
+
+对于num_free，实现如下：
+
+.src/sysc/communication/sc_fifo.h
+[source,cpp]
+----
+    virtual int num_free() const
+	{ return ( m_size - m_num_readable - m_num_written ); }
+----
+
+即，fifo中空的个数，等于总的空间，减去本delta cycle内可以读取的空间，再减去已经写入的个数。举个例子，深度为16的fifo在本delta cycle初始时
+有6个entry可以被读取，那么num_free就是10. 每写入一个，num_free相应就减去一。
+
+对于num_available的实现则是如下：
+
+.src/sysc/communication/sc_fifo.h
+[source,cpp]
+----
+    virtual int num_available() const
+	{ return ( m_num_readable - m_num_read ); }
+----
+
+num_available直接使用本delta cycle初始时可读取的大小，减去已经读取的大小。
+
 ==== 场景分析
 
 我们这里尝试分析几种读写的场景，来加深理解sc_fifo的行为。本部分我们用RT表示读线程, Read Thread，WT表示写线程，Write Thread. 读写均采用阻塞读写方法。
@@ -319,12 +371,13 @@ delta cycle恢复相应的线程。
 
 在这种情况下，EVALUATE PHASE, 如果先调度执行阻塞写的线程WT，再调度执行阻塞读的线程RT，则阻塞写的线程WT由于有足够
 的空间写入（fifo为空），顺利完成写入，并且执行了request_update将本fifo放入registry的update
-链表中。RT线程执行的时候，由于fifo中已经有写入的数据，所以也不会阻塞，直接读取数据，同样调用
-request_update将本fifo放入registry的update链表。在UPDATE阶段， `update` 函数被调用，读和写
-事件都有发生，因此会调用读和写事件的 `notify(SC_ZERO_TIME)`  ，尝试将阻塞在读写事件上的线程放入
-runnable列表。由于没有线程实际阻塞在读写事件上，因此 `notify(SC_ZERO_TIME)` 实际上没有
-为下一个delta cycle调度添加任何线程。在这种情况下，读和写发生在一个clock，准确地说，在同一个delta cycle
-内完成。
+链表中。RT线程执行的时候， 虽然fifo中已经有写入的数据，
+，但fifo记录的readable计数器仍然为0，因为FIFO直到
+update 函数被调用时才更新readable计数器，所以RT线程同样阻塞住。在UPDATE阶段， `update` 函数被调用，只有写
+事件都有发生，因此会调用写事件的 `notify(SC_ZERO_TIME)`  ，尝试将阻塞在写事件上的线程放入
+runnable列表。由于RT线程阻塞在写事件上，因此 `notify(SC_ZERO_TIME)` 将RT放入
+下一个delta cycle调度的线程列表里。这样，在下一个delta cycle, RT就可以读到FIFO中的数据了。
+在这种情况下，读和写发生在同一个clock cycle，但是在不同的delta cycle内。
 
 如果EVALUATE PHASE，先调度RT，再调度WT。RT由于没有足够读取的数据，会阻塞在写事件上。
 WT运行的时候，有足够的空间写入，所以可以直接写进去，并调用request_update将本fifo放入registry
@@ -349,9 +402,11 @@ WT运行的时候，有足够的空间写入，所以可以直接写进去，并
 在写事件上的线程放入runnable链表。这里没有阻塞在写事件上的线程，因此没有为下一个delta cycle调度
 添加任何线程。在这种情况下，读和写发生在一个clock内，但分属两个不同的delta cycle。
 
-如果EVALUATE PHASE先调度RT，再调度WT。RT和WT都能够顺利完成。在UPDATE阶段，由于没有
-阻塞在读和写事件上的线程，因此不会为runnable链表增加任何线程。这种情况下，读和写发生在
-一个clock内，并且发生在同一个delta cycle内。
+如果EVALUATE PHASE先调度RT，再调度WT。其结果和上边一样，虽然RT先发生，但num_free却在EVALUATE阶段始终
+返回0，因为FIFO的深度知道UPDATE Phase才会更新。在UPDATE阶段，阻塞在读事件上的WT会被重新放入runnable
+调度列表中，在下一个delta cycle执行。
+这种情况下，读和写发生在
+一个clock内，但发生在不同delta cycle内。
 
 ''''
 
@@ -406,17 +461,25 @@ WT被重新调度，完成写入动作，并在 `update` 阶段将阻塞在写�
 
 ==== 行为描述
 
-`sc_fifo` 令人比较困惑的一点在于，在FIFO为空的情况下，如果读写发生在同一个clock cycle，那么
++++<del>+++`sc_fifo` 令人比较困惑的一点在于，在FIFO为空的情况下，如果读写发生在同一个clock cycle，那么
 读在本clock cycle能够读到写入的数据。这对于一个正常的FIFO来说是错误的行为：数据起码要先进入
 FlipFlop，在下一个clock cycle才能够被读回来。对于特殊设计的FIFO而言，发生在同一个clock
 cycle的读写绕过FlipFlop，直接将数据透传过去的行为是存在的，只不过这么做就失去了FIFO的非常
-重要的一个功能：打断双向的时延，以提供更好的timing能力。
+重要的一个功能：打断双向的时延，以提供更好的timing能力。+++</del>+++
 
++++<del>+++
 读写不在同一个clock cycle时，在FIFO为空的情况下，如果读先发生，
 那么阻塞的读会在写的cycle立即唤醒并读到写入的值，这一点的行为也非常令人惊讶。
++++</del>+++
 
++++<del>+++
 `sc_fifo` 在使用过程中是否有特殊要求，以避免出现这样的情况，从源代码分析还暂时不得而知。
 后续会补充。
++++</del>+++
+
+`sc_fifo` 的读和写即使发生在同一个delta cycle，读也无法立即获取写的结果，直到下一个delta cycle才能够获取。这个结果
+与读和写线程调度执行的顺序无关，这就是sc_fifo设计的初衷。如果是clock accurate的建模，这意味着FIFO的数据至少有一个
+时钟的延时，这就达到了FIFO的重要功能，即切断双向的延时。
 
 ==== 其他
 
@@ -431,7 +494,7 @@ sc_fifo不仅是一个sc_prim_channel，同时也是一个sc_interface，实现�
 经过sc_signal，就能立马被下游模块的输入看到。
 
 与sc_fifo迥异的地方还在于，sc_signal是一系列有着复杂继承体系的类。这种复杂继承体系，目的
-是为了让sc_signal有着不同的逾期行为：是否可以被多个线程同时赋值（MANY WRITER），是否
+是为了让sc_signal有着不同的预期行为：是否可以被多个线程同时赋值（MANY WRITER），是否
 强制做检查，诸如此类。我们这里主要分析的是如下模板类：
 
 .src/sysc/communication/sc_signal.h
