@@ -1103,6 +1103,7 @@ MB.EB已经完成了到 sc_interface的绑定工作。对于sc_port而言这是�
 
 * 无法做到一对多绑定，只能一对一，也即一个sc_export只能bind一个interface。只能提供一对一的绑定，这是由于sc_export具有隐式转换的能力决定的。如果sc_export能够绑定多个interface，那么隐式转换应当转换成为哪个interface，就成为了一个非常棘手的设计模式问题了。为了避免这种问题的出现，sc_export被设计为只能做一对一的绑定。
 * 无法提供延迟绑定的能力，这是因为当需要将一个sc_export转为一个interface的时候，这个sc_export必须已经绑定一个interface了（即持有一个interface的指针），而不能做到在sc_export没有持有interface的指针前提下转为interface。与之相比，一个sc_port可以绑定到另一个sc_port，而后者在被绑定的时候无需要求完成绑定，因为sc_port有个complete_binding的机制，会在合适的时机resolve所有的binding信息。相比于sc_port，sc_export是无法这么使用的
+* 无法作为敏感源使用
 
 优点则有：
 

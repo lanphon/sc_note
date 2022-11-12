@@ -11,5 +11,8 @@ order,
 4. sensitive，如何设置静态敏感事件
 4. trace
 5. misc，杂项
-6. tlm-intro
+5. rethink，再开始学习TLM之前，重新梳理一下systemc的内容
+5. tlm-1. tlm 1部分的内容汇总
+6. tlm-2-intro
+6. tlm-2-socket, tlm
 7. synthesis, 介绍SystemC中的可综合子集

@@ -15,6 +15,16 @@
 对背后的SystemC的设计思想的思考，在本章，我们将尝试从设计意图等方面，重新审视一下SystemC下的
 interface, port和export的关系。
 
+SystemC的interface, port和export，是和module一起，构造SystemC中的对象体系结构，绑定关系的
+基本组成单元。值得注意的是，在仿真开始之后，SystemC的内核调度的时候不再有任何interface, port，
+export或者module的概念了，只有线程、事件和primitive channel参与到仿真的执行过程中。从这方面
+来讲，interface, port, export和module是构建仿真体系的基石，是容纳线程，事件以及primitive channel
+的容器。
+
+Interface, port和export虽然不参与仿真的过程，但提供了模型构建的约束。这也是从SystemC构造TLM
+方法学的来源。TLM中，最多的还是关于interface, port和export之间相互绑定关系的使用、约束以及限制。
+因此，在此厘清Interface, port和export之间的关系，是进一步学习TLM的基础。
+
 == Interface
 [[discuss::sc_interface]]
 
@@ -75,7 +85,7 @@ class sc_fifo
 
 === sc_interface的使用
 
-对于SystemC的用户而言，一般sc_interface是很少直接用到的，大多数情况下，用到的都是sc_interface
+对于SystemC的用户而言，一般sc_interface数据类型是很少直接用到的，大多数情况下，用到的都是sc_interface
 的派生类，或者实现了sc_interface派生类接口函数的组件，例如使用的都是 `sc_fifo_in_if<T>`
 或者 `sc_fifo<T>` 等。但在一些情况下，可能需要直接用到sc_interface。例如，如果有需求
 设计新的interface，那么就需要显式派生自sc_interface。
@@ -86,8 +96,61 @@ class sc_fifo
 `sc_interface*` 的方法很类似。这时候就可以使用 `sc_interface*`
 或者 `sc_interface&` 作为类型，而在需要具体类型的时候dynamic cast。
 
+=== interface的使用
+
+对于广泛意义上的interface，在SystemC中一般需要配合primitive channel来使用，这是因为
+primitive channel提供了primitive通信的能力，同时需要使用interface讲这种通信的能力
+抽象出来（例如FIFO的blocking/non-blocking访问，就是同一个FIFO实现的不同interface能力）。
+
+在SystemC建模的过程中，线程之间的通信最好使用primitive channel，避免使用原生的C++数据结构（例如
+queue或者stack等）。这是因为C++原始的数据结构并没有delta cycle之间隔绝，以及在delta cycle之间
+进行更新的能力（这是primitive channel设计的初衷）。例如，我们有如下代码：
+
+
+[source,cpp]
+----
+std:;queue<data_t> m_queue;
+sc_event m_data_ready;
+
+void thread_a {
+    while (true) {
+        m_queue.push(data);
+        m_data_ready.notify();
+    }
+}
+
+void thread_b {
+    while (true) {
+        if (m_queue.empty()) {
+            wait(m_data_ready);
+        }
+
+        auto d = m_queue.front();
+        m_queue.pop();
+    }
+}
+----
+
+这段代码是在IMG的USC中经常见到的一种方法，使用一个queue和一个event来代替primitive channel的能力。这样做的坏处
+在于，其结果是order-specified的。如果thread b先运行，queue为空，那么等待event发生。thread a运行的时候，将数据
+放入queue，然后触发事件。thread b接着运行，能够从queue中获取数据。这当然没问题。但如果thread a先运行，放入数据
+到queue中，然后触发事件。thread b运行的时候，首先queue非空，那么就弹出数据，这时候就出现了错误，因为thread a写入
+的数据，在同一个delta cycle内就被thread b获取到了，这不符合建模的原则。接下来，thread b发现queue空了，等待事件发生。
+接下来的delta cycle，由于在上一个delta cycle，事件已经发生，所以thread b被唤醒继续执行，这时候对queue的front操作
+和pop操作都会crash掉。其实，在这种应用场景下，只需要简单使用一个 `sc_fifo<data_t>` 在两个thread间进行通信就足够了，
+不必也不应该使用raw数据结构和event来进行通信。
+
+此外，如果不涉及数据的交互，那么可以用interface抽象出来类的基本能力。不过这种用法其实和普通的C++虚函数
+使用方法就很相似了。(IMG的CMOD代码中大量使用这种方式)
+
 == Port
 [[discuss::sc_port]]
+
+对于interface，以及实现了interface能力的primitive channel，已经足以在不同的thread之间传到信息了。但这样
+需要不同的类或对象彼此之间共享成员函数，或者对同一个primitive channel进行读写操作，这并不符合封装的原则。另
+一方面，由于对象拿到的是primitive channel的访问权限，因此可以对primitive channel对象做所有的访问，这就很
+可能出现两个线程同时写或者同时读访问，违背了设计的原则。在这种前提下，考虑到封装的要求，以及在封装的基础上，限制
+对primitive channel的访问能力，SystemC设计出来了port类型。
 
 port，并不单纯是一个<<data::sc_port, sc_core::sc_port>>，而是SystemC中涉及的一系列与之相关的核心的
 数据结构。由于SystemC设计的时候CPP还没有 `std::variant<>` 这样的能够做到类型擦除的组件，因而SystemC自己
@@ -97,5 +160,66 @@ port，并不单纯是一个<<data::sc_port, sc_core::sc_port>>，而是SystemC�
 * <<api::sc_port_b, sc_core::sc_port_b<IF> >>
 * <<api::sc_port, sc_core::sc_port<IF, N, POL> >>
 
+sc_port_base，这是一个所有port的基类，直接继承自sc_object，sc_port_base同时是一个非模板类。
+非模板类的好处是，如果需要使用一个通用类型的port，
+不需要知道其指向的类型参数的具体信息的时候，可以使用 `sc_port_base*`。sc_port_base实际并没有
+任何成员变量。
+
+`sc_port_b<IF>` ，这是具体指定了信息的port的基类，其内部保存了一个指向 `IF` 的指针，以及一组
+指向 `IF` 的指针。之所以有一组指向IF的指针，是为了支持一个port绑定到多个IF上。所以 `sc_port_b<IF>`
+内才有指向IF的指针。注意，这里虽然没有显式的约束要求，但设计上，需要IF是一个sc_interface的派生类。
+
+`sc_port<IF, N, POL>` 则是继承了 `sc_port_b<IF>`，增加的模板参数N和POL的目的是为了更好约束
+port的bind情况：是否允许空绑定，是否允许多绑定，是否允许限定绑定数目。相比于 `sc_port_b<IF>`，
+`sc_port<IF, N, POL>` 并没有新增任何成员变量。新增的模板参数，N的默认值为1，而POL的默认参数
+则是 `SC_ONE_OR_MORE_BOUND`，即默认情况下，sc_port使用的时候，形如 `sc_port<IF>` 不允许空绑定，
+但允许多绑定。
+
+全部的port体系中，成员变量只有一个指向IF的指针，以及为了应对多绑定而增加的一组指向IF的指针而已。port
+的设计中，更多的细节是为了支撑port的设计理念。这些设计理念包括：
+
+* 允许一个port绑定到另外一个port上，其结果等同于这个port获取了被绑定port在仿真开始时刻所绑定的所有interface
+* port绑定到另一个port上时，不要求被绑定的port完成所有绑定，这样用户就不用特意注意绑定顺序
+* 允许用户提供绑定策略，在仿真开始的时刻检查所设定的策略，如果不满足，则报错退出
+* 在使用的过程中，一个port可以当做指向 `IF*` 的指针使用，这是因为 `sc_port_b<IF>` 重载了 `operator->`， 返回一个 `IF*`
+
 == Export
 [[discuss::sc_export]]
+
+export类型出现的理由，在 <<data::sc_export, sc_core::sc_export>> 部分已经介绍了。简言之，sc_export
+的出现，是代替实现了sc_interface能力的primitive channel，作为类对外暴露的接口的。sc_export并不是为了
+替代sc_port，而是为了替代sc_interface，来隐藏具体的实现细节。
+
+与port类似，export也不只是一个简单的 `sc_export<IF>`，而是一系列与之相关的数据结构，包括：
+
+* <<api:;sc_export_base, sc_core::sc_export_base>>
+* <<api::sc_export, sc_core::sc_export<IF> >>
+
+sc_export_base直接继承自sc_object，同样是一个非模板的基类。sc_export_base设计的主要目的是为了和
+export的registry打交道。sc_export_base没有任何类型的成员变量。
+
+`sc_export<IF>` 则继承自sc_export_base，其内部有一个唯一的成员变量，即指向IF的指针。与sc_port一样，虽然
+这里并没有显式约束，但IF必须是一个sc_interface的派生类才可以。一个 `sc_export<IF>` 能且只能绑定一个
+interface。
+
+== 绑定关系
+
+port可以绑定到port。这个我们之前介绍过，绑定时只是将被绑定的port先记录在port内，而在仿真开始之前，
+需要解决本port内所有绑定了的对象，如果绑定的对象是一个port，则将port内的所有interface取出来（因为
+这个时候所有的绑定工作已经结束），替换原先被绑定的port的位置。所以port绑定到port，最终得到的结果
+仍然是port获取了一系列指向interface的指针。
+
+port可以绑定到interface上。这是port最初的用法。
+
+port可以绑定到export上。
+
+export可以绑定到interface上。
+
+export可以绑定到export上（前提是，被绑定的export已经绑定了interface）。这时候，实际上是将被绑定的
+export默认转成一个interface，然后export再绑定到这个interface上。
+
+interface只能被绑定，而无法去绑定任何其他接口。
+
+在一个建模结构中，公共的部分（包括类/对象的公共成员变量）只需要是port和export类型就足够了。但在类内部的实现
+中，最终所有的port/export，仍然需要绑定到一个sc_interfac上。即，port, export使用在公共部分，而interface
+使用在私有部分。
