@@ -9,3 +9,810 @@ SystemC中的TLM 1.0 组件
 
 SystemC的TLM分为1.0版和2.0版本，虽然1.0版本的TLM已经不推荐使用，但在一些legacy的Code
 （例如我们和UVM做仿真的TLM接口定义中）仍然存在。所以本部分我们主要介绍TLM 1.0版本的内容。
+理解TLM 1.0部分的设计思路，也能更好帮助我们去探索TLM 2.0的设计选择。
+
+TLM 1.0时代的建模，主要基于REQUEST和RESPONSE的思想。即，发起端发出REQUEST请求，接收端返回一个RESPONSE
+应答。 TLM 1.0主要分为以下几个部分：
+
+* interface部分
+* channel部分，主要是tlm_fifo
+* port部分
+* adaptor部分
+* analysis部分
+
+== TLM 1.0 Interfaces
+
+tlm 1.0的Interfaces部分主要有如下几类：
+
+* core interfaces
+  - tlm_transport_if
+  - tlm_blocking_get_if
+  - tlm_blocking_put_if
+  - tlm_blocking_peek_if
+  - tlm_nonblocking_get_if
+  - tlm_nonblocking_put_if
+  - tlm_nonblocking_peek_if
+* fifo interfaces
+* master slave interfaceo
+
+其中，所有的core部分的interface定义的层次关系如下图所示：
+
+.tlm 1中的interfaces层次关系
+image::tlm_1_interfaces.png[]
+
+图中淡绿色部分为直接继承自sc_interface的基础interfaces类，这些基础类中的红色字体表示定义的接口函数名称。
+
+
+=== core interfaces 
+
+core interfaces的内容之前已经罗列了。首先是tlm_transport_if，定义如下：
+[[tlm::1::tlm_transport_if]]
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_1_interfaces/tlm_core_ifs.h
+[source,cpp]
+----
+// bidirectional blocking interfaces
+
+template < typename REQ , typename RSP >
+class tlm_transport_if : public virtual sc_core::sc_interface
+{
+public:
+  virtual RSP transport( const REQ & ) = 0;
+
+  virtual void transport( const REQ &req , RSP &rsp ) {
+    rsp = transport( req );
+  }
+
+};
+----
+
+从代码可以看出， `tlm_transport_if` 是一个阻塞式的interface，接口函数transport需要接受请求数据REQ，然后
+返回应答请求的数据RSP。REQ和RSP可以有不同的数据类型，所以`tlm_transport_if` 的模板需要接受两个类型参数。
+
+tlm_transport_if是双端口的interface，不仅可以发起请求，还可以接受返回的应答数据。除此之外，TLM 1中还定义了一系列
+的单端口的interface，我们在之后将一一介绍。
+
+首先是 tlm_blocking_get_if：
+[[tlm::1::tlm_blocking_get_if]]
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_1_interfaces/tlm_core_ifs.h
+[source,cpp]
+----
+template < typename T >
+class tlm_blocking_get_if : public virtual sc_core::sc_interface
+{
+public:
+  virtual T get( tlm_tag<T> *t = 0 ) = 0;
+  virtual void get( T &t ) { t = get(); }
+
+};
+----
+
+定义的接口函数接受一个 `tlm_tag<T>` 类型的指针（默认值为空指针），返回类型T的数据.
+
+除了get之外，还可以put，即 tlm_blocking_put_if:
+[[tlm::1::tlm_blocking_put_if]]
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_1_interfaces/tlm_core_ifs.h
+[source,cpp]
+----
+template < typename T >
+class tlm_blocking_put_if : public virtual sc_core::sc_interface
+{
+public:
+  virtual void put( const T &t ) = 0;
+};
+----
+
+这里的接口函数就是传入一个`const T&`即可。
+
+值得注意的是，TLM 1中还定义了一个peek的操作：
+[[tlm::1::tlm_blocking_peek_if]]
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_1_interfaces/tlm_core_ifs.h
+[source,cpp]
+----
+template < typename T >
+class tlm_blocking_peek_if : public virtual sc_core::sc_interface
+{
+public:
+  virtual T peek( tlm_tag<T> *t = 0 ) const = 0;
+  virtual void peek( T &t ) const { t = peek(); }
+
+};
+----
+
+tlm_blocking_peek_if的实现和 <<tlm::1::tlm_blocking_get_if, tlm_blocking_get_if>>
+基本一样，除了接口函数的名称从get变成peek之外，其他没有区别。
+
+上述的get/peek和put都是阻塞版本，其对应的非阻塞版本的interface则是：
+
+tlm_nonblocking_get_if的定义是：
+[[tlm::1::tlm_nonblocking_get_if]]
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_1_interfaces/tlm_core_ifs.h
+[source,cpp]
+----
+template < typename T >
+class tlm_nonblocking_get_if : public virtual sc_core::sc_interface
+{
+public:
+  virtual bool nb_get( T &t ) = 0;
+  virtual bool nb_can_get( tlm_tag<T> *t = 0 ) const = 0;
+  virtual const sc_core::sc_event &ok_to_get( tlm_tag<T> *t = 0 ) const = 0;
+};
+----
+
+其中定义了3个接口函数，分别是：
+
+* nb_get，非阻塞地尝试获取类型T的数据
+* nb_can_get，非阻塞地返回是否可以有数据可供get
+* ok_to_get，返回事件的引用，标志有数据可供get的事件发生
+
+tlm_nonblocking_put_if的定义则是:
+[[tlm::1::tlm_nonblocking_put_if]]
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_1_interfaces/tlm_core_ifs.h
+[source,cpp]
+----
+template < typename T >
+class tlm_nonblocking_put_if : public virtual sc_core::sc_interface
+{
+public:
+  virtual bool nb_put( const T &t ) = 0;
+  virtual bool nb_can_put( tlm_tag<T> *t = 0 ) const = 0;
+  virtual const sc_core::sc_event &ok_to_put( tlm_tag<T> *t = 0 ) const = 0;
+};
+----
+
+其定义的3个接口函数分别是：
+
+* nb_put，非阻塞地尝试put数据
+* nb_can_put，非阻塞地返回是否可以put数据
+* ok_to_put，返回一个事件引用，标志有空间可put的事件发生
+
+tlm_nonblocking_peek_if的定义则是：
+[[tlm::1::tlm_nonblocking_peek_if]]
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_1_interfaces/tlm_core_ifs.h
+[source,cpp]
+----
+template < typename T >
+class tlm_nonblocking_peek_if : public virtual sc_core::sc_interface
+{
+public:
+  virtual bool nb_peek( T &t ) const = 0;
+  virtual bool nb_can_peek( tlm_tag<T> *t = 0 ) const = 0;
+  virtual const sc_core::sc_event &ok_to_peek( tlm_tag<T> *t = 0 ) const = 0;
+};
+----
+
+这里定义的接口函数基本和get/put一样，就不再赘述了。
+
+此外，还有三个组合起来的interface, tlm_get_if, tlm_put_if和tlm_peek_if:
+[[tlm::1::tlm_get_if]]
+[[tlm::1::tlm_put_if]]
+[[tlm::1::tlm_peek_if]]
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_1_interfaces/tlm_core_ifs.h
+[source,cpp]
+----
+template < typename T >
+class tlm_get_if :
+  public virtual tlm_blocking_get_if< T > ,
+  public virtual tlm_nonblocking_get_if< T > {};
+
+template < typename T >
+class tlm_put_if :
+  public virtual tlm_blocking_put_if< T > ,
+  public virtual tlm_nonblocking_put_if< T > {};
+
+template < typename T >
+class tlm_peek_if :
+  public virtual tlm_blocking_peek_if< T > ,
+  public virtual tlm_nonblocking_peek_if< T > {};
+----
+
+这3个interface，都是对应的阻塞和非阻塞interface组合在一起。
+
+除此之外，还有get和peek组合起来的interface, tlm_blocking_get_peek_if, tlm_nonblocking_get_peek_if
+和tlm_get_peek_if:
+[[tlm::1::tlm_blocking_get_peek_if]]
+[[tlm::1::tlm_nonblocking_get_peek_if]]
+[[tlm::1::tlm_get_peek_if]]
+
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_1_interfaces/tlm_core_ifs.h
+[source,cpp]
+----
+template < typename T >
+class tlm_blocking_get_peek_if :
+  public virtual tlm_blocking_get_if<T> ,
+  public virtual tlm_blocking_peek_if<T> {};
+
+template < typename T >
+class tlm_nonblocking_get_peek_if :
+  public virtual tlm_nonblocking_get_if<T> ,
+  public virtual tlm_nonblocking_peek_if<T> {};
+
+
+template < typename T >
+class tlm_get_peek_if :
+  public virtual tlm_get_if<T> ,
+  public virtual tlm_peek_if<T> ,
+  public virtual tlm_blocking_get_peek_if<T> ,
+  public virtual tlm_nonblocking_get_peek_if<T>
+  {};
+----
+
+=== fifo interfaces
+
+tlm中的fifo interfaces，主要为TLM FIFO提供interface能力的描述。
+
+首先，是一个tlm_fifo_debug_if:
+[[tlm::1::tlm_fifo_debug_if]]
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_1_interfaces/tlm_fifo_ifs.h
+[source,cpp]
+----
+template< typename T >
+class tlm_fifo_debug_if : public virtual sc_core::sc_interface
+{
+public:
+  virtual int used() const = 0;
+  virtual int size() const = 0;
+  virtual void debug() const = 0;
+
+  //
+  // non blocking peek and poke - no notification
+  //
+  // n is index of data :
+  // 0 <= n < size(), where 0 is most recently written, and size() - 1
+  // is oldest ie the one about to be read.
+  //
+
+  virtual bool nb_peek( T & , int n ) const = 0;
+  virtual bool nb_poke( const T & , int n = 0 ) = 0;
+
+};
+----
+
+tlm_fifo_debug_if是一个用来辅助debug的interface，定义的接口函数有：
+
+* used/size/debug，这三个都是FIFO的size操作和打印debug信息
+* nb_peek
+* nb_poke
+
+在tlm_fifo_debug_if的基础上，扩充出来了两个interface：和
+<<tlm::1::tlm_put_if, tlm_put_if>>组合得到的tlm_put_if，
+以及和<<tlm::1::tlm_get_peek_if, tlm_get_peek_if>>组合
+得到的tlm_fifo_get_if:
+[[tlm::1::tlm_fifo_put_if]]
+[[tlm::1::tlm_fifo_get_if]]
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_1_interfaces/tlm_fifo_ifs.h
+[source,cpp]
+----
+template < typename T >
+class tlm_fifo_put_if :
+  public virtual tlm_put_if<T> ,
+  public virtual tlm_fifo_debug_if<T> {};
+
+template < typename T >
+class tlm_fifo_get_if :
+  public virtual tlm_get_peek_if<T> ,
+  public virtual tlm_fifo_debug_if<T>
+{
+  using tlm_get_peek_if<T>::nb_peek;
+  using tlm_fifo_debug_if<T>::nb_peek;
+};
+----
+
+fifo的interface中，还有一个非模板类的interface, tlm_fifo_config_size_if
+[[tlm::1::tlm_fifo_config_size_if]]
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_1_interfaces/tlm_fifo_ifs.h
+[source,cpp]
+----
+class tlm_fifo_config_size_if : public virtual sc_core::sc_interface
+{
+public:
+  virtual void nb_expand( unsigned int n = 1 ) = 0;
+  virtual void nb_unbound( unsigned int n = 16 ) = 0;
+
+  virtual bool nb_reduce( unsigned int n = 1 ) = 0;
+  virtual bool nb_bound( unsigned int n ) = 0;
+
+};
+----
+
+=== master-slave interfaces
+
+master-slave的interface定义结合了之前的interface部分。master-slave部分需要两个模板参数，分别
+标识请求数据点类型和应答数据的类型。
+
+首先是一个阻塞的master接口，tlm_blocking_master_if，组合了blocking的put请求，以及blocking的
+get/peek应答：
+[[tlm::1::tlm_blocking_master_if]]
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_1_interfaces/tlm_master_slave_ifs.h
+[source,cpp]
+----
+template < typename REQ , typename RSP>
+class tlm_blocking_master_if :
+  public virtual tlm_blocking_put_if< REQ > ,
+  public virtual tlm_blocking_get_peek_if< RSP > {};
+----
+
+那么，与之相对应的，阻塞的master接口，tlm_blocking_slave_if，组合了blocking的get/peek请求，以及
+blocking地put应答：
+[[tlm::1::tlm_blocking_slave_if]]
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_1_interfaces/tlm_master_slave_ifs.h
+[source,cpp]
+----
+template < typename REQ , typename RSP>
+class tlm_blocking_slave_if :
+  public virtual tlm_blocking_put_if< RSP > ,
+  public virtual tlm_blocking_get_peek_if< REQ > {};
+----
+
+这是符合逻辑的。对于master而言，发起（put）请求，获取（get/peek）应答。而对于slave而言，则是
+获取（get/peek）请求，响应（put）应答。
+
+对应的非阻塞版本则是：
+[[tlm::1::tlm_nonblocking_master_if]]
+[[tlm::1::tlm_nonblocking_slave_if]]
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_1_interfaces/tlm_master_slave_ifs.h
+[source,cpp]
+----
+// nonblocking
+
+template < typename REQ , typename RSP >
+class tlm_nonblocking_master_if :
+  public virtual tlm_nonblocking_put_if< REQ > ,
+  public virtual tlm_nonblocking_get_peek_if< RSP > {};
+
+template < typename REQ , typename RSP >
+class tlm_nonblocking_slave_if :
+  public virtual tlm_nonblocking_put_if< RSP > ,
+  public virtual tlm_nonblocking_get_peek_if< REQ > {};
+----
+
+以及组合了阻塞和非阻塞的总的tlm_master_if和tlm_slave_if:
+[[tlm:;1::tlm_master_if]]
+[[tlm:;1::tlm_slave_if]]
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_1_interfaces/tlm_master_slave_ifs.h
+[source,cpp]
+----
+template < typename REQ , typename RSP >
+class tlm_master_if :
+  public virtual tlm_put_if< REQ > ,
+  public virtual tlm_get_peek_if< RSP > ,
+  public virtual tlm_blocking_master_if< REQ , RSP > ,
+  public virtual tlm_nonblocking_master_if< REQ , RSP > {};
+
+template < typename REQ , typename RSP >
+class tlm_slave_if :
+  public virtual tlm_put_if< RSP > ,
+  public virtual tlm_get_peek_if< REQ > ,
+  public virtual tlm_blocking_slave_if< REQ , RSP > ,
+  public virtual tlm_nonblocking_slave_if< REQ , RSP > {};
+----
+
+== TLM 1.0中的channels
+
+=== tlm fifo
+[[tlm::1::tlm_fifo]]
+
+tlm_fifo是TLM 1.0中最为重要的channel之一。tlm_fifo重新实现了fifo功能，而不是直接继承自sc_fifo：
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_channels/tlm_fifo/tlm_fifo.h
+[source,cpp]
+----
+template <typename T>
+class tlm_fifo :
+  public virtual tlm_fifo_get_if<T>,
+  public virtual tlm_fifo_put_if<T>,
+  public sc_core::sc_prim_channel
+{
+    // blabla
+protected:
+
+    circular_buffer<T> buffer; <1>
+
+    int m_size;                  // logical size of fifo <2>
+
+    int m_num_readable;          // #samples readable <2>
+    int m_num_read;          // #samples read during this delta cycle <2>
+    int m_num_written;           // #samples written during this delta cycle <2>
+    bool m_expand;               // has an expand occurred during this delta cycle ? <3>
+    int m_num_read_no_notify;    // #samples read without notify during this delta cycle <4>
+
+    sc_core::sc_event m_data_read_event; <2>
+    sc_core::sc_event m_data_written_event; <2>
+
+    // blabla
+};
+----
+<1> 和sc_fifo使用一个raw buffer不同，tlm_fifo使用一个circular buffer
+<2> 和sc_fifo一样，tlm_fifo同样使用这4个计数器，以及两个事件作为FIFO的信息建模
+<3> tlm_fifo支持动态扩充大小
+<4> 从名字来看，这个含义是如果读的数目不超过这个变量设定的值，则无需notify，但实际上，现在的SC中的这个值固定是0，也就是只要有read发生，就notify
+
+tlm_fifo首先是一个sc_prim_channel，tlm_fifo的建模和<<data::sc_fifo, sc_core::sc_fifo>>基本一样，这从
+相应的成员函数中就可以看出来。与sc_fifo略有不同的是，tlm_fifo使用了一个circular buffer来作为保存数据的部分，而不是
+想sc_fifo一眼个，使用一个raw buffer加上读写指针来穆尼circular buffer。此外，tlm_fifo支持在运行时调整size，这
+是sc_fifo不具备的能力。作为一个primitive channel，最重要的两点就是何时调用 
+<<api::sc_prim_channel::request_update, `request_update`>> ，以及如何实现 
+<<api::sc_prim_channel::update, `update`>>
+接口函数。我们首先看一下tlm_fifo的update接口函数的实现：
+[[tlm::1::tlm_fifo::update]]
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_channels/tlm_fifo/tlm_fifo.h
+[source,cpp]
+----
+template < typename T>
+inline
+void
+tlm_fifo<T>::update()
+{
+    if( m_num_read > m_num_read_no_notify || m_expand ) { <1>
+  m_data_read_event.notify( sc_core::SC_ZERO_TIME );
+    }
+
+    if( m_num_written > 0 ) { <2>
+  m_data_written_event.notify( sc_core::SC_ZERO_TIME );
+    }
+
+    m_expand = false;
+    m_num_read = 0;
+    m_num_written = 0;
+    m_num_readable = buffer.used();
+    m_num_read_no_notify = 0;
+
+}
+----
+<1> 如果读的数目超过设定的限制（实际上是0），或者tlm_fifo的size变大，那么就将触发读事件，这实际上相当于fifo有额外的空间释放
+<2> 如果有写入的数据，那么就触发写事件，这相当于fifo有数据可以读取
+
+从tlm_fifo的update可以看出，除了在读事件的判断上增加了一个 `m_expand` 以外，和
+<<data::sc_fifo, sc_core::sc_fifo>>的
+<<api::sc_fifo::update, update>>函数基本是一样的。
+
+
+除了作为一个primitive channel，tlm_fifo同时继承了<<tlm::1::tlm_fifo_get_if, tlm_fifo_get_if>>
+和<<tlm::1::tlm_fifo_put_if, tlm_fifo_put_if>>两个接口，这意味着tlm_fifo需要实现众多的接口函数定义，包括
+这些直接继承自sc_interface的基础类的接口函数：
+
+* tlm_fifo_debug_if
+* tlm_blocking_get_if
+* tlm_blocking_put_if
+* tlm_blocking_peek_if
+* tlm_nonblocking_get_if
+* tlm_nonblocking_put_if
+* tlm_nonblocking_peek_if
+
+在实现这些接口函数的时候，tlm_fifo可以调用request_update，实现自己作为一个primitive channel的功能。
+
+==== tlm_fifo_debug_if implementation
+
+首先看下tlm_fifo是如何实现<<tlm::1::tlm_fifo_debug_if, tlm_fifo_debug_if>>的接口函数的。
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_channels/tlm_fifo/tlm_fifo.h
+[source,cpp]
+----
+    int used() const {
+      return m_num_readable - m_num_read; <1>
+    }
+
+    int size() const {
+      return m_size;
+    }
+
+    void debug() const {
+
+      if( is_empty() ) std::cout << "empty" << std::endl;
+      if( is_full() ) std::cout << "full" << std::endl;
+
+      std::cout << "size " << size() << " - " << used() << " used "
+                << std::endl;
+      std::cout << "readable " << m_num_readable
+                << std::endl;
+      std::cout << "written/read " << m_num_written << "/" << m_num_read
+                << std::endl;
+
+    }
+----
+<1> fifo中已经使用的数量，等于原本的数量减去已经读出去的数量
+
+used, size和debug的实现相对比较简单。而nb_peek和nb_poke的实现则相对复杂一些，从nb_peek和nb_poke的实现，我们
+也能够理解get和peek的区别了：
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_channels/tlm_fifo/tlm_fifo_peek.h
+[source,cpp]
+----
+template < typename T>
+inline
+bool
+tlm_fifo<T>::nb_peek( T &t , int n ) const {
+
+  if( n >= used() || n < -1 ) {
+    return false;
+  }
+
+  if( n == -1 ) {
+    n = used() - 1;
+  }
+
+  t = buffer.peek_data( n );
+  return true;
+
+}
+
+template < typename T>
+inline
+bool
+tlm_fifo<T>::nb_poke( const T &t , int n ) {
+
+  if( n >= used() || n < 0 ) {
+    return false;
+  }
+
+  buffer.poke_data( n ) = t;
+  return true;
+
+}
+----
+
+从这里我们可以看出，peek的操作相比于get，更类似于一种索引（而不是弹出FIFO）的操作。对于nb_peek，如果给定的
+索引值超出索引范围，或者小于-1，那么就无法peek。如果设定为-1，那么peek的就是可用的数据中最后一个。poke操作
+泽合peak相反，相当于为一个位置设定值。如果位置等于size，则相当于append。（这一点待确认）
+
+==== tlm_blocking_get_if implementation
+
+<<tlm::1::tlm_blocking_get_if, tlm_blocking_get_if>>所需要实现的接口函数只有一个阻塞的get方法：
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_channels/tlm_fifo/tlm_fifo_put_get.h
+[source,cpp]
+----
+template <typename T>
+inline
+T
+tlm_fifo<T>::get( tlm_tag<T> * )
+{
+
+  while( is_empty() ) {
+    wait( m_data_written_event );
+  }
+
+  m_num_read ++;
+  request_update(); <1>
+
+  return buffer.read();
+
+}
+----
+<1> 因为读取了数据，所以这里需要调用<<api::sc_prim_channel::request_update, request_update>>，将自己放入primitive channel的待更新列表中
+
+这个get的实现还是比较简单的，基本和sc_fifo的read操作一样。
+
+==== tlm_nonblocking_get_if implementation
+
+<<tlm::1::tlm_nonblocking_get_if, tlm_nonblocking_get_if>>所需要实现的接口函数需要nb_get, nb_can_get和ok_to_get三个接口函数。
+
+其中ok_to_get这个函数最简单，需要返回一个事件，表明可以get，那么只需要返回写事件即可：
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_channels/tlm_fifo/tlm_fifo.h
+[source,cpp]
+----
+    const sc_core::sc_event &ok_to_get( tlm_tag<T> * = 0 ) const {
+      return m_data_written_event;
+    }
+----
+
+而nb_get和nb_can_get函数的实现则相对不难：
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_channels/tlm_fifo/tlm_fifo_put_get.h
+[source,cpp]
+----
+// non-blocking read
+
+template <typename T>
+inline
+bool
+tlm_fifo<T>::nb_get( T& val_ )
+{
+
+  if( is_empty() ) {
+    return false;
+  }
+
+  m_num_read ++;
+  request_update();
+
+  val_ = buffer.read();
+
+  return true;
+
+}
+
+template <typename T>
+inline
+bool
+tlm_fifo<T>::nb_can_get( tlm_tag<T> * ) const {
+
+  return !is_empty();
+
+}
+----
+
+基本上这两个函数的实现和sc_fifo的nb_read和num_available差不多。
+
+==== tlm_blocking_put_if implementation
+
+<<tlm::1::tlm_blocking_put_if, tlm_blocking_put_if>>的接口函数只有一个put：
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_channels/tlm_fifo/tlm_fifo_put_get.h
+[source,cpp]
+----
+template <typename T>
+inline
+void
+tlm_fifo<T>::put( const T& val_ )
+{
+    while( is_full() ) {
+  wait( m_data_read_event );
+    }
+
+    if( buffer.is_full() ) {
+
+      buffer.resize( buffer.size() * 2 );
+
+    }
+
+    m_num_written ++;
+    buffer.write( val_ );
+
+    request_update();
+}
+----
+
+put的实现基本和sc_fifo的write方法一样。
+
+==== tlm_nonblocking_put_if implementation
+
+<<tlm::1::tlm_nonblocking_put_if, tlm_nonblocking_put_if>>的接口函数有nb_put, nb_can_put和ok_to_put。
+其中ok_to_put的实现最为简单，只需要将读事件返回即可：
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_channels/tlm_fifo/tlm_fifo.h
+[source,cpp]
+----
+    const sc_core::sc_event& ok_to_put( tlm_tag<T> * = 0 ) const {
+      return m_data_read_event;
+    }
+----
+
+而nb_put和nb_can_put的实现则是：
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_channels/tlm_fifo/tlm_fifo_put_get.h
+[source,cpp]
+----
+template <typename T>
+inline
+bool
+tlm_fifo<T>::nb_put( const T& val_ )
+{
+
+  if( is_full() ) {
+    return false;
+  }
+
+  if( buffer.is_full() ) {
+
+    buffer.resize( buffer.size() * 2 );
+
+  }
+
+  m_num_written ++;
+  buffer.write( val_ );
+  request_update();
+
+  return true;
+}
+
+template < typename T >
+inline
+bool
+tlm_fifo<T>::nb_can_put( tlm_tag<T> * ) const {
+
+  return !is_full();
+
+}
+----
+
+基本上这两个函数的实现和sc_fifo的nb_write和num_free差不多。
+
+==== tlm_blocking_peek_if implementation
+
+<<tlm::1::tlm_blocking_peek_if, tlm_blocking_peek_if>>的接口函数只有peek一个：
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_channels/tlm_fifo/tlm_fifo_peek.h
+[source,cpp]
+----
+template < typename T>
+inline
+T
+tlm_fifo<T>::peek( tlm_tag<T> * ) const {
+
+  while( is_empty() ) {
+
+    // call free-standing sc_core::wait(),
+    // since sc_prim_channel::wait(.) is not const
+
+    sc_core::wait( m_data_written_event );
+  }
+
+  return buffer.read_data();
+
+}
+----
+
+注意，阻塞的peek等到有数据可以peek后，调用的是buffer的read_data，这和阻塞的get不一样，get调用的是read。read_data
+只读取数据，并不移动读指针。而read则调用read_data之后，移动读指针。所以这里peek调用read_data之后，数据仍然存在fifo内。
+这也是为何peek是一个const函数的原因了。
+
+==== tlm_nonblocking_peek_if implementation
+
+<<tlm::1::tlm_nonblocking_peek_if, tlm_nonblocking_peek_if>>的接口函数有nb_peek, nb_can_peek和ok_to_peek三个。
+
+ok_to_peek的实现简单，和ok_to_get的方法一样，返回写事件即可：
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_channels/tlm_fifo/tlm_fifo.h
+[source,cpp]
+----
+    const sc_core::sc_event &ok_to_peek( tlm_tag<T> * = 0 ) const {
+      return m_data_written_event;
+    }
+----
+
+而nb_peek和nb_can_peek的实现则是：
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_channels/tlm_fifo/tlm_fifo_peek.h
+[source,cpp]
+----
+template < typename T>
+inline
+bool
+tlm_fifo<T>::nb_peek( T &t , int n ) const {
+
+  if( n >= used() || n < -1 ) {
+    return false;
+  }
+
+  if( n == -1 ) {
+    n = used() - 1;
+  }
+
+  t = buffer.peek_data( n );
+  return true;
+
+}
+
+template< typename T >
+inline
+bool
+tlm_fifo<T>::nb_can_peek( tlm_tag<T> * ) const
+{
+  return !is_empty();
+}
+----
+
+这两个函数的实现相对还是比较简单的。注意nb_can_peek的入参实际上是没有使用到的。
+
+==== tlm fifo resize
+
+tlm_fifo并没有直接或者间接继承自<<tlm::1::tlm_fifo_config_size_if, tlm_fifo_config_size_if>>，但却实现了同样的接口函数。
+这是否是TLM 1.0中遗漏的一个bug？tlm_fifo应该直接继承自tlm_fifo_config_size_if的。

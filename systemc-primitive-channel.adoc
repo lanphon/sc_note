@@ -288,6 +288,7 @@ sc_fifo<T>::write( const T& val_ )
 <2> 调用非阻塞版本的写
 
 ==== update函数的实现
+[[api::sc_fifo::update]]
 
 sc_fifo的update函数主要实现了读和写事件的触发，以及内部状态的更新：
 
