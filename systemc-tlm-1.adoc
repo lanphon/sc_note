@@ -41,7 +41,8 @@ tlm 1.0的Interfaces部分主要有如下几类：
 image::tlm_1_interfaces.png[]
 
 图中淡绿色部分为直接继承自sc_interface的基础interfaces类，这些基础类中的红色字体表示定义的接口函数名称。
-
+注意tlm_transport_if游离在主要的继承体系之外。tlm_transport_if的作用主要是提供一种简单的req-rsp机制，对于简单的建模来说这就足够了。如果需要较为
+复杂的建模方式，就需要区分读和写（put/get/peek）了。
 
 === core interfaces 
 
@@ -124,6 +125,12 @@ public:
 
 tlm_blocking_peek_if的实现和 <<tlm::1::tlm_blocking_get_if, tlm_blocking_get_if>>
 基本一样，除了接口函数的名称从get变成peek之外，其他没有区别。
+
+
+TIP: get和peek的区别在于，get操作需要获取一个元素，当
+数据被get盗之后，数据就等于消费掉了。而peek是一种retrieve操作，或者query操作，是查询元素。peek一个元素，并不会
+消费掉这个元素。被peek的元素，必须在未来被get之后，才能消费掉。除此之外，get元素只能按照时间顺序get到put进去的元素，而
+peek一个元素可以乱序查询。
 
 上述的get/peek和put都是阻塞版本，其对应的非阻塞版本的interface则是：
 
@@ -402,7 +409,9 @@ class tlm_slave_if :
   public virtual tlm_nonblocking_slave_if< REQ , RSP > {};
 ----
 
-== TLM 1.0中的channels
+== TLM 1.0 Channels
+
+TLM 1.0定义了几种channel，包括tlm_fifo，request-response channel等。
 
 === tlm fifo
 [[tlm::1::tlm_fifo]]
@@ -816,3 +825,565 @@ tlm_fifo<T>::nb_can_peek( tlm_tag<T> * ) const
 
 tlm_fifo并没有直接或者间接继承自<<tlm::1::tlm_fifo_config_size_if, tlm_fifo_config_size_if>>，但却实现了同样的接口函数。
 这是否是TLM 1.0中遗漏的一个bug？tlm_fifo应该直接继承自tlm_fifo_config_size_if的。
+
+tlm_fifo_config_size_if的接口函数有nb_expand, nb_unbound, nb_reduce和nb_bound，注意这些接口函数的前缀nb表明这些调用
+都是non-blocking的。对于tlm_fifo，实现了同名的函数如下所示：
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_channels/tlm_fifo/tlm_fifo_resize.h
+[source,cpp]
+----
+template < typename T>
+inline
+void
+tlm_fifo<T>::nb_expand( unsigned int n ) {
+
+  if( m_size >= 0 ) {
+    m_expand = true;
+    m_size += n;
+    request_update();
+  }
+}
+
+template < typename T>
+inline
+void
+tlm_fifo<T>::nb_unbound( unsigned int n ) {
+
+  m_expand = true;
+  m_size = -n;
+
+  if( buffer.size() < static_cast<int>( n ) ) {
+    buffer.resize( n );
+  }
+
+  request_update();
+
+}
+
+template < typename T>
+inline
+bool
+tlm_fifo<T>::nb_reduce( unsigned int n ) {
+
+  if( m_size < 0 ) {
+    return false;
+  }
+
+  return nb_bound( size() - n );
+
+}
+
+template < typename T>
+inline
+bool
+tlm_fifo<T>::nb_bound( unsigned int new_size ) {
+
+  bool ret = true;
+
+  if( static_cast<int>( new_size ) < used() ) {
+
+    new_size = used();
+    ret = false;
+
+  }
+
+  m_size = new_size;
+  return ret;
+
+}
+----
+
+=== tlm_put_get_imp
+[[tlm:1:tlm_put_get_imp]]
+
+tlm_put_get_imp是实现tlm req-rsp channel的基础。tlm_put_get_imp直接继承自
+<<tlm::1::tlm_put_if, tlm_put_if>>
+和<<tlm::1::tlm_get_peek_if, tlm_get_peek_if>>，不过与继承了相同基类的
+<<tlm::1::tlm_fifo, tlm_fifo>>相比，tlm_put_get_imp实际上有 两个模板参数，所以
+put和get/peek的数据类型是不同的：
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_channels/tlm_req_rsp_channels/tlm_put_get_imp.h
+[source,cpp]
+----
+template < typename PUT_DATA , typename GET_DATA>
+class tlm_put_get_imp :
+  public virtual tlm_put_if< PUT_DATA > , <1>
+  public virtual tlm_get_peek_if< GET_DATA > <2>
+{
+public:
+  tlm_put_get_imp( tlm_put_if<PUT_DATA> &p ,
+       tlm_get_peek_if<GET_DATA> &g ) :
+    put_fifo( p ) , get_fifo( g ) {}
+    // blabla
+private:
+  tlm_put_if<PUT_DATA> &put_fifo; <3> 
+  tlm_get_peek_if<GET_DATA> &get_fifo; <3>
+};
+----
+<1> tlm_put_get_imp继承自tlm_put_if，put的数据类型是模板参数PUT_DATA
+<2> tlm_put_get_imp继承自tlm_get_peek_if，get/peek的数据类型是模板参数GET_DATA
+<3> tlm_put_get_imp实际上内部保存了两个interface的引用
+
+tlm_put_get_imp实现相应的接口函数的功能，实际上都是直接调用了成员变量 `put_fifo`
+和 `get_fifo` 的相应功能。
+
+=== tlm_master_imp and tlm_slave_imp
+[[tlm::1::tlm_master_imp]]
+[[tlm::1::tlm_slave_imp]]
+
+在<<tlm::1::tlm_put_get_imp, tlm_put_get_imp>>的基础上，TLM 1.0实现了tlm_master_imp和
+tlm_slave_imp。实际上，tlm_master_imp和tlm_slave_imp只不过是特化了的tlm_put_get_imp而已。
+tlm_master_imp是put REQ，get/peek RSP，而tlm_slave_imp则相反，是get/peek REQ，put RSP：
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_channels/tlm_req_rsp_channels/tlm_put_get_imp.h
+[source,cpp]
+----
+template < typename REQ , typename RSP >
+class tlm_master_imp :
+  private tlm_put_get_imp< REQ , RSP > , <1>
+  public virtual tlm_master_if< REQ , RSP > <2>
+{
+public:
+
+  tlm_master_imp( tlm_put_if<REQ> &req ,
+                  tlm_get_peek_if<RSP> &rsp ) :
+    tlm_put_get_imp<REQ,RSP>( req , rsp ) {}
+
+};
+
+template < typename REQ , typename RSP >
+class tlm_slave_imp :
+  private tlm_put_get_imp< RSP , REQ > , <1>
+  public virtual tlm_slave_if< REQ , RSP > <3>
+{
+public:
+
+  tlm_slave_imp( tlm_get_peek_if<REQ> &req ,
+                 tlm_put_if<RSP> &rsp ) :
+    tlm_put_get_imp<RSP,REQ>( rsp  , req ) {}
+
+};
+----
+<1> tlm_master_imp和tlm_slave_imp的模板参数方向不同
+<2> tlm_master_imp同时继承自tlm_master_if
+<3> tlm_slave_imp同时继承自tlm_slave_if
+
+tlm_master_imp继承自tlm_master_if，对应的接口函数实现在tlm_put_get_imp中实际已经实现了，tlm_slave_imp同理。
+
+=== tlm_req_rsp_channel
+[[tlm::1::tlm_req_rsp_channel]]
+
+tlm_req_rsp_channel虽然名字里带一个channel，但实际上并不是一个primitive channel，而是直接继承自sc_module。其实现
+主要是一个双向的channel，主要有四个私有类型的成员变量，分别是：
+
+* 传输REQ的通道request_fifo，默认是tlm_fifo<REQ>类型
+* 船速RSP的通道response_fifo，默认是tlm_fifo<RSP>类型
+* <<tlm::1::tlm_master_imp, tlm_master_imp>>类成员变量master
+* <<tlm::1::tlm_slave_imp, tlm_slave_imp>>类型成员变量slave
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_channels/tlm_req_rsp_channels/tlm_req_rsp_channels.h
+[source,cpp]
+----
+template < typename REQ , typename RSP ,
+     typename REQ_CHANNEL = tlm_fifo<REQ> ,
+     typename RSP_CHANNEL = tlm_fifo<RSP> >
+
+class tlm_req_rsp_channel : public sc_core::sc_module
+{
+public:
+  // uni-directional slave interface
+
+  sc_core::sc_export< tlm_fifo_get_if< REQ > > get_request_export;
+  sc_core::sc_export< tlm_fifo_put_if< RSP > > put_response_export;
+
+  // uni-directional master interface
+
+  sc_core::sc_export< tlm_fifo_put_if< REQ > > put_request_export;
+  sc_core::sc_export< tlm_fifo_get_if< RSP > > get_response_export;
+
+  // master / slave interfaces
+
+  sc_core::sc_export< tlm_master_if< REQ , RSP > > master_export;
+  sc_core::sc_export< tlm_slave_if< REQ , RSP > > slave_export;
+
+  // blabla
+
+protected:
+  REQ_CHANNEL request_fifo;
+  RSP_CHANNEL response_fifo;
+
+  tlm_master_imp< REQ , RSP > master;
+  tlm_slave_imp< REQ , RSP > slave;
+};
+----
+
+在构造函数中，master和slave绑定了相应的FIFO：
+
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_channels/tlm_req_rsp_channels/tlm_req_rsp_channels.h
+[source,cpp]
+----
+  tlm_req_rsp_channel( int req_size = 1 , int rsp_size = 1 ) :
+    sc_core::sc_module( sc_core::sc_module_name( sc_core::sc_gen_unique_name("tlm_req_rsp_channel") ) ) ,
+    request_fifo( req_size ) ,
+    response_fifo( rsp_size ) ,
+    master( request_fifo , response_fifo ) ,
+    slave( request_fifo , response_fifo )
+  {
+
+    bind_exports();
+
+  }
+
+  tlm_req_rsp_channel( sc_core::sc_module_name module_name ,
+           int req_size = 1 , int rsp_size = 1 ) :
+    sc_core::sc_module( module_name  ) ,
+    request_fifo( req_size ) ,
+    response_fifo( rsp_size ) ,
+    master( request_fifo , response_fifo ) ,
+    slave( request_fifo , response_fifo )
+  {
+
+    bind_exports();
+
+  }
+----
+
+除了这4个私有类型的成员变量外，tlm_req_rsp_channel还有其他几个公共的export类型的成员变量，分别是:
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_channels/tlm_req_rsp_channels/tlm_req_rsp_channels.h
+[source,cpp]
+----
+  sc_core::sc_export< tlm_fifo_get_if< REQ > > get_request_export;
+  sc_core::sc_export< tlm_fifo_put_if< RSP > > put_response_export;
+
+  // uni-directional master interface
+
+  sc_core::sc_export< tlm_fifo_put_if< REQ > > put_request_export;
+  sc_core::sc_export< tlm_fifo_get_if< RSP > > get_response_export;
+
+  // master / slave interfaces
+
+  sc_core::sc_export< tlm_master_if< REQ , RSP > > master_export;
+  sc_core::sc_export< tlm_slave_if< REQ , RSP > > slave_export;
+
+----
+
+* 暴露了 <<tlm::1::tlm_fifo_get_if, tlm_fifo_get_if>>的get_request_export
+* 暴露了 <<tlm::1::tlm_fifo_put_if, tlm_fifo_put_if>>的put_response_export
+* 暴露了 <<tlm::1::tlm_fifo_put_if, tlm_fifo_put_if>>的put_reqeuest_export
+* 暴露了 <<tlm::1::tlm_fifo_get_if, tlm_fifo_get_if>>的get_response_export
+* 暴露了 <<tlm::1::tlm_master_if, tlm_master_if>>的master_export
+* 暴露了 <<tlm::1::tlm_slave_if, tlm_slave_if>>的slave_export
+
+这六个export的绑定情况如下：
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_channels/tlm_req_rsp_channels/tlm_req_rsp_channels.h
+[source,cpp]
+----
+private:
+  void bind_exports() {
+
+    put_request_export( request_fifo );
+    get_request_export( request_fifo );
+
+    put_response_export( response_fifo );
+    get_response_export( response_fifo );
+
+    master_export( master );
+    slave_export( slave );
+
+  }
+----
+
+* put_request_export和get_request_export绑定到request_fifo上
+* put_response_export和get_response_export绑定到response_fifo上
+* master_export绑定到master上
+* slave_export绑定到slave上
+
+tlm_req_rsp_channel的实现核心在于，内部维护了两个FIFO，分别用来传送REQ和传送RESP。同时，tlm_req_rsp_channel
+还为双端口访问各暴露出了两对共4个export，可以让绑定到这个channel两侧的使用方法局限于一端只能发送request，获取response，另一端
+则只能响应(get)request，返回response. 如果需要使用组合起来的访问方式，则前者可以用master_export代替，而后者则可以用slave_export代替。
+因为master_export绑定到了master上，而master则同时实现了put REQ, get/peek RSP的功能。同理，slave_export
+绑定到slave上，slave同时实现了get/peek REQ, put RSP的功能。
+
+put_request_export和get_response_export两个组合，与master相比，主要区别在于，前两者分别是tlm_fifo_put_if和tlm_fifo_get_if，而
+master则内部包含了两个tlm_put_if和tlm_get_peek_if。虽然tlm_fifo_put_if直接继承自tlm_put_if，tlm_fifo_get_if直接继承自tlm_get_peek_if，但
+tlm_fifo_put_if和tlm_fifo_get_if相比而言，增加了<<tlm::1::tlm_fifo_debug_if, tlm_fifo_debug_if>>的能力。换言之，如果使用master
+接口的话，那就无法访问underly实现中，FIFO相关的debug能力了。
+
+get_request_export和put_response_export两个组合，与slave相比，有着同样的情况。
+
+tlm_req_rsp_channel是一个拥有双FIFO的数据结构，并且暴露出来了合适的接口，方便其他的port/export进行绑定，来调用内部
+两个FIFO对应的能力。双FIFO，一个用来传输request，另一个则用来传输response。
+
+=== tlm_transport_channel
+[[tlm::1::tlm_transport_channel]]
+
+tlm_transport_channel，是一个sc_module，用来讲一个<<tlm::1::tlm_req_resp_channel, tlm_req_resp_channel>>
+转成一个transport chnanel:
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_channels/tlm_req_rsp_channels/tlm_req_rsp_channels.h
+[source,cpp]
+----
+template < typename REQ , typename RSP ,
+     typename REQ_CHANNEL = tlm_fifo<REQ> ,
+     typename RSP_CHANNEL = tlm_fifo<RSP> >
+class tlm_transport_channel : public sc_core::sc_module
+{
+public:
+
+  // master transport interface
+
+  sc_core::sc_export< tlm_transport_if< REQ , RSP > > target_export;
+
+  // slave interfaces
+
+  sc_core::sc_export< tlm_fifo_get_if< REQ > > get_request_export;
+  sc_core::sc_export< tlm_fifo_put_if< RSP > > put_response_export;
+
+  sc_core::sc_export< tlm_slave_if< REQ , RSP > > slave_export;
+
+private:
+  tlm_req_rsp_channel< REQ , RSP , REQ_CHANNEL , RSP_CHANNEL > req_rsp;
+  tlm_transport_to_master< REQ , RSP > t2m;
+
+};
+----
+
+tlm_transport_channel的公共成员变量包括，一个export，模板类型为tlm_transport_if，一对
+export，模板参数分别为tlm_fifo_get_if和tlm_fifo_put_if，一个export，模板参数为
+<<tlm::1::tlm_slave_if, tlm_slave_if>>。 而私有成员变量则包括一个
+<<tlm::1::tlm_req_rsp_channel, tlm_req_rsp_channel>>实例，以及一个
+<<tlm::1::tlm_transport_to_master, tlm_transport_to_master>>.
+
+tlm_transport_channel的构造函数比较简单，除了例行初始化必要的成员变量之外，最为重要的就是调用一个
+do_binding的函数：
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_channels/tlm_req_rsp_channels/tlm_req_rsp_channels.h
+[source,cpp]
+----
+  tlm_transport_channel() :
+    sc_core::sc_module( sc_core::sc_module_name( sc_core::sc_gen_unique_name("transport_channel" ) ) ) ,
+    target_export("target_export") ,
+    req_rsp( "req_rsp" , 1 , 1 ) ,
+    t2m("ts2m")
+  {
+    do_binding();
+  }
+
+  tlm_transport_channel( sc_core::sc_module_name nm ) :
+    sc_core::sc_module( nm ) ,
+    target_export("target_export") ,
+    req_rsp( "req_rsp" , 1 , 1 ) ,
+    t2m("tsm" )
+  {
+    do_binding();
+  }
+----
+
+注意，其中的req_rsp channel默认初始化的fifo深度都是1.
+
+do_binding函数的实现如下：
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_channels/tlm_req_rsp_channels/tlm_req_rsp_channels.h
+[source,cpp]
+----
+private:
+  void do_binding() {
+
+    target_export( t2m.target_export );
+
+    t2m.master_port( req_rsp.master_export );
+
+    get_request_export( req_rsp.get_request_export );
+    put_response_export( req_rsp.put_response_export );
+    slave_export( req_rsp.slave_export );
+
+  }
+----
+
+模板类型为<<tlm::1::tlm_transport_if, tlm_transport_if>>的export类型的成员变量target_export被绑定到了
+<<tlm::1::tlm_master_to_transport, tlm_master_to_transport>>的成员变量target_export上，注意，这是一个export
+到export的绑定，所以实际上绑定的结果是tlm_master_to_transport的成员变量target_export先转成一个interface类型，再被
+tlm_transport_channel的target_export所绑定。
+
+接下来，tlm_master_to_transport的master_port绑定了这里req_rsp的master_export。get_request_export和put_response_export
+分贝绑定了req_rsp的对应接口，这两个都是export到export的绑定。
+
+最后，slave_export绑定到了req_rsp channnel的slave_export上，这同样是一个export到export的绑定。
+
+tlm_transport_channel实现的结果是，暴露出一个<<tlm::1::tlm_transport_if, tlm_transport_if>>类型的export，可以被别的对象绑定。当
+别的对象绑定了tlm_transport_if模板类型的export target_export之后，就可以调用tlm_transport_if的接口函数transport，将数据送到
+内部req_rsp channel的request fifo中，并且最终从req_rsp channel的response fifo返回一个response数据。与此同时，tlm_transport_channel
+还暴露出了一对为slave准备的接口，get_request_export和put_response_export，用来帮助下游的slave部分接受request，返回response。如果下游希望
+使用一个单一的接口，那么同样可以使用tlm_slave_if类型的slave_export。
+
+tlm_transport_channel实现的目的在于，将数据从一个实现了tlm_transport_if的接口，转到实现get/put协议的接口上去。实现了get/put协议
+的接口，实际上已经是一个channel了。channel与接口的区别在于，channel可以实例化之后直接使用，而纯的接口必须绑定到channel上才可以使用。
+这种关系类似port和export的绑定，无论怎么绑定，最终都需要绑定到一个fifo上（假设用fifo实现了相关的功能）上。这样一来，tlm_transport_if
+最终绑定到了两个tlm_fifo（模板默认参数，可以配置为其他实现了相同接口的数据结构）上。
+
+tlm_transport_channel并没有对称性的相反的实现。从实现了get/put协议的接口，转到tlm_transport_if的接口，只需要使用
+<<tlm::1::tlm_slave_to_transport, tlm_slave_to_transport>>即可。从这方面来说，tlm_transport_channel
+与随后要介绍的<<tlm::1::tlm_save_to_transport>>才是一对。
+
+== TLM 1.0 Adapter
+
+TLM 1.0中设计了两个adapter，分别是tlm_transport_to_master，以及tlm_slave_to_transport。所谓的adapter，指的是需要在
+不同的协议之间做桥接。对于TLM 1.0，interface协议的类型分为两种，一种是一个API就完成所有事情的类型，只有一个
+<<tlm::1::tlm_transport_if, tlm_transport_if>>。另一种，则是将put/get分开实现的interface类型，包括
+之前介绍的除了<<tlm::1::tlm_transport_if, tlm_transport_if>>之外的其他的interface类型。而adapter则需要在这两种
+不同设计思想的类型之间做转换。
+
+=== tlm_transport_to_master
+[[tlm::1::tlm_transport_to_master]]
+
+tlm_transport_to_master是一个sc_module，同时继承自
+<<tlm::1::tlm_transport_if, tlm_transport_if>>，实现了transport方法：
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_adapters/tlm_adapters.h
+[source,cpp]
+----
+template< typename REQ , typename RSP >
+class tlm_transport_to_master :
+  public sc_core::sc_module ,
+  public virtual tlm_transport_if< REQ , RSP >
+{
+public:
+  sc_core::sc_export< tlm_transport_if< REQ , RSP > > target_export;
+  sc_core::sc_port< tlm_master_if< REQ , RSP > > master_port;
+
+private:
+  sc_core::sc_mutex mutex;
+  RSP rsp;
+};
+----
+
+tlm_transport_to_master拥有两个公共的成员变量，一个export类型的target_export，类型参数为
+<<tlm::1::tlm_transport_if, tlm_transport_if>>，另一个则是port类型的成员变量master_port，类型参数
+为<<tlm::1::tlm_master_if, tlm_master_if>>。tlm_transport_to_master的作用是，使用master_port
+的能力，实现target_export的能力（即实现transport函数的能力）。
+
+target_export被绑定到tlm_transport_to_master自己身上：
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_adapters/tlm_adapters.h
+[source,cpp]
+----
+  tlm_transport_to_master( sc_core::sc_module_name nm ) :
+    sc_core::sc_module( nm ) {
+
+    target_export( *this );
+
+  }
+
+  tlm_transport_to_master() :
+    sc_core::sc_module( sc_core::sc_module_name( sc_core::sc_gen_unique_name( "transport_to_master" ) ) ){
+
+    target_export( *this );
+
+  }
+----
+
+同时，作为一个tlm_transport_if，tlm_transport_to_master也需要实现 `transport` 接口函数：
+
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_adapters/tlm_adapters.h
+[source,cpp]
+----
+  RSP transport( const REQ &req ) {
+
+    mutex.lock();
+
+    master_port->put( req );
+    rsp = master_port->get();
+
+    mutex.unlock();
+    return rsp;
+
+  }
+----
+
+tranport的实现还是相对比较简单的：将transport的参数put到master_port中，然后从master_port get返回的
+response，并作为transport接口函数的返回值返回。额外的一个 `mutex` 的作用是保证多线程场景下的访问安全。
+
+tlm_transport_to_master，从名字来看，这是讲数据从transport接口实现，转到master接口实现。因为tlm_transport_to_master
+本身就继承自<<tlm::1::tlm_transport_if, tlm_transport_if>>，所以一个tlm_transport_to_master可以直接作为一个
+tlm_transport_if来使用。同时，内部的公共成员变量master_port可以被绑定到实现了<<tlm::1::tlm_master_if, tlm_master_if>>
+的对象上。这样一来，当调用tlm_transport_if的接口函数transport之后，数据就可以被送到实现了tlm_master_if的对象上了。注意，
+tlm_transport_if的transport是一个阻塞的函数，而tlm_master_if的接口函数虽然也是阻塞函数，但分成了两个实现。这种阻塞函数
+到阻塞函数的实现相对还是比较简单的。
+
+=== tlm_slave_to_transport
+[[tlm::1::tlm_slave_to_transport]]
+
+与<<tlm::1::tlm_transport_to_master, tlm_transport_to_master>>不同，
+tlm_slave_to_transport只是一个sc_module而已：
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_adapters/tlm_adapters.h
+[source,cpp]
+----
+template< typename REQ , typename RSP >
+class tlm_slave_to_transport : public sc_core::sc_module
+{
+public:
+
+  SC_HAS_PROCESS( tlm_slave_to_transport );
+
+  sc_core::sc_port< tlm_slave_if< REQ , RSP > > slave_port;
+  sc_core::sc_port< tlm_transport_if< REQ , RSP > > initiator_port;
+//blabla
+};
+----
+
+tlm_slave_to_transport需要实现的功能和<<tlm::1::tlm_transport_to_master, tlm_transport_to_master>>
+相反。tlm_slave_to_transport是需要将数据从<<tlm::1::tlm_slave_if, tlm_slave_if>>类型的port slave_port
+中获取，然后将数据送到 <<tlm::1::tlm_transport_if, tlm_transport_if>>中。为此，tlm_slave_to_transport
+设计了一个线程函数run：
+
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_adapters/tlm_adapters.h
+[source,cpp]
+----
+private:
+  void run() {
+
+    REQ req;
+    RSP rsp;
+
+    while( true ) {
+
+     slave_port->get( req );
+     rsp = initiator_port->transport( req );
+     slave_port->put( rsp );
+
+    }
+
+  }
+----
+
+run的实现还是比较简单的，直接从slave_port中get到request，然后送到transport中后，将transport返回的response数据通过
+slave_port的put接口返回回去。这潜在地暗示一件事情，slave_port中，request和response是一一配对的，不存在发了request
+不需要response，或者发了request返回多笔response的场景。
+
+奇怪的是，虽然tlm_slave_to_transport设计了线程函数run来完成从slave接口到transport接口的转换，但是
+tlm_slave_to_transport的构造函数并没有将这个线程函数run列为自己的线程函数：
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_adapters/tlm_adapters.h
+[source,cpp]
+----
+  tlm_slave_to_transport( sc_core::sc_module_name nm ) : sc_core::sc_module( nm )
+  {}
+
+  tlm_slave_to_transport() :
+    sc_core::sc_module( sc_core::sc_module_name( sc_core::sc_gen_unique_name("slave_to_transport") ) )
+  {}
+----
+
+== TLM 1.0 Ports
+
+== TLM 1.0 Analysis
+
+== Reference
+
+https://eda-playground.readthedocs.io/en/latest/_static/uvm-1.2/files/overviews/tlm1-txt.html
