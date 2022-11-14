@@ -1382,7 +1382,202 @@ tlm_slave_to_transport的构造函数并没有将这个线程函数run列为自�
 
 == TLM 1.0 Ports
 
+TLM 1.0的Ports部分主要为三种interface, 
+<<tlm::1::tlm_nonblocking_get_if, tlm_nonblocking_get_if>>, 
+<<tlm::1::tlm_nonblocking_put_if, tlm_nonblocking_put_if>>以及
+<<tlm::1::tlm_nonblocking_peek_if, tlm_nonblocking_peek_if>>所对应的port
+做了特殊处理，以应对这些port作为sensitive设置时的应用场景。
+
+=== tlm_event_finder_t
+[[tlm::1::tlm_event_finder_t]]
+
+tlm_event_finder_t继承自<<data::sc_event_finder, sc_core::sc_event_finder>>，其主要目的是为了支持TLM 1.0
+中的port作为sensitive源的时候，延迟event本身的返回，直到仿真开始之前：
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_channels/tlm_ports/tlm_event_finder.h
+[source,cpp]
+----
+template <class IF , class T>
+class tlm_event_finder_t
+  : public sc_core::sc_event_finder
+{
+public:
+    // constructor
+
+    tlm_event_finder_t( const sc_core::sc_port_base& port_,
+                        const sc_core::sc_event& (IF::*event_method_) ( tlm_tag<T> * ) const )
+        : sc_core::sc_event_finder( port_ ), m_event_method( event_method_ )
+        {}
+private:
+
+    const sc_core::sc_event& (IF::*m_event_method) ( tlm_tag<T> * ) const; <1>
+};
+----
+<1> 成员函数指针是唯一一个成员变量
+
+作为一个sc_event_finder的子类，tlm_event_finder_t的初始化需要两个变量，一个是<<data::sc_port_base, sc_core::sc_port_base>>，
+另一个则是一个IF的成员函数函数指针，这个函数指针接受一个 `tlm_tag<T>*` 座位入参，返回一个sc_event的引用。注意，这个函数指针的原型，是
+tlm_event_finder_t区别于拎一个<<data::sc_event_finder_t, sc_core::sc_event_finder_t>>的重要地方，
+虽然sc_event_finder_t同样继承自sc_event_finder, 但sc_event_finder_t接受的函数指针的原型是没有入参的。
+tlm_event_finder_t构造时候的函数指针也是保存下来的唯一一个成员变量。
+
+作为sc_event_finder的子类，tlm_event_finder_t同样需要实现接口函数find_event:
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_channels/tlm_ports/tlm_event_finder.h
+[source,cpp]
+----
+template <class IF , class T>
+inline
+const sc_core::sc_event&
+tlm_event_finder_t<IF,T>::find_event( sc_core::sc_interface* if_p ) const
+{
+    const IF* iface = ( if_p ) ? dynamic_cast<const IF*>( if_p ) :
+                                 dynamic_cast<const IF*>( port().get_interface() );
+    if( iface == 0 ) {
+        report_error( sc_core::SC_ID_FIND_EVENT_, "port is not bound" );
+        return sc_core::sc_event::none;
+    }
+    return (const_cast<IF*>( iface )->*m_event_method) ( 0 );
+}
+----
+
+这里的find_event实现比较直观。首先需要获取一个指向interface的指针，指针的来源要么是入参，要么是port的
+get_interface返回值，注意find_event调用的时候，已经是所有的port都完成了绑定，即将开始仿真的时刻。如果这个时候
+入参为空指针，并且port返回的也是空指针，那么就意味着相应的port没有完成绑定，这时候就需要报错。获取到interface
+的指针之后，将其cast，然后调用注册的成员函数指针。注意，这里成员函数指针的调用的时候入参为0. 从这方面来讲，TLM 1.0
+中这个 `tlm_tag<T>*` 并没有起到什么实际的作用。
+
+=== tlm_nonblocking_get_port
+[[tlm::1::tlm_nonblocking_get_port]]
+
+tlm_nonblocking_get_port是用来绑定实现了<<tlm::1::tlm_nonblocking_get_if, tlm_nonblocking_get_if>>
+实例的port：
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_channels/tlm_ports/tlm_nonblocking_port.h
+[source,cpp]
+----
+template < typename T >
+class tlm_nonblocking_get_port :
+public sc_core::sc_port< tlm_nonblocking_get_if< T > , 1 >
+{
+public:
+  typedef tlm_nonblocking_get_if<T> get_if_type;
+
+  tlm_nonblocking_get_port( const char *port_name ) :
+    sc_core::sc_port< tlm_nonblocking_get_if< T > , 1 >( port_name ) {}
+
+  sc_core::sc_event_finder& ok_to_get() const {
+
+    return *new tlm_event_finder_t< get_if_type , T >(
+       *this,
+       &get_if_type::ok_to_get );
+
+  }
+
+};
+----
+
+tlm_nonblocking_get_port最为重要的是显示一个 ok_to_get的成员函数，这个成员函数返回一个
+<<tlm::1::tlm_event_finder_t, tlm_event_finder_t>>，用来延迟返回所绑定的interface上
+真正的那个ok_to_get所应该返回的event。
+
+只有nonblocking相关的interface对应的port需要特殊处理，blocking相关的interface没有事件
+来设置sensitive，所以相应的port无需做特殊实现。
+
+这样一来，假如我们有以下数据类型：
+
+[source,cpp]
+----
+tlm_nonblocking_get_port<DATA> m_port;
+----
+
+那么如果需要某个线程对此 `m_port` 敏感，这个 `m_port` 有数据可供获取的时候就得到执行，那么就可以使用如下代码：
+
+[source,cpp]
+----
+SC_THREAD(some_thread);
+sensitive << m_port.ok_to_get();
+----
+
+在 `some_thread` 内部可以使用一个空的 `wait()` 来等待事件发生，当wait到的时候，就说明对应的port底层绑定到interface
+实现中，相应的 `ok_to_get` 事件发生了。
+
+=== tlm_nonblocking_put_port
+[[tlm::1::tlm_nonblocking_put_port]]
+
+与<<tlm::1::tlm_nonblocking_get_port, tlm_nonblocking_get_port>>一样，
+tlm_nonblocking_put_port同样为<<tlm::1::tlm_nonblocking_put_if, tlm_nonblocking_put_if>>使用的port做了特殊处理：
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_channels/tlm_ports/tlm_nonblocking_port.h
+[source,cpp]
+----
+template < typename T >
+class tlm_nonblocking_put_port :
+public sc_core::sc_port< tlm_nonblocking_put_if< T > , 1 >
+{
+public:
+  typedef tlm_nonblocking_put_if<T> put_if_type;
+
+  tlm_nonblocking_put_port( const char *port_name ) :
+    sc_core::sc_port< tlm_nonblocking_put_if< T > , 1 >( port_name ) {}
+
+  sc_core::sc_event_finder& ok_to_put() const {
+
+    return *new tlm_event_finder_t< put_if_type , T >(
+             *this,
+       &put_if_type::ok_to_put );
+
+  }
+
+};
+----
+
+最为重要的是实现了一个叫ok_to_put的成员函数，用来作为返回对应event的API，供使用者用来设置sensitive。
+
+=== tlm_nonblocking_peek_port
+[[tlm::1::tlm_nonblocking_peek_port]]
+
+与<<tlm::1::tlm_nonblocking_get_port, tlm_nonblocking_get_port>>一样，
+tlm_nonblocking_peek_port同样为<<tlm::1::tlm_nonblocking_peek_if, tlm_nonblocking_peek_if>>使用的port做了特殊处理：
+
+.src/tlm_core/tlm_1/tlm_req_resp/tlm_channels/tlm_ports/tlm_nonblocking_port.h
+[source,cpp]
+----
+template < typename T >
+class tlm_nonblocking_peek_port :
+public sc_core::sc_port< tlm_nonblocking_peek_if< T > , 1 >
+{
+public:
+  typedef tlm_nonblocking_peek_if<T> peek_if_type;
+
+  tlm_nonblocking_peek_port( const char *port_name ) :
+    sc_core::sc_port< tlm_nonblocking_peek_if< T > , 1 >( port_name ) {}
+
+  sc_core::sc_event_finder& ok_to_peek() const {
+
+    return *new tlm_event_finder_t< peek_if_type , T >(
+       *this,
+       &peek_if_type::ok_to_peek );
+
+  }
+
+};
+----
+
+这里同样实现一个ok_to_peek的成员函数，来返回一个event_finder，当tlm_nonblocking_peek_port
+作为sensitive设置的时候，就可以用这个event_finder延迟event的决议。
+
 == TLM 1.0 Analysis
+
+== TLM 1.0的思考
+
+TLM 1.0相比于SystemC，只是一些简单的封装而已。从概念上而言，TLM 1.0所实现的TLM是非常简陋的。这也是为何TLM选择直接推出全新的TLM 2.0
+来实现TLM的概念，而不是在TLM 1.0基础上继续演进的原因了。
+
+尽管如此，TLM 1.0仍然反映出来了一些Transaction Level Modeling的思想，典型的就是<<tlm::1::tlm_transport_if, tlm_transport_if>>
+的设计，一个接口函数调用可以同时做到接受请求返回响应，这已经初步体现了TLM的思想了。
+
+TLM 1.0虽然设计的比较简单粗略，但仍然具有一些实用意义。比好简单的验证环境下，可以使用TLM 1.0和UVM做桥接来进行混合仿真。
 
 == Reference
 
