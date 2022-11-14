@@ -1500,7 +1500,9 @@ sensitive << m_port.ok_to_get();
 ----
 
 在 `some_thread` 内部可以使用一个空的 `wait()` 来等待事件发生，当wait到的时候，就说明对应的port底层绑定到interface
-实现中，相应的 `ok_to_get` 事件发生了。
+实现中，相应的 `ok_to_get` 事件发生了。注意，当用 `m_port.ok_to_get()` 设置为 `some_thread` 的静态敏感源的时候，
+`m_port` 很可能还没有绑定任何interface，所以此时也无法返回event，所以这里需要一个
+<<tlm::1::tlm_event_finder_t, tlm_event_finder_t>>作为占位符，推迟获取event的调用，直到仿真即将开始的时刻。
 
 === tlm_nonblocking_put_port
 [[tlm::1::tlm_nonblocking_put_port]]
@@ -1568,6 +1570,248 @@ public:
 作为sensitive设置的时候，就可以用这个event_finder延迟event的决议。
 
 == TLM 1.0 Analysis
+
+TLM 1.0的Analysis部分是一系列小的interface, fifo的组合，主要用来做辅助性的功能。
+
+=== tlm_write_if and tlm_delayed_write_if
+[[tlm::1::tlm_write_if]]
+
+tlm_write_if直接继承自<<data::sc_interface, sc_core::sc_interface>>，定义了一个接口函数
+write:
+
+.src/tlm_core/tlm_1/tlm_analysis/tlm_write_if.h
+[source,cpp]
+----
+template <typename T>
+class tlm_write_if : public virtual sc_core::sc_interface {
+public:
+  virtual void write(const T& t) = 0;
+};
+----
+
+[[tlm::1::tlm_delayed_write_if]]
+
+tlm::delayed_write_if直接继承自<<data::sc_interface, sc_core::sc_interface>>，定义了一个接口
+函数write:
+
+.src/tlm_core/tlm_1/tlm_analysis/tlm_write_if.h
+[source,cpp]
+----
+template <typename T>
+class tlm_delayed_write_if : public virtual sc_core::sc_interface {
+public:
+  virtual void write(const T& t, const sc_core::sc_time& time) = 0;
+};
+----
+
+注意，这个接口函数和 <<tlm::1::tlm_write_if, tlm_write_if>>的接口函数同名，只不过参数不同，多了一个
+设定的延迟时间而已。
+
+=== tlm_analysis_if and tlm_delayed_analysis_if
+[[tlm::1::tlm_analysis_if]]
+[[tlm::1::tlm_delayed_analysis_if]]
+tlm_analysis_if是<<tlm::1::tlm_write_if, tlm_write_if>>的别名（基本上，因为直接继承，没有改写任何方法，也没增加
+其他的功能。同样的，tlm_delayed_analysis_if是<<tlm::1::tlm_delayed_analysis_if, tlm_delayed_analysis_if>>
+的别名：
+
+.src/tlm_core/tlm_1/tlm_analysis/tlm_analysis_if.h
+[source,cpp]
+----
+template < typename T >
+class tlm_analysis_if : public virtual tlm_write_if<T>
+{
+};
+
+template < typename T >
+class tlm_delayed_analysis_if : public virtual tlm_delayed_write_if<T>
+{
+};
+----
+
+=== tlm_analysis_triple
+[[tlm::1::tlm_analysis_triple]]
+
+tlm_analysis_triple是一种特殊的数据结构，其中名称里的triple表示三，意思是除了本身需要传递的数据结构
+外，还额外增加了两个时间戳信息：
+
+.src/tlm_core/tlm_1/tlm_analysis/tlm_analysis_triple.h
+[source,cpp]
+----
+template< typename T>
+struct tlm_analysis_triple {
+
+  sc_core::sc_time start_time;
+  T transaction;
+  sc_core::sc_time end_time;
+  // blabla
+};
+----
+
+两个额外的时间戳信息 `start_time` 和 `end_time` 都是sc_time类型，加上本身的transaction一共有3个成员变量，这就是名字里
+triple的由来了。
+
+tlm_analysis_triple可以默认构造（前提是模板参数T本身支持默认构造），也支持拷贝构造，同时也支持只使用一个transaction数据来构造：
+
+.src/tlm_core/tlm_1/tlm_analysis/tlm_analysis_triple.h
+[source,cpp]
+----
+  tlm_analysis_triple() {}
+
+  tlm_analysis_triple( const tlm_analysis_triple &triple ) {
+    start_time = triple.start_time;
+    transaction = triple.transaction;
+    end_time = triple.end_time;
+  }
+
+  tlm_analysis_triple( const T &t ) {
+    transaction = t;
+  }
+----
+
+除了构造函数意外，tlm_analysis_triple最为重要的是提供了到模板类型 `T` 转换的operator:
+
+.src/tlm_core/tlm_1/tlm_analysis/tlm_analysis_triple.h
+[source,cpp]
+----
+  operator T() { return transaction; }
+  operator const T &() const { return transaction; }
+----
+
+这样当需要类型 `T` 的地方，可以使用一个 `tlm_analysis_triple<T>` 来代替，因为编译期会自动调用这里
+定义的operator，完成相应的转换。
+
+=== tlm_analysis_fifo
+[[tlm::1::tlm_analysis_fifo]]
+
+tlm_analysis_fifo是TLM 1.0 Analysis中最为重要的两个数据结构之一，另一个是相应的port。
+
+tlm_analysis_fifo直接继承自 <<tlm::1::tlm_fifo, tlm_fifo>>，另外还继承了
+<<tlm::1::tlm_analysis_if, tlm_analysis_if>>，提供了对应的接口函数实现：
+
+.src/tlm_core/tlm_1/tlm_analysis/tlm_analysis_fifo.h
+[source,cpp]
+----
+template< typename T >
+class tlm_analysis_fifo :
+  public tlm_fifo< T > ,
+  public virtual tlm_analysis_if< T > ,
+  public virtual tlm_analysis_if< tlm_analysis_triple< T > > {
+    // blabla
+};
+----
+
+tlm_analysis_fifo的构造函数比较奇特：
+
+.src/tlm_core/tlm_1/tlm_analysis/tlm_analysis_fifo.h
+[source,cpp]
+----
+  tlm_analysis_fifo( const char *nm ) : tlm_fifo<T>( nm , -16 ) {}
+  tlm_analysis_fifo() : tlm_fifo<T>( -16 ) {}
+----
+
+注意tlm_analysis_fifo构造的时候，调用父类<<tlm::1::tlm_fifo, tlm_fifo>>的构造函数，传入的参数是一个
+负的16，而不是正数。这个原因我们稍后解释。
+
+对应的接口函数实现还是比较简单的，直接调用基类tlm_fifo的nb_put方法即可：
+
+.src/tlm_core/tlm_1/tlm_analysis/tlm_analysis_fifo.h
+[source,cpp]
+----
+  void write( const tlm_analysis_triple<T> &t ) {
+    nb_put( t ); <1>
+  }
+
+  void write( const T &t ) {
+    nb_put( t );
+  }
+----
+<1> 因为tlm_fifo的模板类型是 `T`，所以这里先调用 `tlm_analysis_triple<T>`的operator，转出来一个类型 `T`，再放到fifo中
+
+=== tlm_analysis_port
+[[tlm::1::analysis_port]]
+
+tlm_analysis_port和<<tlm::1::tlm_analysis_fifo, tlm_analysis_fifo>>构成了TLM 1.0 Analysis最为重要的两个部分：
+
+.src/tlm_core/tlm_1/tlm_analysis/tlm_analysis_port.h
+[source,cpp]
+----
+template < typename T>
+class tlm_analysis_port :
+  public sc_core::sc_object ,
+  public virtual tlm_analysis_if< T >
+{
+    //blabla
+ private:
+  std::deque< tlm_analysis_if<T> * > m_interfaces; <1>
+};
+----
+<1> 唯一一个成员变量是保存 `tlm_analysis_if<T>*` 的deque
+
+值得注意的是，并不像名字一样，tlm_analysis_port并不是一个port，因为没有继承自<<data::sc_port, sc_core::sc_port>>，反而
+继承自 <<tlm::1::tlm_analysis_if, tlm_analysis_if>>，这意味着tlm_analysis_port同样需要实现write接口函数：
+
+.src/tlm_core/tlm_1/tlm_analysis/tlm_analysis_port.h
+[source,cpp]
+----
+  void write( const T &t ) {
+    typename std::deque< tlm_analysis_if<T> * >::iterator i;
+
+    for( i = m_interfaces.begin();
+   i != m_interfaces.end();
+   i++ ) {
+
+      (*i)->write( t ); <1>
+
+    }
+
+  }
+----
+<1> i是一个迭代器，所以(*i) 就是指向 `tlm_analysis_if<T>` 的指针
+
+[[tlm::1::tlm_analysis_port::write]]
+write的实现实际上是遍历所有保存的 `tlm_analysis_if<t>*`，调用这些interface的write函数，这里实际上完成了一个广播的工作。
+
+[[tlm::1::tlm_analysis_port::bind]]
+tlm_analysis_port虽然不是一个真正的sc_port，但同样提供了和sc_port一样的绑定函数：
+
+.src/tlm_core/tlm_1/tlm_analysis/tlm_analysis_port.h
+[source,cpp]
+----
+  virtual void bind( tlm_analysis_if<T> &_if ) {
+    m_interfaces.push_back( &_if );
+  }
+
+  void operator() ( tlm_analysis_if<T> &_if ) { bind( _if ); }
+----
+
+这两种形式的绑定函数实际上只是将需要绑定的interface保存到成员变量 `m_interfaces` 内而已。
+
+[[tlm::1::tlm_analysis_port::unbind]]
+与传统的sc_port不同，tlm_analysis_port还提供了一个unbind的函数，用来完成解绑定的工作：
+
+tlm_1/tlm_analysis/tlm_analysis_port.h
+[source,cpp]
+----
+  virtual bool unbind( tlm_analysis_if<T> &_if ) {
+
+    typename std::deque< tlm_analysis_if<T> * >::iterator i
+      = std::remove( m_interfaces.begin(), m_interfaces.end(), &_if );
+
+    if( i != m_interfaces.end() ) {
+      m_interfaces.erase(i, m_interfaces.end() );
+      return 1;
+    }
+
+    return 0;
+
+  }
+----
+
+解绑定实际上就是从dequeue中寻找所需要解绑定的interface，然后去除掉而已。注意unbind函数是一个虚函数，这意味着继承了
+tlm_analysis_port的子类可以按需重新实现unbind。
+
+NOTE: 为何tlm_analysis_port名字里带有port，实际上却实现为 tlm_analysis_if的子类呢？原因目前还不知晓，后续等明晰了相关设计细节
+后再进行补充。
 
 == TLM 1.0的思考
 
