@@ -2,8 +2,8 @@
 
 :toc: left
 
-SystemC中的TLM 2.0 Sockets
-[[chap::tlm_sockets]]
+SystemC中的TLM 2.0 Simple Socket
+[[chap::tlm_simple_socket]]
 
 == 引言
 
@@ -11,7 +11,7 @@ SystemC中的TLM 2.0 Sockets
 一些数据结构，包括initiator socket和target socket的定义，但这些仍然不足以支持
 我们建立一个可运行的仿真环境。这些数据仍然只是框架性质的定义，还缺少具体的实现细节。
 为此，TLM 2.0种设计了三种类型
-的socket，来方便使用者直接使用。这三种类型的soekct分别是
+的socket，来方便使用者直接使用。这三种类型的socket分别是
 
 * simple socket
 * passthrough socket
@@ -2042,6 +2042,25 @@ process_handle_list的get_handle操作，会优先寻找那些已经suspend的th
 调用接口函数b_transport，将数据的引用，和一个延时时间的引用传入，等待b_transport返回之后，所需要
 得到的结果就已经放在了数据引用中（传参采用非常量引用的方式，所以接收端可以直接修改参数，用来达到返回数据
 的目的）。b_transport只能由发起端发出，发送到接收端。
+
+注意，b_transport的使用方式和
+<<tlm::1::tlm_transport_if, TLM 1.0中的tlm_transport_if>> 很相似，后者的API函数为：
+
+[source,cpp]
+----
+  virtual RSP transport( const REQ & ) = 0;
+
+  virtual void transport( const REQ &req , RSP &rsp ) {
+    rsp = transport( req );
+  }
+----
+
+但b_transport有一个额外的延时参数t，t的最小值是SC_ZERO_TIME。对于TLM 1.0，仍然需要依靠
+<<tlm::1::tlm_fifo, 派生自primitive channel的tlm_fifo>>作为底层的绑定对象来实现，否则就会出现
+条件竞争（即调度顺序的不同导致在同一个delta cycle内，立即就能读到数据，不符合我们的要求）。而TLM 2.0
+中，b_transport的额外延时参数t保证了发起读和返回一定不再同一个delta cycle内（因为至少需要延时
+SC_ZERO_TIME）。这个额外延时参数的引入，也是TLM 2.0摆脱了需要寄生于primitive channel机制的重要
+因素了。
 
 但是，<<api::tlm_fw_nonblocking_transport_if, tlm_fw_nonblocking_transport_if>>，以及
 <<api::tlm_bw_nonblocking_transport_if, tlm_bw_nonblocking_transport_if>>，这一对nonblocking的

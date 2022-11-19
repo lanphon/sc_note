@@ -1,0 +1,464 @@
+:source-highlighter: coderay
+
+
+:toc: left
+
+SystemC中的TLM 2.0其他类型的Sockets
+[[chap::tlm_other_sockets]]
+
+== 引言
+
+在<<chap::tlm_simple_socket, SystemC中的TLM 2.0 Simple Socket>>部分，我们介绍了
+TLM 2.0设计的simple socket。本部分，我们将继续介绍其他几种类型的socket，包括
+passthrough target socket, multiple socket以及组合类型。
+
+== passthrough_socket_base and multi_socket_base
+[[data::passthrough_socket_base]]
+[[data::multi_socket_base]]
+
+passthrough_socket_base，实际上和<<data::convenience_socket_base, convenience_socket_base>>
+没有任何区别，直接继承自convenience_socket_base，并且没有增加或者修改任何其他的成员函数或变量：
+
+.src/tlm_utils/convenience_socket_bases.h
+[source,cpp]
+----
+// implementation-defined base class helper for passthrough sockets
+class SC_API passthrough_socket_base : public convenience_socket_base
+{
+  virtual const char* get_report_type() const;
+};
+
+// implementation-defined base class helper for multi sockets
+class SC_API multi_socket_base : public convenience_socket_base
+{
+  virtual const char* get_report_type() const;
+};
+----
+
+multi_socket_base同样如此。
+
+== passthrough target socket
+[[data::passthrough_target_sockets]]
+
+在<<data::simple_target_socket, simple_target_socket>>部分，我们看到，为了实现
+nonblocking API和blocking API之间的相互转换，simple_target_socket不得不实现了
+非常复杂的数据结构。与<<data::simple_initiator_socket, simple_initiator_socket>>
+的简洁实现相比，simple_target_socket似乎一点也不simple。
+
+simple_target_socket之所以实现的非常复杂，是为了在两种不同类型的API风格做转换。但在很多
+场景下，我们并不需要这种能力，例如编程风格限定只使用nonblocking API，或者blocking API的时候。
+在这种应用情况下，simple_target_socket所提供的转换能力就变得多余起来。将simple_target_socket
+关于这部分的能力去掉，实现如同simple_initiator_socket那样简洁，这就是这里的
+passthrough_target_socket了。passthrough socket只有target socket，因为passthrough
+的initiator socket就是simple_initiator_socket本身了。
+
+=== passthrough_target_socket_b::process
+[[data::passthrough_target_socket_b::process]]
+
+passthrough_target_socket的实现如同<<data::simple_target_socket, simple_target_socket>>
+一样，有一个基类passthrough_target_socket_b，其内部的process类实现了回调函数的
+调用功能：
+
+.src/tlm_utils/passthrough_target_socket.h
+[source,cpp]
+----
+  class process
+    : public tlm::tlm_fw_transport_if<TYPES>
+    , protected convenience_socket_cb_holder
+  {
+  public:
+    typedef sync_enum_type (MODULE::*NBTransportPtr)(transaction_type&,
+                                                     phase_type&,
+                                                     sc_core::sc_time&);
+    typedef void (MODULE::*BTransportPtr)(transaction_type&,
+                                            sc_core::sc_time&);
+    typedef unsigned int (MODULE::*TransportDbgPtr)(transaction_type&);
+    typedef bool (MODULE::*GetDirectMem_ptr)(transaction_type&,
+                                               tlm::tlm_dmi&);
+  // blabla
+  private:
+    MODULE* m_mod;
+    NBTransportPtr m_nb_transport_ptr;
+    BTransportPtr m_b_transport_ptr;
+    TransportDbgPtr m_transport_dbg_ptr;
+    GetDirectMem_ptr m_get_direct_mem_ptr;
+  };
+----
+
+passthrough_target_socket_b::process本身继承自<<api::tlm_fw_transport_if, tlm_fw_transport_if>>，
+同时继承自convenience_socket_cb_holder。
+process持有类对象的指针，同时持有注册了的四个成员函数指针。这样，在实现tlm_fw_transport_if的接口函数的时候，
+只需要简单转发即可：
+
+.src/tlm_utils/passthrough_target_socket.h
+[source,cpp]
+----
+    sync_enum_type nb_transport_fw(transaction_type& trans,
+                                   phase_type& phase,
+                                   sc_core::sc_time& t)
+    {
+      if (m_nb_transport_ptr) {
+        // forward call
+        sc_assert(m_mod);
+        return (m_mod->*m_nb_transport_ptr)(trans, phase, t);
+      }
+      display_error("no non-blocking callback registered");
+      return tlm::TLM_COMPLETED;
+    }
+
+    void b_transport(transaction_type& trans, sc_core::sc_time& t)
+    {
+      if (m_b_transport_ptr) {
+        // forward call
+        sc_assert(m_mod);
+        return (m_mod->*m_b_transport_ptr)(trans, t);
+      }
+      display_error("no blocking callback registered");
+    }
+
+    unsigned int transport_dbg(transaction_type& trans)
+    {
+      if (m_transport_dbg_ptr) {
+        // forward call
+        sc_assert(m_mod);
+        return (m_mod->*m_transport_dbg_ptr)(trans);
+      }
+      // No debug support
+      return 0;
+    }
+
+    bool get_direct_mem_ptr(transaction_type& trans,
+                            tlm::tlm_dmi&  dmi_data)
+    {
+      if (m_get_direct_mem_ptr) {
+        // forward call
+        sc_assert(m_mod);
+        return (m_mod->*m_get_direct_mem_ptr)(trans, dmi_data);
+      }
+      // No DMI support
+      dmi_data.allow_read_write();
+      dmi_data.set_start_address(0x0);
+      dmi_data.set_end_address((sc_dt::uint64)-1);
+      return false;
+    }
+----
+
+注意，如果对应的回调函数没有注册，那么对于nb_transport_fw和b_transport这两个接口函数
+的实现，都会报错（而不像simple_target_socket一样，尝试用另一种风格的API实现相同的功能）。
+而接口函数transport_dbg和get_direct_mem_ptr则可以返回有意义的数据，表明不支持此功能。
+
+当然，process也设置了相应的函数，用来设置这四个API的回调函数：
+
+.src/tlm_utils/passthrough_target_socket.h
+[source,cpp]
+----
+    void set_nb_transport_ptr(MODULE* mod, NBTransportPtr p)
+    {
+      if (m_nb_transport_ptr) {
+        display_warning("non-blocking callback already registered");
+        return;
+      }
+      sc_assert(!m_mod || m_mod == mod);
+      m_mod = mod;
+      m_nb_transport_ptr = p;
+    }
+
+    void set_b_transport_ptr(MODULE* mod, BTransportPtr p)
+    {
+      if (m_b_transport_ptr) {
+        display_warning("blocking callback already registered");
+        return;
+      }
+      sc_assert(!m_mod || m_mod == mod);
+      m_mod = mod;
+      m_b_transport_ptr = p;
+    }
+
+    void set_transport_dbg_ptr(MODULE* mod, TransportDbgPtr p)
+    {
+      if (m_transport_dbg_ptr) {
+        display_warning("debug callback already registered");
+        return;
+      }
+      sc_assert(!m_mod || m_mod == mod);
+      m_mod = mod;
+      m_transport_dbg_ptr = p;
+    }
+
+    void set_get_direct_mem_ptr(MODULE* mod, GetDirectMem_ptr p)
+    {
+      if (m_get_direct_mem_ptr) {
+        display_warning("get DMI pointer callback already registered");
+        return;
+      }
+      sc_assert(!m_mod || m_mod == mod);
+      m_mod = mod;
+      m_get_direct_mem_ptr = p;
+    }
+----
+
+最后，回到process的构造函数上，实现也是乏善可陈：
+
+.src/tlm_utils/passthrough_target_socket.h
+[source,cpp]
+----
+    explicit process(passthrough_socket_base* owner)
+      : convenience_socket_cb_holder(owner), m_mod(0)
+      , m_nb_transport_ptr(0)
+      , m_b_transport_ptr(0)
+      , m_transport_dbg_ptr(0)
+      , m_get_direct_mem_ptr(0)
+    {
+    }
+----
+
+值得注意的是，因为process是单参数构造的，为避免出现意料之外的隐式构造，这里将构造函数
+设定为 `explicit` 的。
+
+=== passthrough_target_socket_b
+
+passthrough_target_socket_b继承自<<api::tlm_target_socket, tlm_target_socket>>，
+同时继承自<<data::passthrough_socket_base, passthrough_socket_base>>：
+
+.src/tlm_utils/passthrough_target_socket.h
+[source,cpp]
+----
+template< typename MODULE, unsigned int BUSWIDTH, typename TYPES
+        , sc_core::sc_port_policy POL = sc_core::SC_ONE_OR_MORE_BOUND >
+class passthrough_target_socket_b
+  : public tlm::tlm_target_socket<BUSWIDTH, TYPES, 1, POL>
+  , protected passthrough_socket_base
+{
+    // blabla
+private:
+  process m_process; <1>
+};
+----
+<1> 唯一一个成员变量，就是<<data:;passthrough_target_socket_b::process, process>>类型的成员变量
+
+构造函数也比较简单，构造 `m_process` 的时候，将this指针传入：
+
+.src/tlm_utils/passthrough_target_socket.h
+[source,cpp]
+----
+  static const char* default_name()
+    { return sc_core::sc_gen_unique_name("passthrough_target_socket"); }
+
+  explicit passthrough_target_socket_b(const char* n = default_name())
+    : base_type(n)
+    , m_process(this)
+  {
+    bind(m_process);
+  }
+----
+
+这里比较重要的是构造函数体，在这里，将passthrough_target_socket_b作为一个 `sc_export<FW_IF>`，
+绑定了 tlm_fw_transport_if的子类 `m_process`，这样passthrough_target_socket_b就持有了一个
+tlm_fw_transport_if的指针，指向 `m_process`。
+
+同样的，这里需要给出注册回调函数的方法，这些方法实际上只是调用了 `m_process` 的注册回调函数方法而已：
+
+.src/tlm_utils/passthrough_target_socket.h
+[source,cpp]
+----
+  // REGISTER_XXX
+  void register_nb_transport_fw(MODULE* mod,
+                                sync_enum_type (MODULE::*cb)(transaction_type&,
+                                                             phase_type&,
+                                                             sc_core::sc_time&))
+  {
+    m_process.set_nb_transport_ptr(mod, cb);
+  }
+
+  void register_b_transport(MODULE* mod,
+                            void (MODULE::*cb)(transaction_type&,
+                                               sc_core::sc_time&))
+  {
+    m_process.set_b_transport_ptr(mod, cb);
+  }
+
+  void register_transport_dbg(MODULE* mod,
+                              unsigned int (MODULE::*cb)(transaction_type&))
+  {
+    m_process.set_transport_dbg_ptr(mod, cb);
+  }
+
+  void register_get_direct_mem_ptr(MODULE* mod,
+                                   bool (MODULE::*cb)(transaction_type&,
+                                                      tlm::tlm_dmi&))
+  {
+    m_process.set_get_direct_mem_ptr(mod, cb);
+  }
+----
+
+=== passthrough_target_socket
+[[data::passthrough_target_socket]]
+
+passthrough_target_socket只是对
+<<data::passthrough_target_socket_b, passthrough_target_socket_b>>
+的模板参数提供了特化而已，这样的操作我们在simple_initiator_socket和
+simple_target_socket处已经见到很多次了：
+
+.src/tlm_utils/passthrough_target_socket.h
+[source,cpp]
+----
+template< typename MODULE, unsigned int BUSWIDTH = 32
+        , typename TYPES = tlm::tlm_base_protocol_types >
+class passthrough_target_socket
+  : public passthrough_target_socket_b<MODULE,BUSWIDTH,TYPES>
+{
+  typedef passthrough_target_socket_b<MODULE,BUSWIDTH,TYPES> socket_b;
+public:
+  passthrough_target_socket() : socket_b() {}
+  explicit passthrough_target_socket(const char* name) : socket_b(name) {}
+};
+----
+
+=== passthrough_target_socket_optional
+[[data::passthrough_target_socket_optional]]
+
+passthrough_target_socket_optional，带optional后缀的passthrough_target_socket，同样是对
+<<data::passthrough_target_socket_b, passthrough_target_socket_b>>
+的模板参数提供特化，指定了POL是SC_ZERO_OR_MORE_BOUND而已:
+
+.src/tlm_utils/passthrough_target_socket.h
+[source,cpp]
+----
+template< typename MODULE, unsigned int BUSWIDTH = 32
+        , typename TYPES = tlm::tlm_base_protocol_types >
+class passthrough_target_socket_optional
+  : public passthrough_target_socket_b<MODULE,BUSWIDTH,TYPES,sc_core::SC_ZERO_OR_MORE_BOUND>
+{
+  typedef passthrough_target_socket_b<MODULE,BUSWIDTH,TYPES,sc_core::SC_ZERO_OR_MORE_BOUND> socket_b;
+public:
+  passthrough_target_socket_optional() : socket_b() {}
+  explicit passthrough_target_socket_optional(const char* name) : socket_b(name) {}
+};
+----
+
+== passthrough_target_socket_tagged
+
+带tagged版本的passthrough_target_socket，主要由实现了
+传递额外参数的passthrough_target_socket_tagged_b，以及特化了模板
+参数的passthrough_target_socket_tagged和
+passthrough_target_socket_tagged_optional组成。
+
+=== passthrough_target_socket_tagged_b
+[[data::passthrough_target_socket_tagged_b]]
+
+passthrough_target_socket_tagged_b和
+<<data::passthrough_target_socket_b, passthrough_target_socket_b>>基本类似，是
+继承了<<api::tlm_target_socket, tlm_target_socket>>以及
+<<data::passthrough_socket_base, passthrough_socket_base>>的模板基类，内部同样
+实现了一个process，用来持有回调函数指针：
+
+.src/tlm_utils/passthrough_target_socket.h
+[source,cpp]
+----
+template< typename MODULE, unsigned int BUSWIDTH, typename TYPES
+        , sc_core::sc_port_policy POL = sc_core::SC_ONE_OR_MORE_BOUND >
+class passthrough_target_socket_tagged_b
+  : public tlm::tlm_target_socket<BUSWIDTH, TYPES, 1, POL>
+  , protected passthrough_socket_base
+{
+  // blabla
+  private:
+  process m_process;
+};
+----
+
+主要的区别在于，带tagged版本的passthrough_target_socket_tagged_b，提供的回调函数
+可以带一个额外的整型数作为tag:
+
+.src/tlm_utils/passthrough_target_socket.h
+[source,cpp]
+----
+  // REGISTER_XXX
+  void register_nb_transport_fw(MODULE* mod,
+                                sync_enum_type (MODULE::*cb)(int id, <1>
+                                                             transaction_type&,
+                                                             phase_type&,
+                                                             sc_core::sc_time&),
+                                int id) <2>
+  {
+    m_process.set_nb_transport_ptr(mod, cb);
+    m_process.set_nb_transport_user_id(id);
+  }
+
+  void register_b_transport(MODULE* mod,
+                            void (MODULE::*cb)(int id, <1>
+                                               transaction_type&,
+                                               sc_core::sc_time&),
+                            int id) <2>
+  {
+    m_process.set_b_transport_ptr(mod, cb);
+    m_process.set_b_transport_user_id(id);
+  }
+
+  void register_transport_dbg(MODULE* mod,
+                              unsigned int (MODULE::*cb)(int id, <1>
+                                                         transaction_type&),
+                              int id) <2>
+  {
+    m_process.set_transport_dbg_ptr(mod, cb);
+    m_process.set_transport_dbg_user_id(id);
+  }
+
+  void register_get_direct_mem_ptr(MODULE* mod,
+                                   bool (MODULE::*cb)(int id, <1>
+                                                      transaction_type&,
+                                                      tlm::tlm_dmi&),
+                                   int id) <2>
+  {
+    m_process.set_get_direct_mem_ptr(mod, cb);
+    m_process.set_get_dmi_user_id(id);
+  }
+----
+<1> 注意，所有注册的回调函数指针，原型中第一个参数是整型数id
+<2> 注册回调函数的时候就需要提供这个id值了
+
+tagged值需要在注册的时候提供，接口函数调用时就无法在改变了。
+
+=== passthrough_target_socket_tagged
+[[data::passthrough_target_socket_tagged]]
+
+passthrough_target_socket_tagged，就是从
+<<data::passthrough_target_socket_tagged_b, passthrough_target_socket_tagged_b>>
+继承，然后特化了模板参数：
+
+.src/tlm_utils/passthrough_target_socket.h
+[source,cpp]
+----
+template< typename MODULE, unsigned int BUSWIDTH = 32
+        , typename TYPES = tlm::tlm_base_protocol_types >
+class passthrough_target_socket_tagged
+  : public passthrough_target_socket_tagged_b<MODULE,BUSWIDTH,TYPES>
+{
+  typedef passthrough_target_socket_tagged_b<MODULE,BUSWIDTH,TYPES> socket_b;
+public:
+  passthrough_target_socket_tagged() : socket_b() {}
+  explicit passthrough_target_socket_tagged(const char* name) : socket_b(name) {}
+};
+----
+
+=== passthrough_target_socket_tagged_optional
+[[data::passthrough_target_socket_tagged_optional]]
+
+passthrough_target_socket_tagged_optional，就是从
+<<data::passthrough_target_socket_tagged_b, passthrough_target_socket_tagged_b>>
+继承，然后特化了模板参数，将POL设置为SC_ZERO_OR_MORE_BOUND而已：
+
+.src/tlm_utils/passthrough_target_socket.h
+[source,cpp]
+----
+template< typename MODULE, unsigned int BUSWIDTH = 32
+        , typename TYPES = tlm::tlm_base_protocol_types >
+class passthrough_target_socket_tagged_optional
+  : public passthrough_target_socket_tagged_b<MODULE,BUSWIDTH,TYPES,sc_core::SC_ZERO_OR_MORE_BOUND>
+{
+  typedef passthrough_target_socket_tagged_b<MODULE,BUSWIDTH,TYPES,sc_core::SC_ZERO_OR_MORE_BOUND> socket_b;
+public:
+  passthrough_target_socket_tagged_optional() : socket_b() {}
+  explicit passthrough_target_socket_tagged_optional(const char* name) : socket_b(name) {}
+};
+----
