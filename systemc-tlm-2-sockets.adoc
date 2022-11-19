@@ -7,16 +7,22 @@ SystemC中的TLM 2.0 Sockets
 
 == 引言
 
-在<<chap::tlm_intro, SystemC中的TLM介绍>>部分，我们简单介绍了TLM中常用的
+在<<chap::tlm_intro, SystemC中的TLM 2.0介绍>>部分，我们简单介绍了TLM 2.0中常用的
 一些数据结构，包括initiator socket和target socket的定义，但这些仍然不足以支持
-我们建立一个可运行的仿真环境，我们还缺少具体的实现细节。为此，TLM 2.0种设计了三种类型
+我们建立一个可运行的仿真环境。这些数据仍然只是框架性质的定义，还缺少具体的实现细节。
+为此，TLM 2.0种设计了三种类型
 的socket，来方便使用者直接使用。这三种类型的soekct分别是
 
 * simple socket
 * passthrough socket
 * multi socket
 
-而在本部分，我们将逐个介绍者三种socket的实现细节。
+而在本部分，我们将从simple socket入手，socket的实现细节，并且从这些实现细节，也尝试去掌握如何理解TLM 2.0协议的内在约束。
+本章首先介绍了三种socket所使用的基类，convenience_socket_base的定义。然后，我们将深入探索simple socket的具体实现。
+一些simple socket实现过程中，需要用到的tlm utils的类也在这里得到详细介绍。最后，我们将尝试汇总一下TLM 2.0协议
+的实现细节，将其对应到simple socket的具体实施中。
+
+对于passthrough socket，以及multi socket，我们将在下一章讨论。
 
 == convenience_socket_base
 
@@ -95,6 +101,17 @@ private:
 <1> 构造函数只接受一个convenience_socket_base指针，然后将指针保存下来
 
 == simple socket
+
+simple socket，是最简单类型的一种socket。simple socket包括initiator和target两种socket的
+实现。这里的实现意思是，相关的数据结构实现了相应的接口函数。然而，在TLM 2.0中，接口函数的实现
+方式与TLM 1.0完全不同。TLM 1.0的典型接口函数实现方法仍然没有脱离FIFO的概念。
+
+在TLM 1.0中，
+一个精心设计的类<<tlm::1::tlm_fifo, tlm_fifo>>实现了接口函数的定义。与此同时，tlm_fifo也是
+一个primitive channel，这就保证了仿真的正确性。TLM 2.0设计时采用了截然不同的思路，所需要
+实现的接口函数全部由回调函数完成，而simple socket的设计则只是提供注册回调函数的API调用，持有
+回调函数的指针（一般回调函数是成员函数，所以这里需要模板类），然后完成一些必要的转换，例如，对于实现了
+non-blocking语义的回调函数，如果调用blocking语义的API，则需要使用non-blocking来实现blocking，反之亦然。
 
 === simple_socket_base
 
@@ -196,8 +213,8 @@ simple_initiator_socket_b::process是定义在simple_initiator_socket_b模板类
   };
 ----
 
-为方便起见，process内部定义了两个类指针类型，分别是 `TransportPtr`
-和 `InvalidateDirectMempTR`。注意，这两个类指针的类都是MODULE，这实际上是
+为方便起见，process内部定义了两个成员函数指针类型，分别是 `TransportPtr`
+和 `InvalidateDirectMempTR`。注意，这两个成员函数指针的类都是MODULE，这实际上是
 simple_initiator_socket_b的模板参数。 构造函数中，会将传入的simple_socket_base指针
 保存到convenience_socket_cb_holder父类中。构造的时候，3个成员变量都是0，即指向
 MODULE的指针，以及两个成员函数指针均为空。这三个成员变量需要使用额外的
@@ -260,6 +277,9 @@ MODULE的指针，以及两个成员函数指针均为空。这三个成员变�
 <1> 调用的display_error实际调用的是基类convenience_socket_cb_holder的display_error，在实现中转发给了
 持有的simple_socket_base对象的display_error函数
 <2> 这里返回TLM_COMPLETED是不会走到的，如果走到就意味着系统出现错误
+
+总结一下，simple_initiator_socket_b::process，就是一个使用回调函数机制，实现了
+<<api::tlm_bw_transport_if, tlm_bw_transport_if>>的模板类。
 
 ==== simple_initiator_socket_b
 
@@ -332,8 +352,8 @@ simple_initiator_socket_b的构造函数比较简单：
 image::tlm_base_initiator_socket.png[]
 
 所以这样的绑定结果是，本类的基类tlm_initiator_socket的成员变量 m_export
-内部持有了一个指向成员变量 m_process的指针，指针类型为 `sc_interface*`，可以被
-cast成为 `tlm_bw_transport_if*` 类型，进而调用tlm_bw_transport_if所定义的
+内部持有了一个指向成员变量 m_process的指针，指针类型为 `tlm_bw_transport_if*`，
+可以用来调用tlm_bw_transport_if所定义的
 接口函数nb_transport_bw和invalidate_direct_mem_ptr。
 
 接下来只剩下两个API函数，用来将process注册回调函数的部分同样导出来，即
@@ -707,7 +727,11 @@ simple_target_socket，类似于simple_initiator_socket，同样由多种类型�
 - simple_target_socket_tagged
 - simple_target_socket_tagged_optional
 
-但与simple_initiator_socket不同，simple_target_socket的实现更为复杂。
+但与simple_initiator_socket不同，simple_target_socket的实现更为复杂。这个原因主要在于，对于simple initiator socket
+而言，其内部需要实现BW_IF的功能。BW_IF只有两个接口函数需要实现，因而simple initiator socket实现比较简单。但对于simple
+target socker而言，其内部需要实现BW_IF的功能。BW_IF有4个接口函数需要实现，同时，还需要考虑到，其中两个接口函数 `nb_transport_fw`
+和 `b_transport` 之间的相互实现，即如果回调函数注册了nonblocking版本，如何使用nonblocking版本实现blocking版本，以及反过来，
+回调函数只注册了blocking版本，如何实现nonblocking版本。
 
 ==== simple_target_socket_b::bw_process
 
@@ -787,9 +811,581 @@ bw_process实现tlm_bw_transport_if的接口函数invalidate_direct_mem_ptr的
     }
 ----
 
+如果trans对象并不在 `m_owner->m_pending_trans` 中，表明这并不是一个fw_process
+使用nonblocking API实现blocking语义的请求，这里直接转发即可。这部分内容请参考
+<<data::simple_target_socket::fw_process:b2nb_thread, b2nb_thread>>的介绍。
+如果trans在 `m_owner->m_pending_trans` 中，那么就需要根据协议，来决定如何应对了。
+
+[[bw_process::b2nb_thread::end_req]]
+如果phase是END_REQ，这里就触发 `m_owner->m_end_request`，然后返回TLM_ACCEPTED，表明
+接受请求了（不需要返回TLM_UPDATED，因为没有更新phase）。这就和
+<<fw_process::b2nb_thread::begin_req, fw_process里处理相同的请求>>时，等待 `m_owner->m_end_request`
+同步起来了。
+
+[[bw_process::b2nb_thread::begin_resp]]
+如果phase是BEGIN_RESP，这对应了
+<<fw_process::b2nb_thread::begin_req, fw_process里处理相同的请求>>时的下一步，所以这里仍然需要notify
+一次m_end_request，然后完成传输。完成传输的动作是先触发这个trans对应的事件，这样
+<<data::fw_process::end_event, fw_process使用nonblocking实现blocking的事件等待部分>>的blocking请求就结束，然后将这个trans从
+`m_owner->m_pending_trans` 中移除。之后直接返回TLM_COMPLTED即可，不再需要返回一个TLM_UPDATED/TLM_ACCEPTED，继续END_RESP阶段。
+
 ==== simple_target_socket_b::fw_process
 
+fw_process同样是定义在simple_target_socket_b内部的辅助类。fw_process直接继承自
+<<api::tlm_fw_transport_if, tlm_fw_transport_if>>，同时也继承自 <<api::tlm_mm_interface, tlm_mm_interface>>：
+
 [[data::simple_target_socket_b::fw_process]]
+
+.src/tlm_utils/simple_target_socket.h
+[source,cpp]
+----
+  class fw_process : public tlm::tlm_fw_transport_if<TYPES>,
+                    public tlm::tlm_mm_interface
+  {
+  public:
+    typedef sync_enum_type (MODULE::*NBTransportPtr)(transaction_type&,
+                                                     phase_type&,
+                                                     sc_core::sc_time&);
+    typedef void (MODULE::*BTransportPtr)(transaction_type&,
+                                          sc_core::sc_time&);
+    typedef unsigned int (MODULE::*TransportDbgPtr)(transaction_type&);
+    typedef bool (MODULE::*GetDirectMemPtr)(transaction_type&,
+                                            tlm::tlm_dmi&);
+    // blabla
+  private:
+    simple_target_socket_b *m_owner; <1>
+    MODULE* m_mod; <2>
+    NBTransportPtr m_nb_transport_ptr; <2>
+    BTransportPtr m_b_transport_ptr; <2>
+    TransportDbgPtr m_transport_dbg_ptr; <2>
+    GetDirectMemPtr m_get_direct_mem_ptr; <2>
+    peq_with_get<transaction_type> m_peq; <3>
+    bool m_response_in_progress;
+    sc_core::sc_event m_end_response;
+  };
+----
+<1> 内部持有一个指向simple_target_socket_b的指针
+<2> 内部持有对象的指针，以及四个成员函数指针
+<3> 这个<<data::peq_with_get, peq_with_get>>类型的成员变量主要用在使用nonblocking的API实现blocking语义的时候
+
+fw_process同样将4个需要实现的函数定义为类的成员函数指针。fw_process提供了4个函数，用来注册
+这4个成员函数指针：
+
+.src/tlm_utils/simple_target_socket.h
+[source,cpp]
+----
+    void set_nb_transport_ptr(MODULE* mod, NBTransportPtr p)
+    {
+      if (m_nb_transport_ptr) {
+        m_owner->display_warning("non-blocking callback already registered");
+        return;
+      }
+      sc_assert(!m_mod || m_mod == mod);
+      m_mod = mod;
+      m_nb_transport_ptr = p;
+    }
+
+    void set_b_transport_ptr(MODULE* mod, BTransportPtr p)
+    {
+      if (m_b_transport_ptr) {
+        m_owner->display_warning("blocking callback already registered");
+        return;
+      }
+      sc_assert(!m_mod || m_mod == mod);
+      m_mod = mod;
+      m_b_transport_ptr = p;
+    }
+
+    void set_transport_dbg_ptr(MODULE* mod, TransportDbgPtr p)
+    {
+      if (m_transport_dbg_ptr) {
+        m_owner->display_warning("debug callback already registered");
+        return;
+      }
+      sc_assert(!m_mod || m_mod == mod);
+      m_mod = mod;
+      m_transport_dbg_ptr = p;
+    }
+
+    void set_get_direct_mem_ptr(MODULE* mod, GetDirectMemPtr p)
+    {
+      if (m_get_direct_mem_ptr) {
+        m_owner->display_warning("get DMI pointer callback already registered");
+        return;
+      }
+      sc_assert(!m_mod || m_mod == mod);
+      m_mod = mod;
+      m_get_direct_mem_ptr = p;
+    }
+----
+
+注意注册成员函数指针时，必须保持对象指针不变，否则会报错。
+
+如果全部的4个成员函数指针都实现了，那么实现<<api::tlm_fw_transport_if, tlm_fw_transport_if>>
+的接口函数就变得水到渠成：
+
+.src/tlm_utils/simple_target_socket.h
+[source,cpp]
+----
+// Interface implementation
+    sync_enum_type nb_transport_fw(transaction_type& trans,
+                                   phase_type& phase,
+                                   sc_core::sc_time& t)
+    {
+      if (m_nb_transport_ptr) {
+        // forward call
+        sc_assert(m_mod);
+        return (m_mod->*m_nb_transport_ptr)(trans, phase, t);
+      }
+
+      // blabla <1>
+    }
+    void b_transport(transaction_type& trans, sc_core::sc_time& t)
+    {
+      if (m_b_transport_ptr) {
+        // forward call
+        sc_assert(m_mod);
+        (m_mod->*m_b_transport_ptr)(trans, t);
+        return;
+      }
+
+      // blabla <1>
+    }
+    unsigned int transport_dbg(transaction_type& trans)
+    {
+      if (m_transport_dbg_ptr) {
+        // forward call
+        sc_assert(m_mod);
+        return (m_mod->*m_transport_dbg_ptr)(trans);
+      }
+      // No debug support
+      return 0;
+    }
+
+    bool get_direct_mem_ptr(transaction_type& trans,
+                            tlm::tlm_dmi&  dmi_data)
+    {
+      if (m_get_direct_mem_ptr) {
+        // forward call
+        sc_assert(m_mod);
+        return (m_mod->*m_get_direct_mem_ptr)(trans, dmi_data);
+      }
+      // No DMI support
+      dmi_data.allow_read_write();
+      dmi_data.set_start_address(0x0);
+      dmi_data.set_end_address((sc_dt::uint64)-1);
+      return false;
+    }
+----
+<1> 未完待续部分，我们在后续补充这部分的实现细节
+
+TODO: 关于mm_interface部分内容还需要在看几遍，补充实现细节
+
+可以看出，如果全部的回调函数都注册了，那么这里对接口函数的实现基本都只是转发而言，包括nb_transport_fw, b_transport, transport_dbg
+以及 get_direct_mem_ptr。 
+
+如果transport_dbg没有实现，那么这里就可以简单返回0，表示不支持debug功能，这是trasnport_dbg接口函数允许的。同样的，对于
+get_direct_mem_ptr没有实现的情况，可以将dmi数据设置后返回，来表示不支持DMI请求。
+
+现在的问题在于，对于nb_transport_fw和b_transport，我们不能仅仅因为没有实现而选择忽略。如果其中某一个回调函数实现了，另一个没有实现，那么
+simple target socket就需要使用实现了的回调函数来实现相应的API。具体分为两种情况：
+
+* 注册了non-blocking的API，但没有注册blocking的API，那么就需要使用nb_transport_fw实现b_transport
+* 注册了blocking的API，但没有注册non-blocking的API，那么就需要使用b_transport时限nb_transport_fw
+
+===== nb_transport_fw实现b_transport
+[[impl::nb_transport_fw::b_transport]]
+
+在fw_process的实现b_transport的时候，如果发现b_transport的回调函数没有实现，但是实现了nb_transport_fw，那么就需要使用如下代码了：
+
+.src/tlm_utils/simple_target_socket.h
+[source,cpp]
+----
+    void b_transport(transaction_type& trans, sc_core::sc_time& t)
+    {
+      if (m_b_transport_ptr) {
+        // forward call
+        sc_assert(m_mod);
+        (m_mod->*m_b_transport_ptr)(trans, t);
+        return;
+      }
+
+      // b->nb conversion
+      if (m_nb_transport_ptr) {
+        m_peq.notify(trans, t);
+        t = sc_core::SC_ZERO_TIME;
+
+        mm_end_event_ext mm_ext;
+        const bool mm_added = !trans.has_mm();
+
+        if (mm_added) {
+          trans.set_mm(this);
+          trans.set_auto_extension(&mm_ext);
+          trans.acquire();
+        }
+
+        // wait until transaction is finished
+        sc_core::sc_event end_event;
+        m_owner->m_pending_trans[&trans] = &end_event;
+        sc_core::wait(end_event);
+
+        if (mm_added) {
+          // release will not delete the transaction, it will notify mm_ext.done
+          trans.release();
+          if (trans.get_ref_count()) {
+            sc_core::wait(mm_ext.done);
+          }
+          trans.set_mm(0);
+        }
+        return;
+      }
+
+      // should not be reached
+      m_owner->display_error("no blocking transport callback registered");
+    }
+----
+
+使用nonblocking的API来实现blocking的API，主要使用了一个额外的数据结构，即 <<data::peq_with_get, peq_with_get>>。
+简单来说，peq_with_get可以保存一系列transaction对象，同时保存设置下来的latency延迟时间。当最近设置的延迟时间到达的时候，
+peq_with_get可以触发其内部的一个事件。而peq_with_get的这个事件则被fw_process的start_of_simulation中，
+注册为b2nb_thread线程函数的静态敏感事件：
+
+.src/tlm_utils/simple_target_socket.h
+[source,cpp]
+----
+    void start_of_simulation()
+    {
+      if (!m_b_transport_ptr && m_nb_transport_ptr) { // only spawn b2nb_thread, if needed <1>
+        sc_core::sc_spawn_options opts;
+        opts.set_sensitivity(&m_peq.get_event()); <2>
+        opts.dont_initialize();
+        sc_core::sc_spawn(sc_bind(&fw_process::b2nb_thread, this),
+                          sc_core::sc_gen_unique_name("b2nb_thread"), &opts);
+      }
+    }
+----
+<1> 只有当nb_transport指针注册，且b_transport指针没有注册的时候，需要启动b2nb_thread线程函数
+<2> m_peq的<<data::peq_with_get::get_event, get_event>>返回超时事件的引用，这里直接拿来设置为将要启动的线程的静态敏感事件
+
+
+这样一来，当调用blocking的API，但b_transport回调函数没有注册，只注册了nb_transport函数的时候，
+首先将trans和延时时间一并放入到<<data::peq_with_get, peq_with_get>>类型的成员变量 `m_peq`
+中。因为需要等待trans完成，所以在这里讲这个trans注册到 `m_owner->m_pending_trans` 中去，并将
+这个trans关联到一个local的event上，之后等待这个event：
+
+[source,cpp]
+----
+        // wait until transaction is finished
+        sc_core::sc_event end_event;
+        m_owner->m_pending_trans[&trans] = &end_event;
+        sc_core::wait(end_event);
+----
+
+[[data::fw_process::end_event]]
+当这里的 `end_event` 等待到的时候，即表明trans完成，就可以返回了。代码这里与mm_interface
+相关的内容后续再分析。
+
+那么，b2nb_thread线程函数又是如何实现的呢？
+[[data::simple_target_socket::fw_process:b2nb_thread]]
+
+.src/tlm_utils/simple_target_socket.h
+[source,cpp]
+----
+    void b2nb_thread()
+    {
+      while (true) {
+        transaction_type* trans;
+        while ((trans = m_peq.get_next_transaction())!=0) { <3>
+          sc_assert(m_mod);
+          sc_assert(m_nb_transport_ptr);
+          phase_type phase = tlm::BEGIN_REQ;
+          sc_core::sc_time t = sc_core::SC_ZERO_TIME;
+
+          switch ((m_mod->*m_nb_transport_ptr)(*trans, phase, t)) {
+          case tlm::TLM_COMPLETED:
+          {
+            // notify transaction is finished
+            typename std::map<transaction_type*, sc_core::sc_event *>::iterator it =
+              m_owner->m_pending_trans.find(trans); <1>
+            sc_assert(it != m_owner->m_pending_trans.end());
+            it->second->notify(t); <1>
+            m_owner->m_pending_trans.erase(it); <2>
+            break;
+          }
+
+          case tlm::TLM_ACCEPTED:
+          case tlm::TLM_UPDATED:
+            switch (phase) {
+            case tlm::BEGIN_REQ:
+              m_owner->m_current_transaction = trans;
+              sc_core::wait(m_owner->m_end_request);
+              m_owner->m_current_transaction = 0;
+              break;
+
+            case tlm::END_REQ:
+              sc_core::wait(t);
+              break;
+
+            case tlm::BEGIN_RESP:
+            {
+              phase = tlm::END_RESP;
+              sc_core::wait(t);  // This line is a bug fix added in TLM-2.0.2
+              t = sc_core::SC_ZERO_TIME;
+              (m_mod->*m_nb_transport_ptr)(*trans, phase, t);
+
+              // notify transaction is finished
+              typename std::map<transaction_type*, sc_core::sc_event *>::iterator it =
+                m_owner->m_pending_trans.find(trans); <1>
+              sc_assert(it != m_owner->m_pending_trans.end());
+              it->second->notify(t); <1>
+              m_owner->m_pending_trans.erase(it); <2>
+              break;
+            }
+
+            default:
+              m_owner->display_error("invalid phase received");
+            }
+            break;
+
+          default:
+            m_owner->display_error("invalid sync value received");
+          }
+        }
+        sc_core::wait();
+      }
+    }
+----
+<1> 注意，当nonblocking的transport完成之后，这里需要从 `m_owner->m_pending_trans` 里查找相应的trans对象，并notify与之关联的事件
+<2> trans完成之后，就不要再保存这个对象，将之删除即可
+<3> 使用<<data::peq_with_get::get_next_transaction, get_next_transaction>>获取设定时间达到的trans对象
+
+这段代码实现，我们首先关注和b_transport中同步的部分。注意，当trans完成之后，总是有如下部分代码调用：
+
+[source,cpp]
+----
+              // notify transaction is finished
+              typename std::map<transaction_type*, sc_core::sc_event *>::iterator it =
+                m_owner->m_pending_trans.find(trans); 
+              sc_assert(it != m_owner->m_pending_trans.end());
+              it->second->notify(t); 
+              m_owner->m_pending_trans.erase(it); 
+----
+
+这里从 `m_owner->m_pending_trans` 找到trans对象，然后notify对应的event，这样就与b_transport中
+局部变量event对应上，同步起来了。
+
+那么，trans在合适能够完成呢？b2nb_thread实际上实现了使用nonblocking的协议，做blocking的传输的过程。
+从<<data::peq_with_get, peq_with_get>>使用get_next_transaction获得需要传送的trans对象之后，首先
+设置phase为BEGIN_REQ，延时时间则设置为SC_ZERO_TIME（这里并不需要b_transport设置的延时时间，因为b_transport
+设置的延时时间已经到了），调用nb_transport_fw API。
+
+等到nb_transport_fw返回之后，需要根据返回值来判断。如果nb_transport_fw返回TLM_COMPLETED，就表明当前这笔
+传输已经完成，可以将这个trans从 `m_owner->m_pending_trans` 中挪去，然后notify相应的event了。
+
+[source,cpp]
+----
+          case tlm::TLM_COMPLETED:
+          {
+            // notify transaction is finished
+            typename std::map<transaction_type*, sc_core::sc_event *>::iterator it =
+              m_owner->m_pending_trans.find(trans); <1>
+            sc_assert(it != m_owner->m_pending_trans.end());
+            it->second->notify(t); <1>
+            m_owner->m_pending_trans.erase(it); <2>
+            break;
+          }
+----
+
+[[fw_process::b2nb_thread::begin_req]]
+如果nb_transport_fw返回值并不是TLM_COMPLETED，说明传说需要更多的PHASE。这时候就需要根据返回的PHASE信息
+来决定接下来的行为。如果PHASE仍然是BEGIN_REQ，说明下游返回的只是TLM_ACCEPTED。这时候就需要等待下游
+通过nb_transport_bw发送END_REQ了。但由于这里只是前向通路，所以等待一个end_request的事件发生：
+
+[source,cpp]
+----
+            case tlm::BEGIN_REQ:
+              m_owner->m_current_transaction = trans;
+              sc_core::wait(m_owner->m_end_request);
+              m_owner->m_current_transaction = 0;
+              break;
+----
+
+这个wait一直等到
+<<bw_process::b2nb_thread::end_req, bw_process中的nb_transport_bw>>
+收到END_REQ为止才会触发。这个事件结束后，BEGIN_REQ和END_REQ phase就都完成了。但注意，此时
+仍然没有从 `m_owner->m_pending_trans` 中挪去这个需要传输的对象。这种情况下，接下来需要的
+PHASE是BEGIN_RESP，由<<bw_process::b2nb_thread::begin_resp, bw_process里的begin_resp>>
+部分进行处理。注意此时后续的处理全部在<<bw_process::b2nb_thread::begin_resp, bw_process的nb_transport_bw>>
+部分进行处理，而不再需要这部分的参与了。
+
+如果nb_transport_fw返回phase为END_REQ，这里同样需要延时设定的时间，后续的操作同样
+由<<bw_process::b2nb_thread::begin_resp, bw_process的nb_transport_bw>>
+部分来完成（不清楚这里为何不设定m_current_transaction）：
+
+[source,cpp]
+----
+            case tlm::END_REQ:
+              sc_core::wait(t);
+              break;
+----
+
+如果nb_transport_fw返回的phse直接是BEGIN_RESP，表明这时候fw可以回一个END_RESP，延迟给定的时间之后，
+，再次调用nb_transport_fw, 结束处理了：
+
+[source,cpp]
+----
+            case tlm::BEGIN_RESP:
+            {
+              phase = tlm::END_RESP;
+              sc_core::wait(t);  // This line is a bug fix added in TLM-2.0.2
+              t = sc_core::SC_ZERO_TIME;
+              (m_mod->*m_nb_transport_ptr)(*trans, phase, t);
+
+              // notify transaction is finished
+              typename std::map<transaction_type*, sc_core::sc_event *>::iterator it =
+                m_owner->m_pending_trans.find(trans); <1>
+              sc_assert(it != m_owner->m_pending_trans.end());
+              it->second->notify(t); <1>
+              m_owner->m_pending_trans.erase(it); <2>
+              break;
+            }
+----
+
+发起END_RESP之后，调用nb_transport_fw已经不再需要返回值和phase，因为此时一个完成的transaction已经结束了，所以
+这里同样按照流程，在 `m_owner->m_pending_trans` 中查找对象，notify对应的event，然后从中移除这个已经完成的
+trans对象。
+
+===== b_transport实现nb_transport_fw
+[[impl::b_transport::nb_transport_fw]]
+
+在fw_process的实现nb_transport_f的时候，如果发现nb_transport_f的回调函数没有实现，但是实现了b_transport，那么就需要使用如下代码了：
+
+.src/tlm_utils/simple_target_socket.h
+[source,cpp]
+----
+      // nb->b conversion
+      if (m_b_transport_ptr) {
+        if (phase == tlm::BEGIN_REQ) {
+          // prepare thread to do blocking call
+          process_handle_class * ph = m_process_handle.get_handle(&trans); <1>
+
+          if (!ph) { // create new dynamic process
+            ph = new process_handle_class(&trans);
+            m_process_handle.put_handle(ph);
+
+            sc_core::sc_spawn_options opts;
+            opts.dont_initialize();
+            opts.set_sensitivity(&ph->m_e);
+
+            sc_core::sc_spawn(sc_bind(&fw_process::nb2b_thread,this, ph),
+                            sc_core::sc_gen_unique_name("nb2b_thread"), &opts);
+          }
+
+          ph->m_e.notify(t); <2>
+          return tlm::TLM_ACCEPTED;
+        }
+        if (phase == tlm::END_RESP) {
+          m_response_in_progress = false;
+          m_end_response.notify(t);
+          return tlm::TLM_COMPLETED;
+        }
+        m_owner->display_error("invalid phase received");
+        return tlm::TLM_COMPLETED;
+      }
+      m_owner->display_error("no non-blocking transport callback registered");
+      return tlm::TLM_COMPLETED;
+----
+<1> m_process_handle的get_handle操作会优先挑选那些已经suspend的thread复用，所以这里不用担心新建的
+thread完成一次trans后就无法使用，参考<<data::process_handle_list, process_handle_list>>部分的内容
+<2> 无论是新建thread，还是复用老的thread，只有这里延时事件被触发，才会得到调度，执行 `nb2b_thread` 函数
+
+使用blocking的API实现nonblocing的语义部分，需要一些额外的工作。
+
+如果是BEGIN_REQ phase，表明传输刚开始。
+这里首先尝试获取以下是否有对应spawn
+出来的线程负责这个工作，如果没有，就new一个<<data::process_handle_class, process_handle_class>>，并
+将传输对象的指针设置进去。这个新建的thread对process_handle_class的 `m_e` 事件静态敏感，所以new
+出来之后，设置这个 `m_e` 事件在设定的延时时间触发，返回一个TLM_ACCEPTED即可。这个新建的thread需要等待
+时间的触发，所以thread本身被设置为无需初始执行（dont_initialize）。
+注意，这里返回的是
+TLM_ACCEPTED，这意味着后续还需要一个END_REQ的bw通路的请求。
+
+(还没有定论，需要继续分析)
+bw通路的END_REQ和BEGIN_RESP都在
+<<bw_process::nb_transport_bw>>中处理，直到fw返回END_RESP的时候，才再次调用这个API：
+
+由于blocking API没有反向的Path，所以能够接受的phase参数只有前向的 BEGIN_REQ和 END_RESP。
+如果再次调用的是END_RESP，这是initiator向target发送的本次transaction最后一笔数据了，此时标记m_response_in_progress
+为false，并设定m_end_response事件在给定的延时时间t之后触发，此时就可以返回调用方TLM_COMPLETED了。
+这里设置m_response_in_progress和m_end_response事件触发，与<<[simple_target_socket_b::nb2b_thread::end_resp, nb2b_thread中处理m_response_in_progress>>里对应的代码同步起来了。
+
+---
+
+nb2b_thread的实现是如下：
+
+[[simple_target_socket_b::nb2b_thread]]
+.src/tlm_utils/simple_target_socket.h
+[source,cpp]
+----
+    void nb2b_thread(process_handle_class* h)
+    {
+
+      while(1) {
+        transaction_type *trans = h->m_trans;
+        sc_core::sc_time t = sc_core::SC_ZERO_TIME;
+
+        // forward call
+        sc_assert(m_mod);
+        (m_mod->*m_b_transport_ptr)(*trans, t);
+
+        sc_core::wait(t);
+
+        // return path
+        while (m_response_in_progress) {
+          sc_core::wait(m_end_response);
+        }
+        t = sc_core::SC_ZERO_TIME;
+        phase_type phase    = tlm::BEGIN_RESP;
+        sync_enum_type sync = m_owner->bw_nb_transport(*trans, phase, t);
+        if ( !(sync == tlm::TLM_COMPLETED ||
+              (sync == tlm::TLM_UPDATED && phase == tlm::END_RESP)) ) {
+          m_response_in_progress = true;
+        }
+
+        // suspend until next transaction
+        h->m_suspend = true;
+        sc_core::wait();
+      }
+    }
+----
+
+[[simple_target_socket_b::nb2b_thread::begin_req]]
+函数分为几部分，首先是调用blocking API，传输数据的部分。注意这个thread被唤醒的时候，表明nb_transport_fw
+所设定的延时时间已经满足，所以这里再调用blocking的b_transport的时候，只需要给一个延时时间SC_ZERO_TIME即可。
+调用结束之后，再等待一段时间t（这个t是被调用方要求的延时时间）。这就是处理BEGIN_REQ部分的代码了。
+
+[[simple_target_socket_b::nb2b_thread::end_resp]]
+接下来，等待 `m_response_in_progress` 变为false，如果是true，表明有需要的response处理，则继续等待事件
+`m_end_response` 的发生。当m_response_in_progress发送过来，表明response已经处理完毕，initiator已经通过
+nonblocking的API发送一个end_resp了，这里就需要结束处理。
+
+TODO: 这部分内容还需要在看几遍
+
+这里是否有潜在的bug，因为m_response_in_progress和m_end_response都是fw_process自己的成员变量，这
+意味着如果有多个process_handle_class对象的话，他们所管理的nb2b_thread共享同一份m_response_in_progress
+和m_end_response对象。那么，如果一个nonblocking的API调用了END_RESP，是否会唤醒所有其他的线程呢？
+后边这部分代码的功能没有看懂，是否就是为了解决这个问题的？
+
+[source,cpp]
+----
+        t = sc_core::SC_ZERO_TIME;
+        phase_type phase    = tlm::BEGIN_RESP;
+        sync_enum_type sync = m_owner->bw_nb_transport(*trans, phase, t);
+        if ( !(sync == tlm::TLM_COMPLETED ||
+              (sync == tlm::TLM_UPDATED && phase == tlm::END_RESP)) ) {
+          m_response_in_progress = true;
+        }
+----
 
 ==== simple_target_socket_b
 
@@ -925,7 +1521,586 @@ nb_transport_bw和invalidate_direct_mem_ptr。
 
 ---
 
+simple_target_socket_b自己作为一个tlm_target_socket，在构造函数中，调用bind，将自己绑定到
+成员变量fw_process上，而
+<<data::simple_target_socket_b::fw_process, fw_process>>则是一个tlm_fw_transport_if的子类。
+这里的绑定调用，实现如下：
+
+.src/tlm_core/tlm_2/tlm_sockets/tlm_target_socket.h
+[source,cpp]
+----
+  //
+  // Bind interface to socket
+  // - Binds the interface to the export
+  //
+  virtual void bind(fw_interface_type& ifs)
+  {
+    export_type* exp = &get_base_export();
+    if( this == exp ) {
+      export_type::bind( ifs ); // non-virtual function call
+    } else {
+      exp->bind( ifs );
+    }
+  }
+----
+
+这样的效果等同于simple_target_socket_b作为一个sc_export<FW_IF>，持有了fw_process的一个指针。
+这样一来，当simple_target_socket_b和其他initiator socket绑定之后，其他initiator socket
+同样可以获取持有fw_process的指针，进而调用fw_process所实现的FW_IF的四个接口函数。fw_process
+虽然实现了FW_IF的四个接口函数，但是这4个接口函数内部都需要调用回调函数。如果相应的接口函数在运行时
+没有被调用，那么就无需定义回调函数。对于nb_transport_fw和b_transport，则只需要实现其中一个，另一个
+simple_target_socket会自行实现（如果nb_transport_fw实现，那么所绑定的initiator socket侧必须同时实现nb_transport_bw）。
 
 ==== simple_target_socket
 
+如同<<data::simple_initiator_socket, simple_initiator_socket>>的实现一样，
+simple_target_socket直接继承自 <<data::simple_target_socket_b, simple_target_socket_b>>，主要
+对于基类simple_target_socket_b，提供了可选的模板参数BUSWIDTH和TYPES，这样POL模板参数就使用了
+simple_target_socket_b的默认值 `sc_core::SC_ONE_OR_MORE_BOUND` ，即sc_port至少要绑定一个interface
+，这部分的内容参考<<api::sc_port::bind::policy, sc_port的绑定策略>>部分:
+
+[[data::simple_target_socket]]
+.src/tlm_utils/simple_target_socket.h
+[source,cpp]
+----
+template< typename MODULE, unsigned int BUSWIDTH = 32
+        , typename TYPES = tlm::tlm_base_protocol_types >
+class simple_target_socket
+  : public simple_target_socket_b<MODULE,BUSWIDTH,TYPES>
+{
+  typedef simple_target_socket_b<MODULE,BUSWIDTH,TYPES> socket_b;
+public:
+  simple_target_socket() : socket_b() {}
+  explicit simple_target_socket(const char* name) : socket_b(name) {}
+};
+----
+
 ==== simple_target_socket_optional
+
+与<<data::simple_initiator_socket_optional, simple_initiator_socket_optional>>一样，
+simple_target_socket_optional继承
+<<data::simple_target_socket_b, simple_target_socket_b>>，对模板参数进行了特化。这里的optinal
+后缀体现在POL上: 设定POL为SC_ZERO_OR_MORE_BOUND，这样不绑定interface也可以：
+
+[[data::simple_target_socket_optional]]
+.src/tlm_utils/simple_target_socket.h
+[source,cpp]
+----
+template< typename MODULE, unsigned int BUSWIDTH = 32
+        , typename TYPES = tlm::tlm_base_protocol_types >
+class simple_target_socket_optional
+  : public simple_target_socket_b<MODULE,BUSWIDTH,TYPES,sc_core::SC_ZERO_OR_MORE_BOUND>
+{
+  typedef simple_target_socket_b<MODULE,BUSWIDTH,TYPES,sc_core::SC_ZERO_OR_MORE_BOUND> socket_b;
+public:
+  simple_target_socket_optional() : socket_b() {}
+  explicit simple_target_socket_optional(const char* name) : socket_b(name) {}
+};
+----
+
+==== simple_target_socket_tagged_b
+
+带tagged版本的simle_target_socket_tagged_b，其实现和
+<<data::simple_target_socket_b, simple_target_socket_b>>基本一样，唯一的区别在于，注册的回调函数
+可以带一个额外的参数，就如同
+<<data::simple_initiator_socket_tagged_b, simple_initiator_socket_tagged_b>>与
+<<data::simple_initiator_socket_b, simple_initiator_socket_b>>的关系一样：
+
+[[data::simple_target_socket_tagged_b]]
+.src/tlm_utils/simple_target_socket.h
+[source,cpp]
+----
+//ID Tagged version
+template< typename MODULE, unsigned int BUSWIDTH, typename TYPES
+        , sc_core::sc_port_policy POL = sc_core::SC_ONE_OR_MORE_BOUND >
+class simple_target_socket_tagged_b
+  : public tlm::tlm_target_socket<BUSWIDTH, TYPES, 1, POL>
+  , protected simple_socket_base
+{
+  // blabla
+};
+----
+
+注意simple_target_socket_tagged_b提供的注册FW_IF的四个回调函数指针的API时，回调函数指针的
+原型:
+
+.src/tlm_utils/simple_target_socket.h
+[source,cpp]
+----
+  // REGISTER_XXX
+  void register_nb_transport_fw(MODULE* mod,
+                                sync_enum_type (MODULE::*cb)(int id, <1>
+                                                             transaction_type&,
+                                                             phase_type&,
+                                                             sc_core::sc_time&),
+                                int id)
+  {
+    elaboration_check("register_nb_transport_fw");
+    m_fw_process.set_nb_transport_ptr(mod, cb);
+    m_fw_process.set_nb_transport_user_id(id);
+  }
+
+  void register_b_transport(MODULE* mod,
+                            void (MODULE::*cb)(int id, <1>
+                                               transaction_type&,
+                                               sc_core::sc_time&),
+                            int id)
+  {
+    elaboration_check("register_b_transport");
+    m_fw_process.set_b_transport_ptr(mod, cb);
+    m_fw_process.set_b_transport_user_id(id);
+  }
+
+  void register_transport_dbg(MODULE* mod,
+                              unsigned int (MODULE::*cb)(int id, <1>
+                                                         transaction_type&),
+                              int id)
+  {
+    elaboration_check("register_transport_dbg");
+    m_fw_process.set_transport_dbg_ptr(mod, cb);
+    m_fw_process.set_transport_dbg_user_id(id);
+  }
+
+  void register_get_direct_mem_ptr(MODULE* mod,
+                                   bool (MODULE::*cb)(int id, <1>
+                                                      transaction_type&,
+                                                      tlm::tlm_dmi&),
+                                   int id)
+  {
+    elaboration_check("register_get_direct_mem_ptr");
+    m_fw_process.set_get_direct_mem_ptr(mod, cb);
+    m_fw_process.set_get_dmi_user_id(id);
+  }
+----
+<1> 四个回调函数指针的原型，相比于FW_if，都增加了一个额外的整型参数，这就是所谓的tagged
+
+==== simple_target_socket_tagged
+
+simple_target_socket_tagged与
+<<data::simple_target_socket_tagged_b, simple_target_socket_tagged_b>>
+的关系，就和
+<<data::simple_target_socket, simple_target_socket>>
+与<<data::simple_target_socket_b, simple_target_socket_b>>的关系一样，特化了
+模板的参数：
+
+[[data::simple_target_socket_tagged]]
+.src/tlm_utils/simple_target_socket.h
+[source,cpp]
+----
+template< typename MODULE, unsigned int BUSWIDTH = 32
+        , typename TYPES = tlm::tlm_base_protocol_types >
+class simple_target_socket_tagged
+  : public simple_target_socket_tagged_b<MODULE,BUSWIDTH,TYPES>
+{
+  typedef simple_target_socket_tagged_b<MODULE,BUSWIDTH,TYPES> socket_b;
+public:
+  simple_target_socket_tagged() : socket_b() {}
+  explicit simple_target_socket_tagged(const char* name) : socket_b(name) {}
+};
+----
+
+==== simple_target_socket_tagged_optional
+
+simple_target_socket_tagged_optional与
+<<data::simple_target_socket_tagged_b, simple_target_socket_tagged_b>>
+的关系，就和
+<<data::simple_target_socket_optional, simple_target_socket_optional>>
+与<<data::simple_target_socket_b, simple_target_socket_b>>的关系一样，特化了
+模板的参数：
+
+[[data::simple_target_socket_tagged_optional]]
+.src/tlm_utils/simple_target_socket.h
+[source,cpp]
+----
+template< typename MODULE, unsigned int BUSWIDTH = 32
+        , typename TYPES = tlm::tlm_base_protocol_types >
+class simple_target_socket_tagged_optional
+  : public simple_target_socket_tagged_b<MODULE,BUSWIDTH,TYPES,sc_core::SC_ZERO_OR_MORE_BOUND>
+{
+  typedef simple_target_socket_tagged_b<MODULE,BUSWIDTH,TYPES,sc_core::SC_ZERO_OR_MORE_BOUND> socket_b;
+public:
+  simple_target_socket_tagged_optional() : socket_b() {}
+  explicit simple_target_socket_tagged_optional(const char* name) : socket_b(name) {}
+};
+
+----
+
+== simple_initiator_socket and simple_target_socket
+
+simple_initiator_socket需要和相匹配的simple_target_socket配对使用。所谓的配对使用，指的是
+一个simple_initiator_socket需要绑定到相对应的simple_target_socket上。这样绑定达到的
+目的就是，无论是simple_initiator_socket，还是simple_target_socket，所有的port和export
+都得到了绑定，并且所需要实现的接口函数也都得到了实现。
+
+simple_initiator_socket和simple_target_socket的目的也在于此。只需要将两个socket绑定，接口函数
+就可以实现了。而这些实现了的接口函数，其内部实际调用的是需要进一步进行注册的回调函数，只不过如果在
+运行时某些接口函数如果从未用过，则无需注册。如果不使用simple_initiator_socket/simple_target_socket
+对，而是直接使用tlm_initiator_socket和tlm_target_socket对，那么即使是从未使用过的接口函数，也需要
+实现一下，否则会出现编译期错误。
+
+一个例子来自https://www.cnblogs.com/cngpus/p/13175947.html：
+
+[source,cpp]
+----
+#include "systemc.h"
+#include "tlm.h"
+#include "tlm_utils/simple_initiator_socket.h"
+#include "tlm_utils/simple_target_socket.h"
+
+class A : public sc_module {
+public:
+    SC_HAS_PROCESS(A);
+
+    A(sc_module_name name) : sc_module(name) {
+        SC_THREAD(hello);
+    }
+
+public:
+    tlm_utils::simple_initiator_socket<A> socket;
+
+private:
+    void
+    hello() {
+        auto *payload = new tlm::tlm_generic_payload();
+        assert(payload != nullptr);
+
+        const char *data{"Hello"};
+        payload->set_data_ptr((unsigned char *) data);
+
+        sc_time delay = SC_ZERO_TIME;
+
+        socket->b_transport(*payload, delay);
+
+        delete payload;
+    }
+};
+
+class B : public sc_module {
+public:
+    SC_HAS_PROCESS(B);
+
+    B(sc_module_name name) : sc_module(name) {
+        socket.register_b_transport(this, &B::hello);
+    }
+
+public:
+    tlm_utils::simple_target_socket<B> socket;
+
+private:
+    void
+    hello(tlm::tlm_generic_payload  &payload, sc_core::sc_time &delay_time) {
+        const char *data = reinterpret_cast<const char *>(payload.get_data_ptr());
+        std::cout << data << std::endl;
+    }
+};
+
+int
+sc_main(int argc, char* argv[]) {
+    A a("A");
+    B b("B");
+
+    a.socket(b.socket);
+
+    sc_start(10, SC_NS);
+
+    return EXIT_SUCCESS;
+}
+----
+
+从这里我们也可以看出，模块内部使用simple_initiator_socket和simple_target_socket直接做绑定，
+然后模块 B只需要注册 `b_transport` 的回调函数，整个程序就可以运行起来。这个过程中，并不需要注册
+任何nonblocking的回调函数，或者注册dmi/dbg的回调函数，因为实际运行时并没有使用这些回调函数。
+simple_initiator_socket和simple_target_socket已经在内部实现了这些需要实现的接口函数，并将
+在调用的时候调用注册的回调函数。相比于tlm_initiator_socket和tlm_target_socket，这无疑得到了
+极大的简化，这也是名字里simple的由来了。
+
+另一个值得注意的点则是，拥有 `simple_target_socket` 的类B才能使用 register_b_transport，注册
+b_transport的回调函数。然而，b_transport是一个FW_IF的接口函数，调用方向应当从initiator socket
+到target socket。这里之所以是拥有simple_target_socket的类注册回调函数，是因为拥有
+simple_initiator_socket的A，其内部simple_initiator_socket，作为一个 `sc_port<FW_IF>`, 绑定
+到作为 `sc_export<FW_IF>` 的simple_target_socket之后，simple_target_socket作为一个FW_IF，已经
+将自己绑定到内部的 <<data::simple_target_socket_b::fw_process, fw_process>> 上，
+实现了b_transport函数。只不过这个实现的b_transport函数，和其他的
+FW_IF的接口函数一样，都需要调用注册的回调函数而已。当simple_target_socket注册了FW_IF的接口函数之后，从
+simple_initiator_socket调用这些FW_IF的接口函数，其表现就如同直接调用这些注册了的回调函数
+一样。即，A在thread `hello` 中调用 `socket->b_transport`，其效果
+和直接调用 B注册的回调函数 `hello` 一样，这就是socket的含义所在了。
+
+从这里，我们也能理解，为何注册BW_IF类型回调函数的是simple_initiator_socket，而
+注册FW_IF类型回调函数的反而是simple_target_socket。
+
+== Misc Data Struction
+
+=== peq_with_get
+[[data::peq_with_get]]
+
+peq_with_get主要用在nonblocking的API实现blocking语义的时候，用来保存trans以及设定的
+发生时刻信息：
+
+.src/tlm_utils/peq_with_get.h
+[source,cpp]
+----
+template <class PAYLOAD>
+class peq_with_get : public sc_core::sc_object
+{
+public:
+// blabla
+private:
+  std::multimap<const sc_core::sc_time, transaction_type*> m_scheduled_events;
+  sc_core::sc_event m_event;
+};
+----
+
+peq_with_get有两个成员变量，一个是 `multimap` 类型的 `m_scheduled_events`，保存着设定了
+发生时刻，以及相对应的trans对象指针。另一个则是一个简单的sc_event而已。
+
+peq_with_get保存的是需要做blocking transport的trans对象，但这些
+trans对象带有延迟信息，所以在使用nb_transport的时候，不能立马调用他们，而是先放入
+一个队列中，按照所设置时间的远近，依次调用。
+
+==== notify
+[[data::peq_with_get::notify]]
+
+将一个需要传输的对象trans以及发生时间t放入peq_with_get，只能使用函数 `notify`:
+
+.src/tlm_utils/peq_with_get.h
+[source,cpp]
+----
+  void notify(transaction_type& trans, const sc_core::sc_time& t)
+  {
+    m_scheduled_events.insert(pair_type(t + sc_core::sc_time_stamp(), &trans));
+    m_event.notify(t);
+  }
+
+  void notify(transaction_type& trans)
+  {
+    m_scheduled_events.insert(pair_type(sc_core::sc_time_stamp(), &trans));
+    m_event.notify(); // immediate notification
+  }
+----
+
+notify除了将trans以及发生的时间（等于当前的时间加上延时时间）放入 `m_cheduled_events`（这是一个multimap，支持
+多个key，同时可以对key排序）外，还出发了m_event。如果没有给trans的延时信息，那么默认是立即发生。
+
+==== get_next_transaction
+[[data::peq_with_get::get_next_transaction]]
+
+peq_with_get的get_next_transaction在
+<<data::simple_target_socket::fw_process:b2nb_thread, b2nb_thread>>
+函数中使用。get_next_transaction如果返回0，表明没有Pending需要使用非阻塞
+方式传输的数据。如果m_scheduled_events对象费控，且第一个对象的时间小于等于
+当前的仿真时间，就将这个对象返回，同时从m_scheduled_events里移除这个对象。
+由于可以有多个trans阻塞在同一个时间点上，所以get_next_transaction需要反复循环调用。
+如果当前的仿真时间还没到第一个trans设置的时间，那么就调用m_events，设置m_events
+的notification时间为第一个trans需要等待的时间：
+
+.src/tlm_utils/peq_with_get.h
+[source,cpp]
+----
+  // needs to be called until it returns 0
+  transaction_type* get_next_transaction()
+  {
+    if (m_scheduled_events.empty()) {
+      return 0;
+    }
+
+    sc_core::sc_time now = sc_core::sc_time_stamp();
+    if (m_scheduled_events.begin()->first <= now) {
+      transaction_type* trans = m_scheduled_events.begin()->second;
+      m_scheduled_events.erase(m_scheduled_events.begin());
+      return trans;
+    }
+
+    m_event.notify(m_scheduled_events.begin()->first - now);
+
+    return 0;
+  }
+----
+
+m_event被设置之后，当到了设定的时间，就会触发，进而调度fw_process里的
+b2nb_thread线程函数，因为b2nb_thread线程函数将这个event设置为了
+静态敏感事件。
+
+注意，判断是否满足时间要求的时候，使用的是 `<=`, 而不是精确的 `==`，这是因为，虽然两个trans可以设定在同一
+时刻发生，但前一个trans被get_next_transaction返回之后，get_next_transaction不一定立马就能被调度从而
+返回相同时刻也需要发生的另一个trans。如果前一个trans使用过程中有延迟，那么等待下次调用get_next_transaction
+的时候，排在前边的trans设置的发生时刻可能早就过去了。在这种情况下，如果不用 `<=` ，而是使用 `==` 就可能发生死循环。
+例如，当前仿真时刻是100ns，trans a和b都要求在未来的10ns，也就是第110ns发生。在110ns的时候，get_next_transaction
+将a返回，但是在处理a的过程中，时间前进了5ns，到了115ns。这时候再次调用get_next_transaction，虽然trans b所设定的时间
+（需要在110ns发生）已经过了（现在已经是115ns）了，但仍然需要将b返回，否则下边减法会得到一个非常大的数，导致仿真不正确。
+从这层意义上来讲，peq_with_get存储的trans不一定精确发生在设定的时刻。
+
++++<del>+++在simple_target_socket实际使用过程中，由于peq_with_get放入trans的调用只发生在使用nonblocking的
+API实现blocking语义的时候，在trans完成之前不会返回，因此往往m_scheduled_events
+中最多存在一个item。+++</del>+++
+simple_target_socket的使用过程中，b_transport可能被多次调用，因而这里的错误是可能发生的。我们需要根据具体情况来分析。
+
+==== Event Management
+[[data::peq_with_get::get_event]]
+
+peq_with_get提供了简单的函数，一个用来返回成员变量 `m_event` 的引用，另一个则
+用来清除信息：
+
+.src/tlm_utils/peq_with_get.h
+[source,cpp]
+----
+  sc_core::sc_event& get_event()
+  {
+    return m_event;
+  }
+
+  // Cancel all events from the event queue
+  void cancel_all() {
+    m_scheduled_events.clear();
+    m_event.cancel();
+  }
+----
+
+=== process_handle_class and process_handle_list
+process_handle_class和process_handle_list是在
+<<impl::b_transport::nb_transport_fw, 使用blocking的b_transport实现nonblocking API>>
+的时候，主要用来为处理每个nonblocking的trans的，这是因为b_transport本身就是个阻塞实现，而
+要实现nonblocking的API，就需要单独起一个thread：
+
+[[data::process_handle_class]]
+.src/tlm_utils/simple_target_socket.h
+[source,cpp]
+----
+    class process_handle_class {
+    public:
+      explicit process_handle_class(transaction_type * trans)
+        : m_trans(trans),m_suspend(false){}
+
+      transaction_type*  m_trans;
+      sc_core::sc_event  m_e;
+      bool m_suspend;
+    };
+----
+
+process_handle_class只是一个用来保存必要信息的类，包括需要传输的trans指针，与之关联的
+event对象，以及一个最重要的，是否suspend的标志。这是因为每个trans其实只需要thread处理一次
+即可，但在实现的时候，总不能为每一个trans都建立一个新的thread，这些thread处理完阻塞后，会
+极大浪费资源，因此又设计了一个 process_handle_list，类似于线程池的概念：
+[[data::process_handle_list]]
+
+.src/tlm_utils/simple_target_socket.h
+[source,cpp]
+----
+    class process_handle_list {
+    public:
+      process_handle_list() {}
+
+      ~process_handle_list() {
+        for( typename std::vector<process_handle_class*>::iterator
+               it=v.begin(), end = v.end(); it != end; ++it )
+          delete *it;
+      }
+
+      process_handle_class* get_handle(transaction_type *trans)
+      {
+        typename std::vector<process_handle_class*>::iterator it;
+
+        for(it = v.begin(); it != v.end(); it++) {
+          if ((*it)->m_suspend) {  // found suspended dynamic process, re-use it
+            (*it)->m_trans   = trans; // replace to new one
+            (*it)->m_suspend = false;
+            return *it;
+          }
+        }
+        return NULL; // no suspended process
+      }
+
+      void put_handle(process_handle_class* ph)
+      {
+        v.push_back(ph);
+      }
+
+    private:
+      std::vector<process_handle_class*> v;
+    };
+----
+
+process_handle_list的get_handle操作，会优先寻找那些已经suspend的thread，复用
+这些thread。如果没有已经suspend的thread，才返回空指针。返回空指针之后，fw_process会
+新建一个<<data::process_handle_class, process_handle_class>>，设定好必要的信息
+后，调用这里的 `put_handle` 函数，放入进去，这样就能在这个新建的process_handle_class完成工作，suspend
+自己之后，复用起来了。
+
+== Nonblocking Transaction Framework
+
+对于<<api::tlm_blocking_transport_if, tlm_blocking_transport_if>，理解起来是比较简单的：发起端
+调用接口函数b_transport，将数据的引用，和一个延时时间的引用传入，等待b_transport返回之后，所需要
+得到的结果就已经放在了数据引用中（传参采用非常量引用的方式，所以接收端可以直接修改参数，用来达到返回数据
+的目的）。b_transport只能由发起端发出，发送到接收端。
+
+但是，<<api::tlm_fw_nonblocking_transport_if, tlm_fw_nonblocking_transport_if>>，以及
+<<api::tlm_bw_nonblocking_transport_if, tlm_bw_nonblocking_transport_if>>，这一对nonblocking的
+协议理解起来可不那么容易了，这里我们再次引用两个接口函数的原型：
+
+.src/tlm_core/tlm_2/tlm_2_interfaces/tlm_fw_bw_ifs.h
+[source,cpp]
+----
+template <typename TRANS = tlm_generic_payload,
+          typename PHASE = tlm_phase>
+class tlm_fw_nonblocking_transport_if : public virtual sc_core::sc_interface {
+public:
+  virtual tlm_sync_enum nb_transport_fw(TRANS& trans,
+                                        PHASE& phase,
+                                        sc_core::sc_time& t) = 0;
+};
+
+template <typename TRANS = tlm_generic_payload,
+          typename PHASE = tlm_phase>
+class tlm_bw_nonblocking_transport_if : public virtual sc_core::sc_interface {
+public:
+  virtual tlm_sync_enum nb_transport_bw(TRANS& trans,
+                                        PHASE& phase,
+                                        sc_core::sc_time& t) = 0;
+};
+----
+
+无论是前向通路，还是后向通路，都涉及到4个数据：3个函数参数，以及一个函数返回值。函数参数的修改，以及函数
+返回值的运用，这些之间存在一定的约束。而这种隐式的约束，就是本部分关心的重点所在了。
+
+首先，我们先了解下<<api::tlm_sync_enum, tlm_sync_enum>>。
+tlm_sync_enum是四个数据类型中，和时间一样，不是模板参数，这意味着目前TLM 2.0
+中是无法修改返回值类型的。实际上也没有必要，因为tlm_sync_enum的定义已经足够了。tlm_sync_enum定义了3个状态，
+分别是ACCEPTED, UPDATED和COMPLETED。无论是前向通路，还是反向通路，返回的tlm_sync_enum都暗含了对函数
+参数的约束。例如，当返回ACCEPTED的时候，被调用方不应该修改任何一个函数的入参。又例如，*只有当返回UPDATED的时候，
+调用后的phase参数才有意义*。诸如此类。
+
+.tlm_sync_enum的含义，参考TLM LRM, section 4.1.2.8
+[cols="4*"]
+|===
+| tlm_sync_enum | Transaction Object | Phase on return | Timing annotation on return
+
+| TLM_ACCEPTED
+| Unmodified
+| Unchanged
+| Unchanged
+
+| TLM_UPDATED
+| Updated
+| Changed
+| May be increased
+
+| TLM_COMPLETED
+| Updated
+| Ignored
+| May be increased
+|===
+
+具体来说，当fw/bw的nonblocking返回的时候，如果返回值是
+
+* TLM_ACCEPTED
+  - 参数trans不应该被修改
+  - 参数phase不应该被修改
+  - 参数t不应该被修改
+* TLM_UPDATED
+  - 参数trans被修改，来返回必要的信息
+  - 参数phase被修改，指示之后的phase
+  - 参数t可能被增加
+* TLM_COMPLETED
+  - 参数trans被修改，返回必要的信息
+  - 参数phase是否被修改已经没有意义，因为返回TLM_COMPLTED标志着一次transaction完全结束，不需要指示下一个phase
+  - 参数t可能被增加

@@ -3,7 +3,7 @@
 :toc: left
 
 SystemC中的TLM 1.0 组件
-[[chap::tlm_sockets]]
+[[chap::tlm_1_0]]
 
 == 引言
 
