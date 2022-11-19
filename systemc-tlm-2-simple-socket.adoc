@@ -108,12 +108,126 @@ simple socket，是最简单类型的一种socket。simple socket包括initiator
 
 在TLM 1.0中，
 一个精心设计的类<<tlm::1::tlm_fifo, tlm_fifo>>实现了接口函数的定义。与此同时，tlm_fifo也是
-一个primitive channel，这就保证了仿真的正确性。TLM 2.0设计时采用了截然不同的思路，所需要
-实现的接口函数全部由回调函数完成，而simple socket的设计则只是提供注册回调函数的API调用，持有
+一个primitive channel，这就保证了仿真的正确性。TLM 2.0设计时采用了截然不同的思路，没有FIFO之类
+保证primitive channel的同步原语，而是采用了定义接口函数，并提供延时的方式（延时至少是SC_ZERO_time），
+完成同步的目的。
+
+而对于simple socket，则在内部实现了继承有<<data::tlm_fw_transport_if, tlm_fw_transport_if>>
+和<<data::tlm_bw_transport_if, tlm_bw_transport_if>>的对象，提供了相应接口函数的实现。这些接口函数内部仍然
+需要回调函数来完成实际的工作，而simple socket的设计则只是提供注册回调函数的API调用，持有
 回调函数的指针（一般回调函数是成员函数，所以这里需要模板类），然后完成一些必要的转换，例如，对于实现了
 non-blocking语义的回调函数，如果调用blocking语义的API，则需要使用non-blocking来实现blocking，反之亦然。
+这样一来，使用simple socket的时候，无需定义继承tlm_fw_transport_if/tlm_bw_transport_if的类来绑定到
+socket上，只需要注册回调函数即可。
 
-=== simple_socket_base
+---
+
+simple_initiator_socket需要和相匹配的simple_target_socket配对使用。所谓的配对使用，指的是
+一个simple_initiator_socket需要绑定到相对应的simple_target_socket上。这样绑定达到的
+目的就是，无论是simple_initiator_socket，还是simple_target_socket，所有的port和export
+都得到了绑定，并且所需要实现的接口函数也都得到了实现。
+
+simple_initiator_socket和simple_target_socket的目的也在于此。只需要将两个socket绑定，接口函数
+就可以实现了。而这些实现了的接口函数，其内部实际调用的是需要进一步进行注册的回调函数，只不过如果在
+运行时某些接口函数如果从未用过，则无需注册。如果不使用simple_initiator_socket/simple_target_socket
+对，而是直接使用tlm_initiator_socket和tlm_target_socket对，那么即使是从未使用过的接口函数，也需要
+实现一下，否则会出现编译期错误。
+
+---
+
+一个例子来自https://www.cnblogs.com/cngpus/p/13175947.html：
+
+[source,cpp]
+----
+#include "systemc.h"
+#include "tlm.h"
+#include "tlm_utils/simple_initiator_socket.h"
+#include "tlm_utils/simple_target_socket.h"
+
+class A : public sc_module {
+public:
+    SC_HAS_PROCESS(A);
+
+    A(sc_module_name name) : sc_module(name) {
+        SC_THREAD(hello);
+    }
+
+public:
+    tlm_utils::simple_initiator_socket<A> socket;
+
+private:
+    void
+    hello() {
+        auto *payload = new tlm::tlm_generic_payload();
+        assert(payload != nullptr);
+
+        const char *data{"Hello"};
+        payload->set_data_ptr((unsigned char *) data);
+
+        sc_time delay = SC_ZERO_TIME;
+
+        socket->b_transport(*payload, delay);
+
+        delete payload;
+    }
+};
+
+class B : public sc_module {
+public:
+    SC_HAS_PROCESS(B);
+
+    B(sc_module_name name) : sc_module(name) {
+        socket.register_b_transport(this, &B::hello);
+    }
+
+public:
+    tlm_utils::simple_target_socket<B> socket;
+
+private:
+    void
+    hello(tlm::tlm_generic_payload  &payload, sc_core::sc_time &delay_time) {
+        const char *data = reinterpret_cast<const char *>(payload.get_data_ptr());
+        std::cout << data << std::endl;
+    }
+};
+
+int
+sc_main(int argc, char* argv[]) {
+    A a("A");
+    B b("B");
+
+    a.socket(b.socket);
+
+    sc_start(10, SC_NS);
+
+    return EXIT_SUCCESS;
+}
+----
+
+从这里我们也可以看出，模块内部使用simple_initiator_socket和simple_target_socket直接做绑定，
+然后模块 B只需要注册 `b_transport` 的回调函数，整个程序就可以运行起来。这个过程中，并不需要注册
+任何nonblocking的回调函数，或者注册dmi/dbg的回调函数，因为实际运行时并没有使用这些回调函数。
+simple_initiator_socket和simple_target_socket已经在内部实现了这些需要实现的接口函数，并将
+在调用的时候调用注册的回调函数。相比于tlm_initiator_socket和tlm_target_socket，这无疑得到了
+极大的简化，这也是名字里simple的由来了。
+
+另一个值得注意的点则是，拥有 `simple_target_socket` 的类B才能使用 register_b_transport，注册
+b_transport的回调函数。然而，b_transport是一个FW_IF的接口函数，调用方向应当从initiator socket
+到target socket。这里之所以是拥有simple_target_socket的类注册回调函数，是因为拥有
+simple_initiator_socket的A，其内部simple_initiator_socket，作为一个 `sc_port<FW_IF>`, 绑定
+到作为 `sc_export<FW_IF>` 的simple_target_socket之后，simple_target_socket作为一个FW_IF，已经
+将自己绑定到内部的 <<data::simple_target_socket_b::fw_process, fw_process>> 上，
+实现了b_transport函数。只不过这个实现的b_transport函数，和其他的
+FW_IF的接口函数一样，都需要调用注册的回调函数而已。当simple_target_socket注册了FW_IF的接口函数之后，从
+simple_initiator_socket调用这些FW_IF的接口函数，其表现就如同直接调用这些注册了的回调函数
+一样。即，A在thread `hello` 中调用 `socket->b_transport`，其效果
+和直接调用 B注册的回调函数 `hello` 一样，这就是socket的含义所在了。
+
+从这里，我们也能理解，为何注册BW_IF类型回调函数的是simple_initiator_socket，而
+注册FW_IF类型回调函数的反而是simple_target_socket。
+
+
+== simple_socket_base
 
 simple_socket_base直接继承自convenience_socket_base，且只实现了一个接口函数
 get_report_type，所以simple_socket_base还是一个抽象虚基类：
@@ -161,7 +275,7 @@ simple_socket_base::elaboration_check(const char* action) const
 在elaboration done之后调用，则没有其他作用。这个函数主要是为了确保一些执行过程需要在elaboration
 done之前发生。
 
-=== simple_initiator_socket
+== simple_initiator_socket
 
 simple_initiator_socket包括一系列sockets定义，同样有着一套复杂的继承关系：
 
@@ -176,7 +290,7 @@ simple_initiator_socket包括一系列sockets定义，同样有着一套复杂�
 
 我们将按照继承体系的顺序，逐步探索这些类的实现细节。
 
-==== simple_initiator_socket_b::process
+=== simple_initiator_socket_b::process
 
 simple_initiator_socket_b::process是定义在simple_initiator_socket_b模板类
 内部的一个辅助的模板类。process直接继承自<<api::tlm_bw_transport_if, tlm_bw_transport_if>>
@@ -281,7 +395,7 @@ MODULE的指针，以及两个成员函数指针均为空。这三个成员变�
 总结一下，simple_initiator_socket_b::process，就是一个使用回调函数机制，实现了
 <<api::tlm_bw_transport_if, tlm_bw_transport_if>>的模板类。
 
-==== simple_initiator_socket_b
+=== simple_initiator_socket_b
 
 simple_initiator_socket_b是一个模板类，需要4个模板参数:
 
@@ -396,7 +510,7 @@ get_base_interface/get_base_export所返回的BW_IF指针或者sc_export<BW_IF>�
 函数实际保存在simple_initiator_socket_b唯一的成员变量m_process中，实际上是保存了
 一个对象（对象的类型就是simple_initiator_socket_b的第一个模板参数）的指针和两个成员函数指针。
 
-==== simple_initiator_socket
+=== simple_initiator_socket
 
 simple_initiator_socket的实现非常简单，直接继承自<<data::simple_initiator_socket_b, simple_initiator_socket_b>>。
 对于基类simple_initiator_socket_b，提供了可选的模板参数BUSWIDTH和TYPES，这样POL模板参数就使用了
@@ -419,7 +533,7 @@ public:
 };
 ----
 
-==== simple_initiator_socket_optional
+=== simple_initiator_socket_optional
 
 simple_initiator_socket_optional的实现和simple_initiator_socket一样，也非常简单，直接继承
 自simple_initiator_socket_b，提供了可选的模板参数BUSWIDTH和TYPES。而在基类继承的时候，为模板
@@ -442,7 +556,7 @@ public:
 };
 ----
 
-==== simple_initiator_socket_tagged_b::process
+=== simple_initiator_socket_tagged_b::process
 
 simple_initiator_socket_tagged_b内部有一个类process，实现了和
 <<data::simple_initiator_socket_b::process, simple_initiator_socket_b中的process类>>
@@ -556,7 +670,7 @@ process类同样继承自<<api::tlm_bw_transport_if, tlm_bw_transport_if>>和
 和
 <<data::simple_initiator_socket_tagged_b::register_invalidate_direct_mem_ptr, simple_initiator_socket_tagged_b的register_invalidate_direct_mem_ptr>>
 
-==== simple_initiator_socket_tagged_b
+=== simple_initiator_socket_tagged_b
 
 simple_initiator_socket_tagged_b，是实现带tagged功能的simple initiator socket的基础。
 这个所谓的tag，实际上就是在
@@ -644,7 +758,7 @@ simple_initiator_socket_tagged_b的构造非常简单：
 只是需要注意，register_nb_transport_bw和register_invalidate_direct_mem_ptr在调用的时候就需要
 提供一个 `int` 型的数据，来设置m_process中的相应的值。这个值就是所谓的tagged了。
 
-==== simple_initiator_socket_tagged
+=== simple_initiator_socket_tagged
 
 simple_initiator_socket_tagged和
 <<data::simple_initiator_socket_tagged_b, simple_initiator_socket_tagged_b>>的关系，就和
@@ -670,7 +784,7 @@ public:
 <1> 这里并没有指定POL，意味着使用<<data::simple_initiator_socket_tagged_b, simple_initiator_socket_tagged_b>>
 默认的POL模板参数值 `sc_core::SC_ONE_OR_MORE_BOUND`
 
-==== simple_initiator_socket_tagged_optional
+=== simple_initiator_socket_tagged_optional
 
 simple_initiator_socket_tagged_optional和
 <<data::simple_initiator_socket_tagged_b, simple_initiator_socket_tagged_b>>的关系，就和
@@ -714,7 +828,7 @@ simple initiator socket在使用的时候需要绑定到FW_IF上，但不再需�
 BW_IF接口函数的类不属于SystemC的对象体系，也可以通过注册回调函数的方式，参与到TLM中来，极大
 扩展了SystemC的适用范围。
 
-=== simple_target_socket
+== simple_target_socket
 
 simple_target_socket，类似于simple_initiator_socket，同样由多种类型的socket组成：
 
@@ -733,7 +847,7 @@ target socker而言，其内部需要实现BW_IF的功能。BW_IF有4个接口�
 和 `b_transport` 之间的相互实现，即如果回调函数注册了nonblocking版本，如何使用nonblocking版本实现blocking版本，以及反过来，
 回调函数只注册了blocking版本，如何实现nonblocking版本。
 
-==== simple_target_socket_b::bw_process
+=== simple_target_socket_b::bw_process
 
 bw_process是定义在模板类型simple_target_socket_b中的一个辅助类，用来处理后向通路的调用：
 
@@ -829,7 +943,7 @@ bw_process实现tlm_bw_transport_if的接口函数invalidate_direct_mem_ptr的
 <<data::fw_process::end_event, fw_process使用nonblocking实现blocking的事件等待部分>>的blocking请求就结束，然后将这个trans从
 `m_owner->m_pending_trans` 中移除。之后直接返回TLM_COMPLTED即可，不再需要返回一个TLM_UPDATED/TLM_ACCEPTED，继续END_RESP阶段。
 
-==== simple_target_socket_b::fw_process
+=== simple_target_socket_b::fw_process
 
 fw_process同样是定义在simple_target_socket_b内部的辅助类。fw_process直接继承自
 <<api::tlm_fw_transport_if, tlm_fw_transport_if>>，同时也继承自 <<api::tlm_mm_interface, tlm_mm_interface>>：
@@ -993,7 +1107,7 @@ simple target socket就需要使用实现了的回调函数来实现相应的API
 * 注册了non-blocking的API，但没有注册blocking的API，那么就需要使用nb_transport_fw实现b_transport
 * 注册了blocking的API，但没有注册non-blocking的API，那么就需要使用b_transport时限nb_transport_fw
 
-===== nb_transport_fw实现b_transport
+==== nb_transport_fw实现b_transport
 [[impl::nb_transport_fw::b_transport]]
 
 在fw_process的实现b_transport的时候，如果发现b_transport的回调函数没有实现，但是实现了nb_transport_fw，那么就需要使用如下代码了：
@@ -1255,7 +1369,7 @@ PHASE是BEGIN_RESP，由<<bw_process::b2nb_thread::begin_resp, bw_process里的b
 这里同样按照流程，在 `m_owner->m_pending_trans` 中查找对象，notify对应的event，然后从中移除这个已经完成的
 trans对象。
 
-===== b_transport实现nb_transport_fw
+==== b_transport实现nb_transport_fw
 [[impl::b_transport::nb_transport_fw]]
 
 在fw_process的实现nb_transport_f的时候，如果发现nb_transport_f的回调函数没有实现，但是实现了b_transport，那么就需要使用如下代码了：
@@ -1387,7 +1501,7 @@ TODO: 这部分内容还需要在看几遍
         }
 ----
 
-==== simple_target_socket_b
+=== simple_target_socket_b
 
 simple_target_socket_b有两个基类，一个是<<api::tlm_target_socket, tlm_target_socket>>，
 另一个则是simple_socket_base，后者主要为了实现display_warning和display_error信息。
@@ -1551,7 +1665,7 @@ simple_target_socket_b自己作为一个tlm_target_socket，在构造函数中�
 没有被调用，那么就无需定义回调函数。对于nb_transport_fw和b_transport，则只需要实现其中一个，另一个
 simple_target_socket会自行实现（如果nb_transport_fw实现，那么所绑定的initiator socket侧必须同时实现nb_transport_bw）。
 
-==== simple_target_socket
+=== simple_target_socket
 
 如同<<data::simple_initiator_socket, simple_initiator_socket>>的实现一样，
 simple_target_socket直接继承自 <<data::simple_target_socket_b, simple_target_socket_b>>，主要
@@ -1575,7 +1689,7 @@ public:
 };
 ----
 
-==== simple_target_socket_optional
+=== simple_target_socket_optional
 
 与<<data::simple_initiator_socket_optional, simple_initiator_socket_optional>>一样，
 simple_target_socket_optional继承
@@ -1598,7 +1712,7 @@ public:
 };
 ----
 
-==== simple_target_socket_tagged_b
+=== simple_target_socket_tagged_b
 
 带tagged版本的simle_target_socket_tagged_b，其实现和
 <<data::simple_target_socket_b, simple_target_socket_b>>基本一样，唯一的区别在于，注册的回调函数
@@ -1674,7 +1788,7 @@ class simple_target_socket_tagged_b
 ----
 <1> 四个回调函数指针的原型，相比于FW_if，都增加了一个额外的整型参数，这就是所谓的tagged
 
-==== simple_target_socket_tagged
+=== simple_target_socket_tagged
 
 simple_target_socket_tagged与
 <<data::simple_target_socket_tagged_b, simple_target_socket_tagged_b>>
@@ -1706,7 +1820,7 @@ simple_target_socket_tagged_optional与
 的关系，就和
 <<data::simple_target_socket_optional, simple_target_socket_optional>>
 与<<data::simple_target_socket_b, simple_target_socket_b>>的关系一样，特化了
-模板的参数：
+模板的参数，指定绑定的POL是SC_ZERO_OR_MORE_BOUND:
 
 [[data::simple_target_socket_tagged_optional]]
 .src/tlm_utils/simple_target_socket.h
@@ -1724,110 +1838,6 @@ public:
 };
 
 ----
-
-== simple_initiator_socket and simple_target_socket
-
-simple_initiator_socket需要和相匹配的simple_target_socket配对使用。所谓的配对使用，指的是
-一个simple_initiator_socket需要绑定到相对应的simple_target_socket上。这样绑定达到的
-目的就是，无论是simple_initiator_socket，还是simple_target_socket，所有的port和export
-都得到了绑定，并且所需要实现的接口函数也都得到了实现。
-
-simple_initiator_socket和simple_target_socket的目的也在于此。只需要将两个socket绑定，接口函数
-就可以实现了。而这些实现了的接口函数，其内部实际调用的是需要进一步进行注册的回调函数，只不过如果在
-运行时某些接口函数如果从未用过，则无需注册。如果不使用simple_initiator_socket/simple_target_socket
-对，而是直接使用tlm_initiator_socket和tlm_target_socket对，那么即使是从未使用过的接口函数，也需要
-实现一下，否则会出现编译期错误。
-
-一个例子来自https://www.cnblogs.com/cngpus/p/13175947.html：
-
-[source,cpp]
-----
-#include "systemc.h"
-#include "tlm.h"
-#include "tlm_utils/simple_initiator_socket.h"
-#include "tlm_utils/simple_target_socket.h"
-
-class A : public sc_module {
-public:
-    SC_HAS_PROCESS(A);
-
-    A(sc_module_name name) : sc_module(name) {
-        SC_THREAD(hello);
-    }
-
-public:
-    tlm_utils::simple_initiator_socket<A> socket;
-
-private:
-    void
-    hello() {
-        auto *payload = new tlm::tlm_generic_payload();
-        assert(payload != nullptr);
-
-        const char *data{"Hello"};
-        payload->set_data_ptr((unsigned char *) data);
-
-        sc_time delay = SC_ZERO_TIME;
-
-        socket->b_transport(*payload, delay);
-
-        delete payload;
-    }
-};
-
-class B : public sc_module {
-public:
-    SC_HAS_PROCESS(B);
-
-    B(sc_module_name name) : sc_module(name) {
-        socket.register_b_transport(this, &B::hello);
-    }
-
-public:
-    tlm_utils::simple_target_socket<B> socket;
-
-private:
-    void
-    hello(tlm::tlm_generic_payload  &payload, sc_core::sc_time &delay_time) {
-        const char *data = reinterpret_cast<const char *>(payload.get_data_ptr());
-        std::cout << data << std::endl;
-    }
-};
-
-int
-sc_main(int argc, char* argv[]) {
-    A a("A");
-    B b("B");
-
-    a.socket(b.socket);
-
-    sc_start(10, SC_NS);
-
-    return EXIT_SUCCESS;
-}
-----
-
-从这里我们也可以看出，模块内部使用simple_initiator_socket和simple_target_socket直接做绑定，
-然后模块 B只需要注册 `b_transport` 的回调函数，整个程序就可以运行起来。这个过程中，并不需要注册
-任何nonblocking的回调函数，或者注册dmi/dbg的回调函数，因为实际运行时并没有使用这些回调函数。
-simple_initiator_socket和simple_target_socket已经在内部实现了这些需要实现的接口函数，并将
-在调用的时候调用注册的回调函数。相比于tlm_initiator_socket和tlm_target_socket，这无疑得到了
-极大的简化，这也是名字里simple的由来了。
-
-另一个值得注意的点则是，拥有 `simple_target_socket` 的类B才能使用 register_b_transport，注册
-b_transport的回调函数。然而，b_transport是一个FW_IF的接口函数，调用方向应当从initiator socket
-到target socket。这里之所以是拥有simple_target_socket的类注册回调函数，是因为拥有
-simple_initiator_socket的A，其内部simple_initiator_socket，作为一个 `sc_port<FW_IF>`, 绑定
-到作为 `sc_export<FW_IF>` 的simple_target_socket之后，simple_target_socket作为一个FW_IF，已经
-将自己绑定到内部的 <<data::simple_target_socket_b::fw_process, fw_process>> 上，
-实现了b_transport函数。只不过这个实现的b_transport函数，和其他的
-FW_IF的接口函数一样，都需要调用注册的回调函数而已。当simple_target_socket注册了FW_IF的接口函数之后，从
-simple_initiator_socket调用这些FW_IF的接口函数，其表现就如同直接调用这些注册了的回调函数
-一样。即，A在thread `hello` 中调用 `socket->b_transport`，其效果
-和直接调用 B注册的回调函数 `hello` 一样，这就是socket的含义所在了。
-
-从这里，我们也能理解，为何注册BW_IF类型回调函数的是simple_initiator_socket，而
-注册FW_IF类型回调函数的反而是simple_target_socket。
 
 == Misc Data Struction
 

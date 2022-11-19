@@ -1,0 +1,7 @@
+:source-highlighter: coderay
+
+:toc: left
+
+SystemC硬件数据类型
+
+== 引言
