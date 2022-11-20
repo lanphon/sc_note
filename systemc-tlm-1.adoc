@@ -1571,7 +1571,9 @@ public:
 
 == TLM 1.0 Analysis
 
-TLM 1.0的Analysis部分是一系列小的interface, fifo的组合，主要用来做辅助性的功能。
+TLM 1.0的Analysis部分是一系列小的interface以及fifo的组合，主要用来做辅助性的功能。
+
+相比于TLM 1.0其他的interface, analysis支持多绑定。
 
 === tlm_write_if and tlm_delayed_write_if
 [[tlm::1::tlm_write_if]]
@@ -1608,6 +1610,7 @@ public:
 设定的延迟时间而已。
 
 === tlm_analysis_if and tlm_delayed_analysis_if
+
 [[tlm::1::tlm_analysis_if]]
 [[tlm::1::tlm_delayed_analysis_if]]
 tlm_analysis_if是<<tlm::1::tlm_write_if, tlm_write_if>>的别名（基本上，因为直接继承，没有改写任何方法，也没增加
@@ -1712,6 +1715,8 @@ tlm_analysis_fifo的构造函数比较奇特：
 注意tlm_analysis_fifo构造的时候，调用父类<<tlm::1::tlm_fifo, tlm_fifo>>的构造函数，传入的参数是一个
 负的16，而不是正数。这个原因我们稍后解释。
 
+NOTE: 从tlm_fifo的实现来看，负值和正值似乎没有区别，都是使用了绝对值来初始化tlm_fifo中内建的circular buffer。
+
 对应的接口函数实现还是比较简单的，直接调用基类tlm_fifo的nb_put方法即可：
 
 .src/tlm_core/tlm_1/tlm_analysis/tlm_analysis_fifo.h
@@ -1777,12 +1782,13 @@ tlm_analysis_port虽然不是一个真正的sc_port，但同样提供了和sc_po
 .src/tlm_core/tlm_1/tlm_analysis/tlm_analysis_port.h
 [source,cpp]
 ----
-  virtual void bind( tlm_analysis_if<T> &_if ) {
+  virtual void bind( tlm_analysis_if<T> &_if ) { <1>
     m_interfaces.push_back( &_if );
   }
 
   void operator() ( tlm_analysis_if<T> &_if ) { bind( _if ); }
 ----
+<1> 虽然bind函数声明为virtual，但由于tlm_analysis_port并没有继承自sc_port/sc_export，所以这个bind的virtual没有override任何基类的方法
 
 这两种形式的绑定函数实际上只是将需要绑定的interface保存到成员变量 `m_interfaces` 内而已。
 
@@ -1810,8 +1816,9 @@ tlm_1/tlm_analysis/tlm_analysis_port.h
 解绑定实际上就是从dequeue中寻找所需要解绑定的interface，然后去除掉而已。注意unbind函数是一个虚函数，这意味着继承了
 tlm_analysis_port的子类可以按需重新实现unbind。
 
-NOTE: 为何tlm_analysis_port名字里带有port，实际上却实现为 tlm_analysis_if的子类呢？原因目前还不知晓，后续等明晰了相关设计细节
-后再进行补充。
+NOTE: 为何tlm_analysis_port名字里带有port，实际上却实现为 tlm_analysis_if的子类呢？这是为了方便使用analysis port
+绑定到相关interface上，然后输出做analysis。tlm_analysis_port使用简单的代码，就可以实现绑定任意数目（包括0个）interface
+的功能，并在API write处广播所有的write请求。这对于需要实现analysis功能是非常有用的。
 
 == TLM 1.0的思考
 

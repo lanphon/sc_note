@@ -478,3 +478,5 @@ public:
   explicit passthrough_target_socket_tagged_optional(const char* name) : socket_b(name) {}
 };
 ----
+
+== multi sockets

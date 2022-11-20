@@ -2,52 +2,78 @@
 
 = SystemC Code Review
 XinzhaoZhu <xinzhao_zhu@163.com>
-v0.9, 2022-11-17
+v0.9, 2022-11-20
 
 :doc_root: .
 :imagesdir: {doc_root}
 
+:toc: left
+
+= Preface
 
 Here is a SystemC code review.
 
 
+= SystemC quick thread
 include::{doc_root}/systemc-quickthread.adoc[]
 
+= SystemC Schedule Model
 include::{doc_root}/systemc-schedule-model.adoc[]
 
+= Coroutine in SystemC
 include::{doc_root}/systemc-coroutine.adoc[]
 
+= Event
 include::{doc_root}/systemc-event.adoc[]
 
+= Process
 include::{doc_root}/systemc-process.adoc[]
 
+= Primitive Channel
 include::{doc_root}/systemc-primitive-channel.adoc[]
 
+= Port
 include::{doc_root}/systemc-port.adoc[]
 
+= Sensitive
 include::{doc_root}/systemc-sensitive.adoc[]
 
 
+= SystemC Misc Part
 include::{doc_root}/systemc-misc.adoc[]
 
+= SystemC Trace
+// trace部分未完待续
 include::{doc_root}/systemc-trace.adoc[]
 
+= SystemC Synthesis Part
+// synthesis部分未完待续，这部分后续挪一下位置，放到最后，TLM之后，不知道TLM中是否有可综合部分
 include::{doc_root}/systemc-synthesis.adoc[]
 
+= SystemC Data type
+// datatype部分需要review，这部分内容较多，后续考虑分成三到四章
 include::{doc_root}/systemc-datatype.adoc[]
 
+= Rethink of SystemC
 include::{doc_root}/systemc-rethink.adoc[]
 
+= Interface, Port and Export
 include::{doc_root}/systemc-interface-port-export.adoc[]
 
 
 
+= TLM 1.0
 include::{doc_root}/systemc-tlm-1.adoc[]
 
+= TLM 2.0 Introduction
 include::{doc_root}/systemc-tlm-2-intro.adoc[]
 
+= TLM 2.0 Simple Sockets
 include::{doc_root}/systemc-tlm-2-simple-socket.adoc[]
 
+= TLM 2.0 Other Sockets
 include::{doc_root}/systemc-tlm-2-other-sockets.adoc[]
 
+= TLM 2.0 Misc
+// misc部分未完待续
 include::{doc_root}/systemc-tlm-2-misc.adoc[]

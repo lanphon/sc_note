@@ -209,14 +209,17 @@ port可以绑定到port。这个我们之前介绍过，绑定时只是将被绑
 这个时候所有的绑定工作已经结束），替换原先被绑定的port的位置。所以port绑定到port，最终得到的结果
 仍然是port获取了一系列指向interface的指针。
 
-port可以绑定到interface上。这是port最初的用法。
+port可以绑定到interface上。这是port最初的用法。port绑定到一个interface上之后，还可以根据策略，选择
+绑定到其他的interface上。
 
 port可以绑定到export上。
 
-export可以绑定到interface上。
+export可以绑定到interface上。当export绑定到interface，则视为此export已经持有一个interface的指针，那么这个
+export已经完成了绑定，后续export不能再绑定到其他的同类型interface上。
 
 export可以绑定到export上（前提是，被绑定的export已经绑定了interface）。这时候，实际上是将被绑定的
-export默认转成一个interface，然后export再绑定到这个interface上。
+export默认转成一个interface，然后export再绑定到这个interface上。和export直接绑定到interface上一样，
+这种绑定之后，export视为已经完成绑定。
 
 interface只能被绑定，而无法去绑定任何其他接口。
 

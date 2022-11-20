@@ -2297,7 +2297,11 @@ tlm_global_quantum::compute_local_quantum()
 等内容。这些构成了TLM 2.0部分的互操作性部分。
 
 相比于TLM 1.0，TLM 2.0的设计采取了更加复杂的协议。Interface传递的数据可以被下游修改，从而实现需要的功能。延时时间参数的加入，也使得TLM 2.0
-相比TLM 1.0，更加接近transaction level的概念。
+相比TLM 1.0，更加接近transaction level的概念。延时时间参数的加入，也使得TLM 2.0相比于TLM 1.0，摆脱了对primitive channel的束缚。在TLM 1.0中，
+由于没有延时时间的概念，因此即使是同样基于API的接口，仍然需要依靠tlm_fifo这个primitive channel，保证在一个delta cycle内不会出现race condition。
+在TLM 2.0，所有的API函数都需要携带一个延时参数，最小值是SC_ZERO_TIME，这就使得相应的函数至少在delta cycle之间得到不同的调度，从而保证
+不会出现race condition。所以我们可以看到，TLM 2.0中完全没有实现了接口函数的primitive channel，纯粹依靠注册回调函数就能够完成需要的功能，这
+在TLM 1.0时代是不允许的。
 
 TLM 2.0的接口函数一共有6个，具体而言，分为四组：
 

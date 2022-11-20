@@ -1173,6 +1173,7 @@ sc_thread_process::wait_cycles( int n )
 
 1. 调用 `suspend_me` 时候，调用方被调度出去，让渡出CPU执行权
 2. 当调用方被再次调度时候，执行会从 `suspend_me` 返回
+
 `suspend_me` 是实现阻塞式调用的核心所在，我们在后续部分会具体分析这个函数的实现机制。
 
 ====

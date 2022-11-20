@@ -622,9 +622,8 @@ sc_signal_t<T,POL>::do_update()
 <3> 这里完成了赋值动作
 
 如果EVALUATE阶段最终设置下来的 `m_new_val` footnote:[因为EVALUATE阶段可能会多次赋值]
-和当前值不同，那么就调用 `base_type::do_update()` ，也就是 `sc_signal_channel::do_update()`
+和当前值不同，那么就调用 `base_type::do_update()` ，也就是 `sc_signal_channel::do_update()` ：
 
-[[api::sc_signal_channel::do_update]]
 .src/sysc/communication/sc_signal.cpp
 [source,cpp]
 ----

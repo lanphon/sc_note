@@ -1032,7 +1032,6 @@ wait( sc_simcontext* simc )
 
 对于Thread/Cthread而言，wait_cycles只是将所设定的数 `n` 减一之后赋给 `m_wait_cycle_n`
 成员变量，然后调用 <<api::sc_thread_process::suspend_me, `suspend_me`> 让渡出执行权。
-[[api::sc_thread_process::wait_cycles]]
 
 .src/sysc/kernel/sc_thread_process.h
 [source,cpp]

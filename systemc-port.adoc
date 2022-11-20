@@ -1048,6 +1048,25 @@ sc_export，模板参数是sc_interface类（类似于sc_port）。PB内部的sc
 即可。对于PA而言，PB暴露出来的只是一个sc_export接口而已，PA可以将自己的PA绑定到这个
 暴露出来的sc_export上。
 
+[NOTE]
+====
+sc_interface，从概念上，实际上实现了两个约束：interface，和impl。所谓的interface，指的是使用此sc_interface
+可以用的接口函数。例如，如果一个 `sc_port<IF>`，那么就能使用IF所提供的接口函数。另一方面，继承自sc_interface
+的类必须要实现了接口函数的功能，才能够得到使用。如果没有实现接口函数的功能，则还需要进一步继承和实现，否则是无法
+通过编译的。
+
+sc_export的好处则是，方便代替sc_interface的interface能力，建模接口的概念。例如，在TLM 2.0中，就广泛使用
+sc_export，作为sc_interface概念上的替代。如果在TLM 2.0中直接使用sc_interface，那么对应的组件就必须
+实现相关的接口函数（或者至少要声明接口函数）。使用sc_export，就表明这里需要一个sc_interface，但可以在
+别处实现，从而在概念上将sc_interface中的interface-impl解耦开。sc_export表明其中的interface部分，而
+sc_interface则专注于impl部分。
+
+由于sc_export主要是替代实现了interface的接口能力，因此，仿真开始之前sc_export必须被绑定到某个interface上，
+并且只能绑定到一个interface上。这也是sc_export和sc_port的区别所在：sc_port可以不绑定任何interface，也可以
+绑定多个interface，完全根据需要而来。而sc_export则是sc_interface的接口能力的提现，必须要具体绑定到一个精确
+的sc_interface上才可以。
+====
+
 [[api::sc_export::operator_IF]]
 sc_export<IF>模板类提供了隐式转换功能，可以将自己转成一个 `IF&` 或者 `const IF&`
 

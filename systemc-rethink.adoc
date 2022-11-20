@@ -127,3 +127,5 @@ primitive channel的隔绝，主要是在一个delta cycle内，对所有的线�
 * 时钟精确的模型，Approximate Timed, AT Model
 * 松散时间的模型，Loose Timed, LT Model
 * 无时间的模型，Untimed, UT Model
+
+SystemC中的时间，是配合着event使用的。没有event与之关联的时间，是无法SystemC中使用的。
