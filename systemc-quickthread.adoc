@@ -7,7 +7,7 @@ Systemc中的QuickThread，协程原理与实现
 
 == 引言
 
-在硬件设计中，systemc作为一个高层次的仿真，甚至综合的语言，一直有着广泛的应用。
+在硬件设计中，systemC作为一个高层次的仿真，甚至综合的语言，一直有着广泛的应用。
 与verilog/vhdl/systemverilog不同，systemc并不是一门新的语言，而是依托于{CPP}语言的一个{CPP}库。
 这也意味着，对于硬件设计工程师而言，使用systemc建模做仿真并不需要专业的EDA工具支持，
 只需要有一个编译器即可。当然，如果需要用到systemc更多的功能，诸如可综合部分来设计硬件，
@@ -15,7 +15,7 @@ Systemc中的QuickThread，协程原理与实现
 
 SystemC作为一个CPP的库，内置了一个仿真器。我一直对systemc如何支持并行仿真非常感兴趣，
 近期有空，也看了一些systemc的代码。systemc的设计非常复杂和精妙，这里我们只关注其中的一部分，
-即quickthread部分，systemc中管这个叫qt。这个qt可不是诺基亚那个QT啊。
+即quickthread部分，systemc中管这个叫qt。
 
 SystemC的仿真器使用quickthread，来支持协程(coroutine)。所以，这个名字里带thread的库，
 实际上更准确的说法是一个协程库。通过quickthread，systemc具备了协程的能力，这样就可以在一个

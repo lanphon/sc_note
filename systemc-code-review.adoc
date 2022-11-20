@@ -40,6 +40,8 @@ include::{doc_root}/systemc-rethink.adoc[]
 
 include::{doc_root}/systemc-interface-port-export.adoc[]
 
+
+
 include::{doc_root}/systemc-tlm-1.adoc[]
 
 include::{doc_root}/systemc-tlm-2-intro.adoc[]
@@ -47,3 +49,5 @@ include::{doc_root}/systemc-tlm-2-intro.adoc[]
 include::{doc_root}/systemc-tlm-2-simple-socket.adoc[]
 
 include::{doc_root}/systemc-tlm-2-other-sockets.adoc[]
+
+include::{doc_root}/systemc-tlm-2-misc.adoc[]

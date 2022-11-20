@@ -15,7 +15,7 @@ TLM的组织框图如下所示：
 .TLM结构，来源自TLM LRM文档
 image::tlm_framework.png[]
 
-受限我们主要介绍TLM 2.0.6版本中的interoperability layer（互操作层）部分。
+首先我们主要介绍TLM 2.0.6版本中的interoperability layer（互操作层）部分。
 在本部分的末尾，我们从tlm中的socket概念入手，逐渐探索TLM 2.0的实现机制，并在下一部分内容中，单独讨论TLM 2.0关于
 socket实现的更多的细节和功能。
 
@@ -2313,4 +2313,12 @@ TLM 2.0的接口函数一共有6个，具体而言，分为四组：
 协议之间的转换就成为一个非常棘手的问题。关于这部分的讨论，我们留到了下一部分，在simple socket的时候，TLM 2.0已经提供了两种协议之间相互
 转换的一个框架方案。
 
+TLM 2.0比TLM 1.0，更加通用，传输的数据结构默认为 tlm_generic_payload，这就使得非常方便基于TLM 2.0协议，将SystemC与其他语言，例如SystemVerilog，
+联合起来进行仿真。TLM 2.0提出的基于延时时间的blocking/nonblocking API，也使得TLM 2.0可以完全摆脱primitive channel的束缚，做到纯粹基于接口函数
+就能实现一致性的仿真结果，同样极大方便和和其他语言之间的沟通。
+
 == Reference
+
+https://eda-playground.readthedocs.io/en/latest/_static/uvm-1.2/files/overviews/tlm2-txt.html#TLM2_Interfaces,Ports,Exports_and_Transport_Interfaces_Subset
+
+https://blog.csdn.net/qq_39794062/article/details/114198956

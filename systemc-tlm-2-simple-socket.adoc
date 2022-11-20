@@ -288,7 +288,18 @@ simple_initiator_socket包括一系列sockets定义，同样有着一套复杂�
 - simple_initiator_socket_tagged
 - simple_initiator_socket_tagged_optional
 
+所有的simple_initiator_socket，实际上都继承自<<api::tlm_initiator_socket, tlm_initiator_socket>>，
+并且内部实现了一个继承自<<api::tlm_bw_transport_if, tlm_bw_transport_if>>，且
+实现了两个接口函数 `nb_transport_bw` 和 `invalidate_direct_mem_ptr`
+方法的类，这两个接口函数实际调用了注册的回调函数。同时，simple initiator socket作为一个
+tlm_initiator_socket，其内部的 `sc_export<BW_IF>` 直接绑定到这个process上。这样一来，
+sc_export<BW_IF>就获得了实际的实现。simple_initiator_socket的实现大致如下图所示：
+
+.simple initiator socket的实现
+image::simple_initiator_socket.png[]
+
 我们将按照继承体系的顺序，逐步探索这些类的实现细节。
+
 
 === simple_initiator_socket_b::process
 
@@ -808,7 +819,7 @@ public:
 };
 ----
 
-==== simple initiator socket summary
+=== simple initiator socket summary
 
 simple initiator socket，指包括
 <<data::simple_initiator_socket, simple_initiator_socket>>, 
@@ -828,6 +839,17 @@ simple initiator socket在使用的时候需要绑定到FW_IF上，但不再需�
 BW_IF接口函数的类不属于SystemC的对象体系，也可以通过注册回调函数的方式，参与到TLM中来，极大
 扩展了SystemC的适用范围。
 
+simple_initiator_socket内部的sc_export<BW_IF>已经绑定到了具体的实现（其实是内部的process），这意味着
+在hierarchy binding的场景下，simple_initiator_socket不能再绑定其他的inititor socket了。这包括
+
+* simple_initiator_socket不能绑定到一个tlm_initiator_socket上
+* simple_initiator_socket不能绑定到另一个simple_initiator_socket上
+
+但是，反方向的绑定是可行的：
+
+* tlm_initiator_socket可以绑定一个simple_initiator_socket，这意味着这个tlm_initiator_socket和simple_initiator_socket一起，构成了
+hierarchy binding的终点（对于BW_IF而言）
+
 == simple_target_socket
 
 simple_target_socket，类似于simple_initiator_socket，同样由多种类型的socket组成：
@@ -846,6 +868,9 @@ simple_target_socket，类似于simple_initiator_socket，同样由多种类型�
 target socker而言，其内部需要实现BW_IF的功能。BW_IF有4个接口函数需要实现，同时，还需要考虑到，其中两个接口函数 `nb_transport_fw`
 和 `b_transport` 之间的相互实现，即如果回调函数注册了nonblocking版本，如何使用nonblocking版本实现blocking版本，以及反过来，
 回调函数只注册了blocking版本，如何实现nonblocking版本。
+
+如果无需实现nonblocking的接口函数和blocking的接口函数之间的相互实现，simple_target_socket就会变得简单很多。这样的target
+socket就是我们下一部分要介绍的<<data::passthrough_target_socket, passthrough_target_socket>>。
 
 === simple_target_socket_b::bw_process
 
@@ -1839,10 +1864,19 @@ public:
 
 ----
 
+=== simple target socket summary
+
+请参考TLM LRM 9.1.2.5部分，来了解更多simple target socket实现nonblocking/blocking
+API之间相互转换的细节。
+
 == Misc Data Struction
 
 === peq_with_get
 [[data::peq_with_get]]
+
+peq_with_get，是payload event queue的get版本。
+
+> A payload event queue (PEQ) is a class that maintains a queue of SystemC event notifications, where each notification carries an associated transaction object. Each transaction is written into the PEQ annotated with a delay, and each transaction emerges from the back of the PEQ at a time calculated from the current simulation time plus the annotated delay.
 
 peq_with_get主要用在nonblocking的API实现blocking语义的时候，用来保存trans以及设定的
 发生时刻信息：

@@ -52,6 +52,22 @@ simple_target_socket之所以实现的非常复杂，是为了在两种不同类
 passthrough_target_socket了。passthrough socket只有target socket，因为passthrough
 的initiator socket就是simple_initiator_socket本身了。
 
+passthrough_target_socket的实现和simple_initiator_socket的实现是对称的，都是只
+将接口函数实现转发给相应的注册回调函数上。 passthrough_target_socket都是继承自
+<<api::tlm_target_socket, tlm_target_socket>>，同时内部有一个继承自
+<<api::tlm_fw_transport_if, tlm_fw_transport_if>>的类process，实现了
+相应的接口函数 `nb_transport_fw`, `b_transport`, `get_direct_mem_ptr`
+和 `transport_dbg`，只不过这些实现的接口函数只是简单将请求转发给注册了的回调函数上。
+同时，passthrough_target_socket作为一个 sc_export<FW_IF>，绑定到了process
+上。这样一来，sc_export<FW_IF>就完成了绑定，未来任何sc_port<FW_IF>绑定
+到作为sc_export<FW_IF>的passthrough_target_socket上，相关的接口函数都
+得到了实现，不会出现编译期错误。passthrough_target_socket的实现大概如下图所示：
+
+.passthrough target socket的实现
+image::passthrough_target_socket.png[]
+
+我们将按照继承体系，一步步探索具体的实现细节。
+
 === passthrough_target_socket_b::process
 [[data::passthrough_target_socket_b::process]]
 
