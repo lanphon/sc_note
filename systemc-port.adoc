@@ -1031,6 +1031,10 @@ sc_out 相关函数的实现基本都是转交给了基类，也就是 `sc_inout
 内部有一个sc_port PA，模块B内部有另一个sc_port PB。如果需要从PA传递信息到PB，我们需要在TOP模块中
 实例化一个sc_interface的继承类，例如sc_signal或者sc_fifo，然后将PA绑定到这个sc_interface上，并
 将PB绑定在这个sc_interface上，这就实现了一个双端口的连接。
+如下图所示：
+
+.不使用sc_export做binding的场景
+image::bind_without_export.png[]
 
 这么做的坏处是，需要在TOP模块中额外初始化一个sc_interface继承类。如果不在TOP模块中初始化一个sc_interface
 继承类，另一个可选的方法是将sc_interface继承类直接在MB模块中初始化，然后模块MA的PA直接绑定到
@@ -1040,13 +1044,21 @@ PB中的这个sc_interface继承类上。对于模块PB，不再需要多余的s
 这么做省去了TOP模块中的连线问题，然而带来的另一个问题是访问权问题。这种做法要求PB模块中的
 这个sc_interface继承类对于模块PA是可见的。对于一些隐藏了实现细节的IP设计而言，可能并不
 希望外界能够看到内部到底使用一个sc_signal直连，还是通过一个具有一定深度的sc_fifo来
-缓冲数据。为了隐藏这种实现细节，SystemC提供了一个新的模板类， `sc_export<T>` 。
+缓冲数据。为了隐藏这种实现细节，SystemC从版本2.1开始，提供了一个新的模板类， `sc_export<T>` 。
+使用sc_export做绑定的示例如下：
+
+.不使用sc_export做binding的场景
+image::bind_with_export.png[]
 
 使用sc_export的应用场景和上边的第二种情况差不多。所不同的是，此时PB声明自己有一个public的
 sc_export，模板参数是sc_interface类（类似于sc_port）。PB内部的sc_interface继承类
 的实例可以是私有的，只需要PB自己在构造函数中将sc_export绑定这个sc_interface继承类的实例
 即可。对于PA而言，PB暴露出来的只是一个sc_export接口而已，PA可以将自己的PA绑定到这个
 暴露出来的sc_export上。
+
+此时，sc_port表示一个模块**需要**的interface，而一个sc_export则表示一个模块**提供**的interface。
+sc_port indicates sc_interface is **required** by a module, and sc_export
+indicates **provided** by a module.
 
 [NOTE]
 ====
