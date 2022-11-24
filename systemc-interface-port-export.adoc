@@ -226,3 +226,26 @@ interface只能被绑定，而无法去绑定任何其他接口。
 在一个建模结构中，公共的部分（包括类/对象的公共成员变量）只需要是port和export类型就足够了。但在类内部的实现
 中，最终所有的port/export，仍然需要绑定到一个sc_interfac上。即，port, export使用在公共部分，而interface
 使用在私有部分。
+
+.interface, port和export之间的绑定
+[cols="4"]
+|===
+| from | to | 是否允许绑定 | 被绑定者是否要绑定一个interface
+
+| port | port | OK | Not necessary
+
+| port | export | Ok | Yes
+
+| port | interface | Ok | --
+
+| export | port | No | --
+
+| export | export | Ok | Yes
+
+| export | interface | OK | --
+
+| interface | port | No | --
+| interface | export | No | --
+| interface | interface | No | --
+
+|===

@@ -603,6 +603,8 @@ sc_event::notify()
 为了避免出现这种情况，SystemC建议用户不要在自己的代码中使用不带参数的notify。对于SystemC自己
 而言，其内部的实现框架可保证顺序，所以不带参数的notify可以在Systemc内部使用。
 
+NOTE: 用户代码中，替代不带参数的notify是设置时间为SC_ZERO_TIME的 `notify(const sc_time&)`，这个可以保证调度顺序。
+
 第二种是带有时间参数的notify函数：
 
 .src/sysc/kernel/sc_event.h
@@ -708,7 +710,7 @@ sc_event::notify( const sc_time& t )
 
 带延时时间参数的notify是提供给用户的API,因为无法保证用户的使用方法,实现的时候需要考虑
 同一个事件被多次设定延时时间的场景. 在SystemC内部，事件也得到广泛应用。在这种
-受控的长江下，SystemC特意设计了两个notify函数，来简化相关代码的处理。
+受控的场景下，SystemC特意设计了两个notify函数，来简化相关代码的处理。
 
 [[api::sc_event::notify_internal]]
 `notify_internal` 是SystemC用以在内部设置事件延迟时间的API。这个API由于只在内部使用，

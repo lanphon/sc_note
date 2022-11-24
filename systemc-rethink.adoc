@@ -46,6 +46,41 @@ registry中。sc内核调度器是实现SystemC功能的基石，包括如下几
 sc_interface/sc_port/sc_export的位置。线程，primitive channel以及event，这就是
 SystemC内核仿真最为重要的三个元素，分别对应了仿真时候的三个阶段。
 
+[NOTE]
+====
+
+SystemC仿真三要素，就是这里的线程，primitive channel和event。这三要素中，线程和
+event是不可获取的，然而primitive channel却可以有别的方法代替。
+
+在SC仿真三要素中，primitive channel起到的主要作用是隔离线程对数据的访问，使得本delta cycle
+内，对一些数据的修改，直到下一个delta cycle才可以被其他线程观察到。这样一来，无论修改线程
+和观察线程以什么样的调度顺序运行，修改线程的修改总是发生在UPDATE阶段，在所有的线程执行完毕之后
+才生效。这样，就可以保证无论调度顺序如何，仿真总能得到一致的结果。
+
+然而，对数据修改的隔离，使用其他的方式也能够办到。例如，要求修改数据的线程，和使用数据的线程，
+不能再一个detal cycle内调度，也可以达到同样的目的。从这层意义上来说，只要能够提供约束，保证
+修改线程和观察线程不在一个delta cycle内调度，那么实际上即使没有primitive channel，也能达到
+同样的目的。这其实就是TLM 2.0的思想。在TLM 2.0中，所有的API函数调用都增加了一个延时时间的参数，
+这个参数至少是SC_ZERO_TIME，这就保证了，调用方运行一个线程，修改数据，使用对应的API传输后，
+被调用方至少隔一个delta cycle才能够做出响应，从而从机制上隔绝了两个线程在同一个delta cycle
+内同时运行的可能。所以，在TLM 2.0中，无需任何primitive channel类型的数据，仅使用
+线程和event就达到了目的。
+
+事实上，对于纯粹基于TLM 2.0建模的模型而言，一次delta cycle内，只有EVALUATE和NOTIFICATION
+两个阶段，因为UPDATE阶段没有任何需要更新的primitive channel子类了。基于TLM 2.0建模的模型，
+其本质已经变成了接口的API函数，其调用和返回分配在不同的时间单位上进行了。例如一个b_transport
+接口的调用发生在5ns，指定延时5ns，那么b_transport就被拆成了两部分，5ns的时候调用，以及
+10ns时候的返回。相关的数据传输直接在调用和返回的时候完成了。
+
+// 这里需要进一步的思考，TLM 2.0模型下，所有的接口函数的调用是如何在时间轴上分配的，以及
+// 这种分配的仿真意义何在
+// 是否有可能基于纯粹的TLM 2.0模型，不使用任何primitive channel，就完成的仿真模型？
+// TLM 2.0看起来只是一个接口调用的方式，如果下游的b_transport不使用延时时间，照样可以
+// 工作正常，这是因为函数的调用就足以保证顺序了，并且这实际上是在一个thread内，thread
+// 和thread之间交换数据，是否还是必须有primitive channel的参与呢？
+
+====
+
 实际上，sc_interface/sc_port/sc_export
 只是为了满足层次化的绑定需求，而设计出来的一套封装框架而已。从本质上而言，sc_interface
 相当于虚指针，而sc_port则是持有一个或者一组虚指针的包装类而已。sc_export则是只能持有
@@ -129,3 +164,18 @@ primitive channel的隔绝，主要是在一个delta cycle内，对所有的线�
 * 无时间的模型，Untimed, UT Model
 
 SystemC中的时间，是配合着event使用的。没有event与之关联的时间，是无法SystemC中使用的。
+
+== Notification Phase Call back
+
+对于派生自sc_module, sc_port, sc_export和sc_primitive_channel的子类，可以实现以下几种
+callback函数，这样SC在仿真的相应阶段，会调用这些函数：
+
+* before_end_of_elaboration
+* end_of_elaboration
+* start_of_simulation
+* end_of_simulation
+
+这四个函数在对应的基类中都是虚函数(然而并不是纯虚函数)。派生类如果需要的话，可以overrie这些方法。
+
+注意，这四个call-back函数并不是sc_object对象拥有的，所以只有sc_module, sc_port, sc_export和
+sc_primitive_channel的派生类才可以override。
