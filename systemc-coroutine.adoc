@@ -57,7 +57,7 @@ sc_simcontext::prepare_to_simulate()
     m_cor = m_cor_pkg->get_main(); <2>
 ----
 <1> 这里创建了一个协程的管理器对象
-<2> 获取主线程的协程参数，这样一来当所有注册Thread线程执行完毕之后，才能将反悔权返回给主线程
+<2> 获取主线程的协程参数，这样一来当所有注册Thread线程执行完毕之后，才能将执行权返回给主线程
 
 
 
@@ -79,6 +79,8 @@ void sc_thread_process::prepare_for_simulation()
 
 这里设置的协程入口函数是 `sc_thread_cor_fn` ，传入一个 `this` 指针。协程管理器创建的协程对象
 就是这里的 `m_cor_p` 。
+
+sc_thread_cor_fn是一个辅助函数：
 
 [[api::sc_thread_cor_fn]]
 .src/sysc/kernel/sc_thread_process.cpp
@@ -139,7 +141,7 @@ void sc_thread_cor_fn( void* arg )
 
 }
 ----
-<1> 这里将传入的 `args` cast成 `sc_thread_process*` 指针，因为在协程建立的时候，提供的参数就是 `this` 指针
+<1> 这里将传入的 `args` cast成 `sc_thread_process*` 指针，因为在协程建立的时候，提供的参数就是sc_thread_process对象的 `this` 指针
 <2> `sc_process_b::semantics()` 函数会实际调用线程的主体部分代码，理论上协程函数执行到这里之后就
 永远不会返回，除非semantic内部抛出异常，由接下来的异常处理部分分别处理
 <3> 如果抛出的异常是 `sc_unwind_exception`，并且指定是reset，则重新执行semantics函数，相当于

@@ -437,9 +437,30 @@ SystemC封装了三种不同类型的携程实现方案。对于Windows平台，
 * `create` ，创建一个协程
 * `yield` ，阻塞一个协程，同时转而执行另一个协程
 * `abort` ，结束当前协程，同时转而执行另一个协程
-* `get_main` ，返回代码主线程的协程参数（主线程也是一特特殊的协程）
+* `get_main` ，返回代码主线程的协程参数（主线程也是一个特殊的协程）
 
 在 `sc_cor_qt.cpp` 中，SystemC使用了quickthread实现了这些接口。
+
+注意，`get_main` 返回的是一个静态全局变量 `main_cor` 的指针：
+
+.src/sysc/kernel/sc_cor_qt.cpp
+[source,cpp]
+----
+// main coroutine
+
+static sc_cor_qt main_cor;
+
+sc_cor*
+sc_cor_pkg_qt::get_main()
+{
+    return &main_cor;
+}
+----
+
+这是因为，主线程作为一个协程，是一种特殊的协程。特殊之处在于，这个协程并不是由quickthread库新建的，而是由系统创立的。
+所以main_cor存在的目的，主要是为了记录主线程作为协程切换时，需要切换回来的上下文信息。main_cor只需要初始化
+为全零的数据（不初始化也行），然后在第一次，主线程作为一个协程将控制权交给另一个协程的时候，main_cor中就会被qt的
+协程切换部分填入主协程（就是主线程）恢复执行时候的信息了。
 
 == 总结 
 

@@ -37,6 +37,49 @@ class SC_API multi_socket_base : public convenience_socket_base
 
 multi_socket_base同样如此。
 
+---
+
+[[data::convenience_socket_cb_holder]]
+
+convenience_socket_cb_holder则是用来吃有一个convenience_soket_base的：
+
+.src/tlm_utils/convenience_socket_bases.h
+[source,cpp]
+----
+// implementation-defined base class for callback helpers
+class SC_API convenience_socket_cb_holder
+{
+public:
+  void display_warning(const char* msg) const;
+  void display_error(const char* msg) const;
+
+protected:
+  explicit convenience_socket_cb_holder(convenience_socket_base* owner)
+    : m_owner(owner) {}
+
+private:
+  convenience_socket_base* m_owner;
+};
+----
+
+这里的display_warning和display_error借用的还是持有的convenience_socket_base的实现：
+
+.src/tlm_utils/convenience_socket_bases.cpp
+[source,cpp]
+----
+void
+convenience_socket_cb_holder::display_warning(const char* msg) const
+{
+  m_owner->display_warning(msg);
+}
+
+void
+convenience_socket_cb_holder::display_error(const char* msg) const
+{
+  m_owner->display_error(msg);
+}
+----
+
 == passthrough target socket
 [[data::passthrough_target_sockets]]
 
@@ -80,7 +123,7 @@ passthrough_target_socket的实现如同<<data::simple_target_socket, simple_tar
 ----
   class process
     : public tlm::tlm_fw_transport_if<TYPES>
-    , protected convenience_socket_cb_holder
+    , protected convenience_socket_cb_holder <1>
   {
   public:
     typedef sync_enum_type (MODULE::*NBTransportPtr)(transaction_type&,
@@ -100,6 +143,7 @@ passthrough_target_socket的实现如同<<data::simple_target_socket, simple_tar
     GetDirectMem_ptr m_get_direct_mem_ptr;
   };
 ----
+<1> 继承自<<data::convenience_socket_cb_holder, convenience_socket_cb_holder>>，所以可以持有一个 `convenience_socket_base` 指针，用来做辅助debug
 
 passthrough_target_socket_b::process本身继承自<<api::tlm_fw_transport_if, tlm_fw_transport_if>>，
 同时继承自convenience_socket_cb_holder。
@@ -479,4 +523,1568 @@ public:
 };
 ----
 
-== multi sockets
+== multi socket bases
+[[data::multi_socket_bases]]
+
+== functors
+
+functor是持有成员函数的可调用对象。这些functor是精心设计，可以做到类型无关。其实现的细节如下。
+
+.src/tlm_utils/multi_socket_bases.h
+[source,cpp]
+----
+template <typename signature>
+struct fn_container{
+  signature function;
+};
+----
+
+首先定义了一个 `fn_container`, 如名字所示，这个类实际持有一个函数类型的成员变量。
+
+接下来，文件中使用macro定义了一个 `TLM_DEFINE_FUNCTOR`的非常复杂的宏，我们展开来看。这个宏
+实际上定义了很多种类型的函数和成员。
+
+.src/tlm_utils/multi_socket_bases.h
+[source,cpp]
+----
+#define TLM_DEFINE_FUNCTOR(name) \
+template <typename MODULE, typename TRAITS> \
+inline TLM_RET_VAL static_##name( void* mod \
+                                       , void* fn \
+                                       , int index \
+                                       , TLM_FULL_ARG_LIST) \
+{ \
+  typedef fn_container<TLM_RET_VAL (MODULE::*)(int, TLM_FULL_ARG_LIST)> fn_container_type; \
+  MODULE* tmp_mod=static_cast<MODULE*>(mod); \
+  fn_container_type* tmp_cb =static_cast<fn_container_type*> (fn); \
+  return (tmp_mod->*(tmp_cb->function))(index, TLM_ARG_LIST_WITHOUT_TYPES); \
+}\
+\
+----
+
+`static_##name` 定义一个模板函数。首先定义一个类，`fn_container_type`，是模板类 `fn_container`
+具化了模板参数的类，模板参数则是一个类的成员函数指针，其中类名称为 `static_##name` 模板函数本身的参数
+`MODULE`，而成员函数指针的原型则是第一个参数是 `int`，跟着其他由 `TLM_FULL_ARG_LIST` 表明的
+函数参数，返回值类型为 `TLM_RET_VAL`的成员函数指针。然后这个函数将传入的 `void*` 类型的mod cast
+成 `MODULE` 类，并将 `void*` 类型的 `fn` cast为 `fn_container_type` 指针。有了对象 `tmp_mod`
+和对象的成员函数指针 `tmp_cb->function`，这里就可以调用成员函数了。调用成员函数的时候，第一个 `int`
+类型的数据传入 `static_##name` 本身的 `index` 调用参数，后续的则是其他的调用参数。函数调用的返回结果作为
+`static_##name` 的调用结果。
+
+.src/tlm_utils/multi_socket_bases.h
+[source,cpp]
+----
+template <typename MODULE, typename TRAITS> \
+inline void delete_fn_container_of_##name(void* fn) \
+{ \
+  typedef fn_container<TLM_RET_VAL (MODULE::*)(int, TLM_FULL_ARG_LIST)> fn_container_type; \
+  fn_container_type* tmp_cb =static_cast<fn_container_type*> (fn); \
+  if (tmp_cb) delete tmp_cb;\
+} \
+\
+----
+
+`delete_fn_container_of_##name` 和 `static_##name` 实现的方法基本一样，不同的是在这是用来删除指针 `fn`的。
+在删除 `fn` 前，由于 `fn` 是一个空指针，所以需要先将其 cast成为合适的函数指针类型。
+
+.src/tlm_utils/multi_socket_bases.h
+[source,cpp]
+----
+template <typename TRAITS> \
+class name##_functor{ \
+public: \
+  typedef typename TRAITS::tlm_payload_type payload_type; \
+  typedef typename TRAITS::tlm_phase_type   phase_type; \
+  typedef TLM_RET_VAL (*call_fn)(void*,void*, int, TLM_FULL_ARG_LIST); \
+  typedef void (*del_fn)(void*); \
+\
+  name##_functor(): m_fn(0), m_del_fn(0), m_mod(0), m_mem_fn(0){} \
+  ~name##_functor(){if (m_del_fn) (*m_del_fn)(m_mem_fn);}  \
+\
+  template <typename MODULE> \
+  void set_function(MODULE* mod, TLM_RET_VAL (MODULE::*cb)(int, TLM_FULL_ARG_LIST)){ \
+    typedef fn_container<TLM_RET_VAL (MODULE::*)(int, TLM_FULL_ARG_LIST)> fn_container_type; \
+    m_fn=&static_##name<MODULE,TRAITS>;\ <1>
+    m_del_fn=&delete_fn_container_of_##name<MODULE,TRAITS>;\ <1>
+    m_del_fn(m_mem_fn); \ <2>
+    fn_container_type* tmp= new fn_container_type(); \
+    tmp->function=cb; \
+    m_mod=static_cast<void*>(mod); \
+    m_mem_fn=static_cast<void*>(tmp); \
+  } \
+  \
+  TLM_RET_VAL operator()(int index, TLM_FULL_ARG_LIST){ \
+    return m_fn(m_mod,m_mem_fn, index, TLM_ARG_LIST_WITHOUT_TYPES); \
+  } \
+\
+  bool is_valid(){return (m_mod!=0 && m_mem_fn!=0 && m_fn!=0);}\
+\
+protected: \
+  call_fn m_fn;\
+  del_fn m_del_fn; \
+  void* m_mod; \
+  void* m_mem_fn; \
+private: \
+  name##_functor& operator=(const name##_functor&); \
+}
+----
+<1> 不同的MODULE，有着不同的 m_fn和m_del_fn函数指针，这些函数指针本身已经携带了MODULE信息
+<2> 这个地方不是很安全，但目前看起来仍然可以工作，安全的做法应该是在重置m_del_fn之前，就调用 `m_del_fn(m_mem_fn)`的，当然需要额外检查m_del_fn是否为空指针
+
+`name##_functor` 则是定义的一个模板类。这个模板类有如下几个成员变量：
+
+* call_fn类型的函数指针 `m_fn`，即 `static_##name` 类型兼容的函数指针
+* del_fn类型的函数指针 `m_del_fn`，即 `delete_fn_container_of_##name` 类型兼容的函数指针
+* 空指针 `m_mod`，实际使用的时候承载的应该是MODULE类型的指针
+* 空指针 `m_mem_fn`，实际承载的应该是成员函数指针
+
+`name##_functor` 的核心在于，重载了 `operator()`，因此一个`name##_functor` 可以作为可调用
+对象，接受一个索引和其他的参数类型，然后调用 `m_fn`，返回调用得到的结果。例如，`b_transport_functor`
+类型的对象可以接受一个 `int` 类型的 `index`，以及 `tlm::tlm_generic_payload&` 和 `sc_core::sc_time&`，
+返回一个 `void`。
+
+`name##_Functor` 还提供了一个 `set_function` 类型的模板函数，用来将一个 `MODULE` 类型的对象，以及
+其成员函数注册进来。`set_function` 本身是个模板成员函数，接受 `MODULE` 作为模板参数。如果两次调用之间
+`MODULE` 模板参数发生变化，那么set_function首先重新设置 `m_fn` 和 `m_del_fn` 的指针。注意，不同
+MODULE模板实例化的 `m_fn` 和 `m_del_fn` 是不同的。然后调用 `m_del_fn`，删除掉可能的 `m_mem_fn`
+对象。虽然 `m_del_fn` 实现内部需要MODULE类型信息，但 `m_mem_fn` 实际是一个 `fn_container` 实例化的结果
+而已。这里删除时可以运行的，因为fn_container内部只保存一个指针，不同的类型（例如，A和B）的成员函数指针
+这里保存的是一样的。然后，new一个fn_container下来，保存 set_function 所设置的对象和函数指针。
+
+TLM_DEFINE_FUNCTOR到此结束。
+
+---
+
+TLM_DEFINE_FUNCTOR主要用来简化如下几个类模板和函数模板的建立：
+
+.src/tlm_utils/multi_socket_bases.h
+[source,cpp]
+----
+#define TLM_RET_VAL tlm::tlm_sync_enum
+#define TLM_FULL_ARG_LIST typename TRAITS::tlm_payload_type& txn, typename TRAITS::tlm_phase_type& ph, sc_core::sc_time& t
+#define TLM_ARG_LIST_WITHOUT_TYPES txn,ph,t
+TLM_DEFINE_FUNCTOR(nb_transport);
+#undef TLM_RET_VAL
+#undef TLM_FULL_ARG_LIST
+#undef TLM_ARG_LIST_WITHOUT_TYPES
+
+#define TLM_RET_VAL void
+#define TLM_FULL_ARG_LIST typename TRAITS::tlm_payload_type& txn, sc_core::sc_time& t
+#define TLM_ARG_LIST_WITHOUT_TYPES txn,t
+TLM_DEFINE_FUNCTOR(b_transport);
+#undef TLM_RET_VAL
+#undef TLM_FULL_ARG_LIST
+#undef TLM_ARG_LIST_WITHOUT_TYPES
+
+#define TLM_RET_VAL unsigned int
+#define TLM_FULL_ARG_LIST typename TRAITS::tlm_payload_type& txn
+#define TLM_ARG_LIST_WITHOUT_TYPES txn
+TLM_DEFINE_FUNCTOR(debug_transport);
+#undef TLM_RET_VAL
+#undef TLM_FULL_ARG_LIST
+#undef TLM_ARG_LIST_WITHOUT_TYPES
+
+#define TLM_RET_VAL bool
+#define TLM_FULL_ARG_LIST typename TRAITS::tlm_payload_type& txn, tlm::tlm_dmi& dmi
+#define TLM_ARG_LIST_WITHOUT_TYPES txn,dmi
+TLM_DEFINE_FUNCTOR(get_dmi_ptr);
+#undef TLM_RET_VAL
+#undef TLM_FULL_ARG_LIST
+#undef TLM_ARG_LIST_WITHOUT_TYPES
+
+#define TLM_RET_VAL void
+#define TLM_FULL_ARG_LIST sc_dt::uint64 l, sc_dt::uint64 u
+#define TLM_ARG_LIST_WITHOUT_TYPES l,u
+TLM_DEFINE_FUNCTOR(invalidate_dmi);
+#undef TLM_RET_VAL
+#undef TLM_FULL_ARG_LIST
+#undef TLM_ARG_LIST_WITHOUT_TYPES
+----
+
+[[data::nb_transport_functor]]
+[[data::b_transport_functor]]
+[[data::debug_transport_functor]]
+[[data::get_dmi_ptr_functor]]
+[[data::invalidate_dmi_functor]]
+
+这里定义了 nb_transport_functor, b_transport_functor, debug_transport_functor,
+get_dmi_ptr_functor和invalidate_dmi_functor。这些functor实现的作用基本一致，都是
+可以用 `set_function` 成员函数注册对象指针和成员函数指针，然后functor作为一个可调用对象，
+可以用来调用注册了的成员函数。相比于直接调用成员函数，这些functor已经抹去了对象类型 `MODULE`
+的信息。这样一来，不同的类，实现相同的成员函数，就都可以被这些functor托管起来。
+
+NOTE: 做到 `MODULE` 无关的地方，关键在于 functor内部保存的调用函数已经带了MODULE信息。不同的
+MODULE在set_function，得到的 `static_##name` 是不同的。
+
+=== callback_binder_fw
+[[data::callback_binder_fw]]
+
+`callback_binder_fw` 首先继承自 <<api::tlm_fw_transport_if, `tlm::tlm_fw_transport_if`>>：
+
+.src/tlm_utils/multi_socket_bases.h
+[source,cpp]
+----
+template <typename TYPES>
+class callback_binder_fw
+  : public tlm::tlm_fw_transport_if<TYPES>
+  , protected convenience_socket_cb_holder <1>
+{
+   public:
+    //typedefs according to the used TYPES class
+    typedef typename TYPES::tlm_payload_type              transaction_type;
+    typedef typename TYPES::tlm_phase_type                phase_type;  
+    typedef tlm::tlm_sync_enum                            sync_enum_type;
+  
+    //typedefs for the callbacks
+    typedef nb_transport_functor<TYPES>    nb_func_type;
+    typedef b_transport_functor<TYPES>     b_func_type;
+    typedef debug_transport_functor<TYPES> debug_func_type;
+    typedef get_dmi_ptr_functor<TYPES>     dmi_func_type;
+
+
+    //blabla
+
+  private:
+    //the ID of the callback binder
+    int m_id; 
+    
+    //the callbacks
+    nb_func_type* m_nb_f; 
+    b_func_type*  m_b_f;
+    debug_func_type* m_dbg_f;
+    dmi_func_type* m_dmi_f;
+    
+    //the port bound to that callback binder
+    sc_core::sc_port_base* m_caller_port;   
+};
+----
+<1> 继承自<<data::convenience_socket_cb_holder, convenience_socket_cb_holder>>，所以可以持有一个 `convenience_socket_base` 指针，用来做辅助debug
+
+成员变量包括：
+
+* 一个integer类型的变量 `m_id`
+* <<data::nb_transport_functor, nb_transport_functor>>指针类型的成员变量 m_nb_f
+* <<data::b_transport_functor, b_transport_functor>>指针类型的成员变量 m_b_f
+* <<data::debug_transport_functor, debug_transport_functor>>指针类型的成员变量 m_dbg_f
+* <<data::get_dmi_ptr_functor, get_dmi_ptr_functor>>指针类型的成员变量 m_dmi_f
+* 一个 sc_port_base指针类型的成员变量 `m_caller_port`
+
+`callback_binder_fw` 作为一个tlm_fw_transport_if，需要实现相应的接口函数。这些接口函数的
+实现如下：
+
+.src/tlm_utils/multi_socket_bases.h
+[source,cpp]
+----
+   //the nb_transport method of the fw interface
+    sync_enum_type nb_transport_fw(transaction_type& txn,
+                                phase_type& p,
+                                sc_core::sc_time& t){
+      //check if a callback is registered
+      if (m_nb_f && m_nb_f->is_valid()) {
+        return (*m_nb_f)(m_id, txn, p, t); //do the callback
+      }
+
+      display_error("Call to nb_transport_fw without a registered callback for nb_transport_fw.");
+      return tlm::TLM_COMPLETED;
+    }
+
+    //the b_transport method of the fw interface
+    void b_transport(transaction_type& trans,sc_core::sc_time& t){
+      //check if a callback is registered
+      if (m_b_f && m_b_f->is_valid()) {
+        (*m_b_f)(m_id, trans,t); //do the callback
+        return;
+      }
+
+      display_error("Call to b_transport without a registered callback for b_transport.");
+    }
+    
+    //the DMI method of the fw interface
+    bool get_direct_mem_ptr(transaction_type& trans, tlm::tlm_dmi&  dmi_data){
+      //check if a callback is registered
+      if (m_dmi_f && m_dmi_f->is_valid()) {
+        return (*m_dmi_f)(m_id, trans,dmi_data); //do the callback
+      }
+
+      dmi_data.allow_none();
+      dmi_data.set_start_address(0x0);
+      dmi_data.set_end_address((sc_dt::uint64)-1);
+      return false;
+    }
+    
+    //the debug method of the fw interface
+    unsigned int transport_dbg(transaction_type& trans){
+      //check if a callback is registered
+      if (m_dbg_f && m_dbg_f->is_valid()) {
+        return (*m_dbg_f)(m_id, trans); //do the callback
+      }
+
+      return 0;
+    }
+----
+
+从这些实现可以看出，tlm_fw_transport_if所需要的四个接口函数，这里都是通过回调函数的方式调用的。
+所不同之处在于，每个回调函数调用的第一个参数，是特别指明的 `m_id`。
+
+这四个回调functor，需要使用一个API `set_callbacks`，一次性全部注册进来：
+
+.src/tlm_utils/multi_socket_bases.h
+[source,cpp]
+----
+    //register callbacks for all fw interface methods at once
+    void set_callbacks(nb_func_type& cb1, b_func_type& cb2, dmi_func_type& cb3, debug_func_type& cb4){
+      m_nb_f=&cb1;
+      m_b_f=&cb2;
+      m_dmi_f=&cb3;
+      m_dbg_f=&cb4;
+    }
+----
+
+而 `register_port` 和 `get_other_side` 可以用来注册 `m_caller_port`
+以及获取对应的指针：
+
+.src/tlm_utils/multi_socket_bases.h
+[source,cpp]
+----
+    //the SystemC standard callback register_port:
+    // - called when a port if bound to the interface
+    // - allowd to find out who is bound to that callback binder
+    void register_port(sc_core::sc_port_base& b, const char* /*name*/){
+      m_caller_port=&b;
+    }
+
+    //getter method to get the port that is bound to that callback binder
+    // NOTE: this will only return a valid value at end of elaboration
+    //  (but not before end of elaboration!)
+    sc_core::sc_port_base* get_other_side(){return m_caller_port;}
+----
+
+其中， `register_port` 是 sc_interface提供的虚函数，所以这里`callback_binder_fw`
+作为继承自 `tlm_fw_transport_if`，同样也是一个sc_interface，所以register_port是一个
+override的虚函数。
+
+这里需要的ID值，在`callback_binder_fw`的构造函数中，就需要提供：
+
+.src/tlm_utils/multi_socket_bases.h
+[source,cpp]
+----
+    //ctor: an ID is needed to create a callback binder
+    callback_binder_fw(multi_socket_base* owner, int id)
+      : convenience_socket_cb_holder(owner), m_id(id) <1>
+      , m_nb_f(0), m_b_f(0), m_dbg_f(0), m_dmi_f(0)
+      , m_caller_port(0)
+    {}
+----
+<1> 使用 `multi_socket_base` 指针初始化基类<<data::convenience_socket_cb_holder, convenience_socket_cb_holder>>，这样就可以借助`multi_socket_base` 的display函数了
+
+=== callback_binder_bw
+[[data::callback_binder_bw]]
+
+`callback_binder_bw`，与
+<<data::callback_binder_fw, callback_binder_fw>>
+类似的实现：
+
+.src/tlm_utils/multi_socket_bases.h
+[source,cpp]
+----
+template <typename TYPES>
+class callback_binder_bw
+  : public tlm::tlm_bw_transport_if<TYPES>
+  , protected convenience_socket_cb_holder <1>
+{
+  public:
+    //typedefs according to the used TYPES class
+    typedef typename TYPES::tlm_payload_type              transaction_type;
+    typedef typename TYPES::tlm_phase_type                phase_type;  
+    typedef tlm::tlm_sync_enum                            sync_enum_type;
+  
+    //typedefs for the callbacks
+    typedef nb_transport_functor<TYPES>   nb_func_type;
+    typedef invalidate_dmi_functor<TYPES> dmi_func_type;
+
+    // blabla
+
+    private:
+    //the ID of the callback binder
+    int m_id;
+    //the callbacks
+    nb_func_type* m_nb_f;
+    dmi_func_type* m_dmi_f;
+};
+----
+<1> 继承自<<data::convenience_socket_cb_holder, convenience_socket_cb_holder>>，所以可以持有一个 `convenience_socket_base` 指针，用来做辅助debug
+
+主要成员变量包括
+
+* integer类型的变量 `m_id`
+* <<data::nb_transport_functor, nb_transport_functor>>指针类型的成员变量 `m_nb_f`
+* <<data::invalidate_dmi_functor, invalidate_dmi_functor>>指针类型的成员变量 `m_dmi_f`
+
+作为一个 <<api::tlm_bw_transport_if, tlm_bw_transport_if>>, `callback_binder_bw`
+也实现了对应的接口函数：
+
+.src/tlm_utils/multi_socket_bases.h
+[source,cpp]
+----
+    //the nb_transport method of the bw interface
+    sync_enum_type nb_transport_bw(transaction_type& txn,
+                                phase_type& p,
+                                sc_core::sc_time& t){
+      //check if a callback is registered
+      if (m_nb_f && m_nb_f->is_valid()) {
+        return (*m_nb_f)(m_id, txn, p, t); //do the callback
+      }
+
+      display_error("Call to nb_transport_bw without a registered callback for nb_transport_bw");
+      return tlm::TLM_COMPLETED;
+    }
+    
+    //the DMI method of the bw interface
+    void invalidate_direct_mem_ptr(sc_dt::uint64 l, sc_dt::uint64 u){
+      //check if a callback is registered
+      if (m_dmi_f && m_dmi_f->is_valid()) {
+        (*m_dmi_f)(m_id,l,u); //do the callback
+      }
+    }
+----
+
+这些接口函数同样是调用了注册了的回调函数完成的。注意，每个回调函数嗲欧勇的第一个参数是
+`m_id`。
+
+回调函数的注册使用API `set_callbacks` 完成：
+
+.src/tlm_utils/multi_socket_bases.h
+[source,cpp]
+----
+    //register callbacks for all bw interface methods at once
+    void set_callbacks(nb_func_type& cb1, dmi_func_type& cb2){
+      m_nb_f=&cb1;
+      m_dmi_f=&cb2;
+    }
+----
+
+与callback_binder_fw一样，callback_binder_bw的ID值需要在构造的时候提供：
+
+.src/tlm_utils/multi_socket_bases.h
+[source,cpp]
+----
+    //ctor: an ID is needed to create a callback binder
+    callback_binder_bw(multi_socket_base* owner, int id)
+      : convenience_socket_cb_holder(owner), m_id(id) <1>
+      , m_nb_f(0), m_dmi_f(0) {}
+----
+<1> 使用 `multi_socket_base` 指针初始化基类<<data::convenience_socket_cb_holder, convenience_socket_cb_holder>>，这样就可以借助`multi_socket_base` 的display函数了
+
+=== multi_init_base_if
+[[data::multi_init_base_if]]
+
+`multi_init_base_if` 是一个虚基类，定义了两个接口函数 `get_binders`
+和 `get_sockets`:
+
+.src/tlm_utils/multi_socket_bases.h
+[source,cpp]
+----
+/*
+This class forms the base for multi initiator sockets,
+with fewer template parameters than the multi_init_base.
+This class is implementation-defined.
+*/
+template <typename TYPES = tlm::tlm_base_protocol_types>
+class multi_init_base_if {
+public:
+  //this method shall return a vector of the callback binders of multi initiator socket
+  virtual std::vector<callback_binder_bw<TYPES>* >& get_binders()=0;
+  //this method shall return a vector of all target interfaces bound to this multi init socket
+  virtual std::vector<tlm::tlm_fw_transport_if<TYPES>*>& get_sockets()=0;
+protected:
+  virtual ~multi_init_base_if() {}
+};
+----
+
+接口函数 `get_binders` 返回一个数组引用，数组元素则是 <<data::callback_binder_bw, callback_binder_bw>>指针。
+接口函数 `get_sockets` 则需要返回一个 <<api::tlm_fw_transport_if, tlm_fw_transport_if>>指针的数组引用。
+
+=== multi_target_base_if
+[[data::multi_target_base_if]]
+
+`multi_target_base_if` 是一个虚基类，定义了接口函数 `get_binders`
+和 `get_multi_binds`：
+
+.src/tlm_utils/multi_socket_bases.h
+[source,cpp]
+----
+/*
+This class forms the base for multi target sockets,
+with fewer template parameters than the multi_target_base.
+This class is implementation-defined.
+*/
+template <typename TYPES = tlm::tlm_base_protocol_types>
+class multi_target_base_if {
+public:
+  //this method shall return a vector of the callback binders of multi initiator socket
+  virtual std::vector<callback_binder_fw<TYPES>* >& get_binders()=0;
+  
+  //this method shall return a map of all multi initiator sockets that are
+  // bound to this multi target the key of the map is the index at which the
+  // multi initiator i bound, while the value is the interface of the multi
+  // initiator socket that is bound at that index
+  virtual std::map<unsigned int, tlm::tlm_bw_transport_if<TYPES>*>& get_multi_binds()=0;
+protected:
+  virtual ~multi_target_base_if() {}
+};
+----
+
+接口函数 `get_binders`需要返回一个数组引用，元素为
+<<data::callback_binder_fw, callback_binder_fw>>指针。这个与 <<data::multi_init_base_if, multi_init_base_if>>
+的接口函数 `get_binders` 是对称的。
+
+另一方面，`get_multi_binds` 接口函数则需要返回一个map，从unsigned int类型
+到<<api::tlm_bw_transport_if, tlm_bw_transport_if>>指针类型之间的map，这个接口函数无论从名字，还是返回值
+类型，都和<<data::multi_init_base_if, multi_init_base_if>>的接口函数 `get_sockets` 风格迥异。
+`get_multi_binds` 需要返回的数据类型为何如此，我们稍后解释。
+
+=== multi_init_base
+[[data::multi_init_base]]
+
+`multi_init_base` 继承自
+<<api::tlm_initiator_socket, tlm_initiator_socket>>和
+<<data::multi_init_base_if, multi_init_base_if>>，其本质仍然是一个虚基类：
+
+.src/tlm_utils/multi_socket_bases.h
+[source,cpp]
+----
+/*
+This class forms the base for multi initiator sockets.
+It enforces a multi initiator socket to implement all functions
+needed to do hierarchical bindings.
+*/
+template <unsigned int BUSWIDTH = 32,
+          typename TYPES = tlm::tlm_base_protocol_types,
+          unsigned int N=0,
+          sc_core::sc_port_policy POL = sc_core::SC_ONE_OR_MORE_BOUND>
+class multi_init_base
+  : public tlm::tlm_initiator_socket<BUSWIDTH, TYPES, N, POL>
+  , public multi_init_base_if<TYPES>
+  , protected multi_socket_base
+{
+public:
+  //typedef for the base type: the standard tlm initiator socket
+  typedef tlm::tlm_initiator_socket<BUSWIDTH, TYPES, N, POL> base_type;
+  
+  //this method shall disable the code that does the callback binding
+  // that registers callbacks to binders
+  virtual void disable_cb_bind()=0;
+  
+  //this method shall return the multi_init_base to which the
+  // multi_init_base is bound hierarchically
+  //  If the base is not bound hierarchically it shall return a pointer to itself
+  virtual multi_init_base* get_hierarch_bind()=0;
+  
+  virtual tlm::tlm_socket_category get_socket_category() const
+  {
+    return tlm::TLM_MULTI_INITIATOR_SOCKET;
+  }
+
+  //ctor and dtor
+  virtual ~multi_init_base(){}
+  multi_init_base():base_type(sc_core::sc_gen_unique_name("multi_init_base")){}
+  multi_init_base(const char* name):base_type(name){}
+
+private:
+  const sc_core::sc_object* get_socket() const { return this; } <1>
+};
+----
+<1> get_socket是multi_init_base作为一个multi_socket_base的派生类，需要实现的接口函数，主要用于辅助display显示信息
+
+定义的接口函数相比于基类<<data::multi_init_base_if, multi_init_base_if>>，新增加了
+disable_cb_bind和 get_hierarch_bind两个接口函数。
+
+=== multi_target_base
+[[data::multi_terget_base]]
+
+`multi_target_base`
+继承自<<api::tlm_target_socket, tlm_target_socket>>
+和<<data::multi_target_base_if, multi_target_base_if>>，其本质仍然是一个虚基类：
+
+.src/tlm_utils/multi_socket_bases.h
+[source,cpp]
+----
+/*
+This class forms the base for multi target sockets.
+It enforces a multi target socket to implement all functions
+needed to do hierarchical bindings.
+*/
+template <unsigned int BUSWIDTH = 32,
+          typename TYPES = tlm::tlm_base_protocol_types,
+          unsigned int N=0,
+          sc_core::sc_port_policy POL = sc_core::SC_ONE_OR_MORE_BOUND>
+class multi_target_base
+  : public tlm::tlm_target_socket<BUSWIDTH, TYPES, N, POL>
+  , public multi_target_base_if<TYPES>
+  , protected multi_socket_base
+{
+public:
+  //typedef for the base type: the standard tlm target socket
+  typedef tlm::tlm_target_socket<BUSWIDTH, TYPES, N, POL > base_type;
+  
+  //this method shall return the multi_init_base to which the
+  // multi_init_base is bound hierarchically
+  //  If the base is not bound hierarchically it shall return a pointer to itself                                                
+  virtual multi_target_base* get_hierarch_bind()=0;
+  
+  //this method shall inform the multi target socket that it is bound
+  // hierarchically and to which other multi target socket it is bound hierarchically
+  virtual void set_hierarch_bind(multi_target_base*)=0;
+
+  virtual tlm::tlm_socket_category get_socket_category() const
+  {
+    return tlm::TLM_MULTI_TARGET_SOCKET;
+  }
+
+  //ctor and dtor
+  virtual ~multi_target_base(){}
+  multi_target_base():base_type(sc_core::sc_gen_unique_name("multi_target_base")){}
+  multi_target_base(const char* name):base_type(name){}
+
+private:
+  const sc_core::sc_object* get_socket() const { return this; }
+};
+----
+
+相比于基类<<data::multi_target_base_if, multi_target_base_if>>，multi_target_base新增加了
+接口函数get_hierarch_bind和set_hierarch_bind两个。
+
+=== multi_to_multi_bind_base
+[[data::multi_to_multi_bind_base]]
+
+`multi_to_multi_bind_base` 是一个虚基类，定义了接口函数 `get_last_binder`:
+
+.src/tlm_utils/multi_socket_bases.h
+[source,cpp]
+----
+/*
+All multi sockets must additionally derive from this class.
+It enforces a multi socket to implement a function 
+needed to do multi init to multi target bindings.
+*/
+template <typename TYPES>
+class multi_to_multi_bind_base{
+public:
+  virtual ~multi_to_multi_bind_base(){}
+  virtual tlm::tlm_fw_transport_if<TYPES>* get_last_binder(tlm::tlm_bw_transport_if<TYPES>*)=0;
+};
+----
+
+== multi_passthrough_initiator_socket
+[[data::multi_passthrough_initiator_socket]]
+
+`multi_passthrough_initiator_socket` 的基本思想在于，相比于
+<<data::simple_initiator_socket, simple_initiator_socket>>，
+multi_passthrough_initiator_socket可以绑定多个
+<<api::tlm_bw_transport_if, tlm_bw_transport_if>>，并将这些对
+tlm_bw_transport_if的API调用，打上对应的ID，转发给注册的回调函数。
+
+首先，multi_passthrough_initiator_socket继承自
+<<data::multi_init_base, multi_init_base>>，这意味着
+multi_passthrough_initiator_socket是一个
+<<api::tlm_initiator_socket, tlm_initiator_socket>>：
+
+.src/tlm_utils/multi_passthrough_initiator_socket.h
+[source,cpp]
+----
+template <typename MODULE,
+          unsigned int BUSWIDTH = 32,
+          typename TYPES = tlm::tlm_base_protocol_types,
+          unsigned int N=0, sc_core::sc_port_policy POL = sc_core::SC_ONE_OR_MORE_BOUND>
+class multi_passthrough_initiator_socket
+  : public multi_init_base< BUSWIDTH, TYPES, N, POL>
+{
+public:
+
+//blabla
+  //vector of connected sockets
+  std::vector<tlm::tlm_fw_transport_if<TYPES>*> m_sockets;
+  std::vector<tlm::tlm_fw_transport_if<TYPES>*> m_used_sockets;
+  //vector of binders that convert untagged interface into tagged interface
+  std::vector<callback_binder_bw<TYPES>*> m_binders;
+
+  base_type*  m_hierarch_bind; //pointer to hierarchical bound multi port
+  bool m_beoe_disabled;  // bool that remembers whether this socket shall bind callbacks or not
+  callback_binder_bw<TYPES> m_dummy; //a callback binder that is bound to the underlying export
+                                     // in case there was no real bind
+
+  //callbacks as functors
+  // (allows to pass the callback to another socket that does not know the type of the module that owns
+  //  the callbacks)
+  typename callback_binder_bw<TYPES>::nb_func_type  m_nb_f;
+  typename callback_binder_bw<TYPES>::dmi_func_type m_dmi_f;
+};
+----
+
+作为一个tlm_initiator_socket, multi_passthrough_initiator_socket则是一个
+`sc_port<FW_IF>`，天然可以绑定多个tlm_fw_transport_if。然而，multi_passthrough_initiator_socket
+本身又拥有一个 `sc_export<BW_IF>`  成员变量，这意味着只能有一个 BW_IF的sc_port绑定到
+multi_passthrough_initiator_socket的 `sc_export<BW_IF>` 上。这并不符合我们需要的设计目的。
+
+为此，multi_passthrough_initiator_socket设计了一个叫 `m_binders` 的成员变量。这个成员变量
+存放了一系列的 <<data::callback_binder_bw, callback_binder_bw>>。
+每当 multi_passthrough_initiator_socket的 `sc_export<BW_IF>`  需要被绑定的时候，都需要
+调用 `tlm_initiator_socket` 的 get_base_interface 函数。这个函数实际上是一个虚函数，而multi_passthrough_initiator_socket
+就是在这里，做了特殊的处理：
+
+.src/tlm_utils/multi_passthrough_initiator_socket.h
+[source,cpp]
+----
+  //Override virtual functions of the tlm_initiator_socket:
+  // this function is called whenever an sc_port (as part of a target socket)
+  //  wants to bind to the export of the underlying tlm_initiator_socket
+  //At this time a callback binder is created an returned to the sc_port
+  // of the target socket, so that it binds to the callback binder
+  virtual tlm::tlm_bw_transport_if<TYPES>& get_base_interface()
+  {
+    m_binders.push_back(new callback_binder_bw<TYPES>(this, m_binders.size()));
+    return *m_binders[m_binders.size()-1];
+  }
+----
+
+一般的 tlm_initiator_socket实现的get_base_interface，都是将tlm_initiator_socket的 `sc_export<BW_IF>`
+成员变量返回。而在multi_passthrough_initiator_socket里，get_base_interface被重写了。每当外界意图绑定到
+multi_passthrough_initiator_socket的`sc_export<BW_IF>` 时，multi_passthrough_initiator_socket
+并不直接返回 `sc_export<BW_IF>`，因为如果这样一来，就无法让 `sc_export<BW_IF>` 被多次绑定了。相反，这里
+会新建一个 <<data::callback_binder_bw, callback_binder_bw>>。新建的
+callback_binder_bw拥有的ID就是目前其他的binder的个数，这样一来这些callback_binder_bw就获得了ID从0开始递增。
+与此同时，callback_binder_bw也是一个tlm_bw_transport_if的派生类，实现了相应的接口函数，所以
+可以将callback_binder_bw作为一个 `tlm_bw_transport_if` 引用返回回去。
+
+这里新建的所有的callback_binder_bw暂时还无法使用，因为还没有调用callback_binder_bw的set_callbacks
+成员函数，设置functor。这部分工作则在multi_passthrough_initiator_socket的before_end_of_elaboration
+中完成：
+
+.src/tlm_utils/multi_passthrough_initiator_socket.h
+[source,cpp]
+----
+  //SystemC standard callback before end of elaboration
+  void before_end_of_elaboration(){
+    //if our export hasn't been bound yet (due to a hierarch binding)
+    // we bind it now to avoid a SystemC error.
+    //We must do that, because it is legal not to register a callback on this socket
+    // as the user might only use b_transport
+    if (!base_type::m_export.get_interface()){
+      base_type::m_export.bind(m_dummy);
+    }
+
+    //'break' here if the socket was told not to do callback binding
+    if (m_beoe_disabled) return;
+
+    //get the callback binders of the top of the hierachical bind chain
+    // NOTE: this could be the same socket if there is no hierachical bind
+    std::vector<callback_binder_bw<TYPES>* >& binders=get_hierarch_bind()->get_binders(); <1>
+
+    //get the interfaces bound to the top of the hierachical bind chain
+    // NOTE: this could be the same socket if there is no hierachical bind
+    m_used_sockets=get_hierarch_bind()->get_sockets();
+
+    //register the callbacks of this socket with the callback binders
+    // we just got from the top of the hierachical bind chain
+    for (unsigned int i=0; i<binders.size(); i++) {
+      binders[i]->set_callbacks(m_nb_f, m_dmi_f);
+    }
+  }
+----
+<1> 后续hierarchy bind部分解释
+
+在这个函数实现的最后，调用了 `binders` 里的每个指针的set_callbacks，将 `m_nb_f`
+和 `m_dmi_f` 两个functor传递进去。
+
+我们首先看下这两个functor的类型，分别是nb_transport_functor和dmi_functor：
+
+.src/tlm_utils/multi_passthrough_initiator_socket.h
+[source,cpp]
+----
+  //callbacks as functors
+  // (allows to pass the callback to another socket that does not know the type of the module that owns
+  //  the callbacks)
+  typename callback_binder_bw<TYPES>::nb_func_type  m_nb_f;
+  typename callback_binder_bw<TYPES>::dmi_func_type m_dmi_f;
+----
+
+这两个functor都是在注册回调函数函数的地方设置上的：
+
+.src/tlm_utils/multi_passthrough_initiator_socket.h
+[source,cpp]
+----
+  //register callback for nb transport of bw interface
+  void register_nb_transport_bw(MODULE* mod,
+                              sync_enum_type (MODULE::*cb)(int,
+                                                           transaction_type&,
+                                                           phase_type&,
+                                                           sc_core::sc_time&))
+  {
+    //warn if there already is a callback
+    if (m_nb_f.is_valid()){
+      display_warning("NBTransport_bw callback already registered.");
+      return;
+    }
+
+    //set the functor
+    m_nb_f.set_function(mod, cb);
+  }
+
+  //register callback for dmi function of bw interface
+  void register_invalidate_direct_mem_ptr(MODULE* mod,
+                             void (MODULE::*cb)(int, sc_dt::uint64, sc_dt::uint64))
+  {
+    //warn if there already is a callback
+    if (m_dmi_f.is_valid()){
+      display_warning("InvalidateDMI callback already registered.");
+      return;
+    }
+
+    //set the functor
+    m_dmi_f.set_function(mod, cb);
+  }
+----
+
+在 register_nb_transport_bw 中，可以注册一个回调函数。注意这个回调函数的原型，第一个
+需要是integer类型的数据，这里就是我们说的ID值了。同理，register_invalidate_direct_mem_ptr
+注册了另一个回调函数。注意，回调函数只需被注册一次，如果回调函数有效，再注册回调函数，则会打印出
+警告信息，并不会报错，然后本次注册无效。如果多次注册回调函数，则以第一次注册的回调函数为准。
+
+至此，multi_passthrough_initiator_socket的逻辑已经理清楚了。外界可以将multi_passthrough_initiator_socket
+多次与其他tlm_target_socket绑定。每次做双向绑定的时候，都需要使用 `get_base_interface` ，获取
+一个新建出来的 <<data::callback_binder_bw, callback_binder_bw>>，所以这些绑定实质上只绑定了
+这些callback_binder_bw。callback_binder_bw内部除了实现tlm_bw_transport_if接口函数外，还持有一个ID信息（这个ID
+信息以被绑定的顺序，从0开始递增）。callback_binder_bw实现的接口函数则将持有的ID值，连同其它参数，一起
+转发给注册了的回调函数上，而注册的回调函数则是multi_passthrough_initiator_socket所提供的。这样一来，外界
+对相关API的调用，在multi_passthrough_initiator_socket注册的回调函数中，就可以区分开来了。
+
+=== hierarchy binding
+
+观察 before_end_of_elaboration的实现，我们可以发现，使用set_callbacks的时候，并不是直接遍历了
+`m_binders`，而是一个本地变量 `binders`:
+
+[source,cpp]
+----
+    //get the callback binders of the top of the hierachical bind chain
+    // NOTE: this could be the same socket if there is no hierachical bind
+    std::vector<callback_binder_bw<TYPES>* >& binders=get_hierarch_bind()->get_binders();
+----
+
+这是因为multi_passthrough_inititor_socket需要考虑到hierarchy binding的处理。
+
+所谓的hierarchy binding，指的是initiator socket绑定（或者被绑定）到另一个initiator socket上。对于普通的
+initiator socket，这并不需要特殊处理，因为一个 `sc_export<BW_IF>` 是可以和另一个 `sc_export<BW_IF>`
+绑定的（前提是被绑定的对象最终已经绑定了一个BW_IF）。然而，由于multi_passthrough_initiator_socket的特殊性，
+并没有使用任何 `sc_export<BW_IF>`，而是override了 get_base_interface的实现。因此，在最hierarchy binding
+的时候，就必须要特殊处理了。
+
+.src/tlm_utils/multi_passthrough_initiator_socket.h
+[source,cpp]
+----
+  //
+  // Bind multi initiator socket to multi initiator socket (hierarchical bind)
+  //
+  virtual void bind(base_type& s)
+  {
+    if (m_binders.size()) {
+      //a multi socket is either bound hierarchically or directly
+      display_error("Socket already directly bound.");
+      return;
+    }
+    if (m_hierarch_bind){
+      display_warning("Socket already bound hierarchically. Bind attempt ignored.");
+      return;
+    }
+
+    //remember to which socket we are hierarchically bound and disable it,
+    // so that it won't try to register callbacks itself
+    s.disable_cb_bind();
+    m_hierarch_bind=&s;
+    base_type::bind(s); //satisfy SystemC
+  }
+
+  //operator notation for hierarchical bind
+  void operator() (base_type& s)
+  {
+    bind(s);
+  }
+----
+
+在做hierarchy binding，即将一个multi initiator socket绑定到另一个multi initiator socket上时，函数实现
+如上。首先，需要检查绑定者的 `m_binders` 是否为空。如果非空，说明这个绑定者本身已经绑定了其他的target socket，
+这里是不允许做完直接绑定之后，还做hierarchy绑定的。然后检查一个标志位 `m_hierarch_bind`，因为不允许
+做二次的hierarchy binding，不过如果错误绑定多次，这里也只是报warning，然后忽略掉多余的绑定请求。
+之后调用被绑定者的 `disable_cb_bind` 函数，将 `m_hierarch_bind` 设置为被绑定者的指针，然后将基类
+绑定一下。
+
+disable_cb_bind的实现如下，讲一个标志位 `m_beoe_disabled` 设置为true：
+
+.src/tlm_utils/multi_passthrough_initiator_socket.h
+[source,cpp]
+----
+  void disable_cb_bind(){ m_beoe_disabled=true;}
+----
+
+herarchy binding的时候，最后调用基类的绑定，主要是为了实现sc_port到sc_port的绑定。然而，这一过程中同样
+伴随着sc_export到sc_export的绑定。对于multi_passthrough_initiator_socket，其 `sc_export<BW_IF>`
+实际并没有得到实现，这样直接绑定的话，被绑定者的`sc_export<BW_IF>` 还没有绑定到具体的BW_IF实现，会出错的。
+为了解决这个问题，multi_passthrough_initiator_socket提供了override的get_export函数实现：
+
+.src/tlm_utils/multi_passthrough_initiator_socket.h
+[source,cpp]
+----
+  //Override virtual functions of the tlm_initiator_socket:
+  // this function is called whenever an sc_export (as part of a initiator socket)
+  //  wants to bind to the export of the underlying tlm_initiator_socket
+  //   i.e. a hierarchical bind takes place
+  virtual sc_core::sc_export<tlm::tlm_bw_transport_if<TYPES> >& get_base_export()
+  {
+    if (!m_beoe_disabled) //we are not bound hierarchically
+      base_type::m_export.bind(m_dummy);  //so we bind the dummy to avoid a SystemC error
+    return base_type::get_base_export(); //and then return our own export so that the hierarchical binding is set up properly
+  }
+
+  virtual const sc_core::sc_export<tlm::tlm_bw_transport_if<TYPES> >& get_base_export() const
+  {
+    return base_type::get_base_export();
+  }
+----
+
+`get_base_export` 实现中，首先检查 `m_beoe_disabled`，如果这个是false，将本地的 m_export（即
+`sc_export<BW_IF>` 绑定到m_dummy上，否则不绑定。前边已经提到，当做hierarchy bind的时候，被绑定者
+的 `m_beoe_disabled` 已经调用 `disable_cb_bind` 被设置为true了。所以，实际上这里是 *调用者* 的
+sc_export绑定到一个m_dummy的实现，然后被 *被调用者* 的sc_export绑定了。
+
+注意，在做基类的hierarchy bind的时候，export的绑定方向是，被绑定者调用 `s.get_base_export()`
+绑定到了 绑定者的 `get_base_export()` 上，如下所示：
+
+.src/tlm_core/tlm_2/tlm_sockets/tlm_initiator_socket.h
+[source,cpp]
+----
+  virtual void bind(base_type& s)
+  {
+    // port
+    (get_base_port())(s.get_base_port());
+    // export
+    (s.get_base_export())(get_base_export());
+  }
+----
+
+NOTE: hierarchy binding是有顺序的，应该按照从最外侧，到里侧依次进行的顺序进行绑定。这样一来，最外侧的
+multi initiator socket的m_export绑定到了m_dummy上，里侧的每个hierarchy binding的multi initiator
+socket的sc-export都绑定到了最外侧的m_export上了。
+
+`m_hierarch_bind` 是保存的一个指针，可以用指针的值来判断是否已经做了hierarchy binding。而
+m_beoe_disabled则是记录这个multi initiator socket是否需要绑定到call back，默认是false，只有
+在做hierarchy binding的时候，*被调用者* 的m_beoe_disabled才会被设置为true。
+`m_dummy` 是一个<<data::callback_binder_bw, callback_binder_bw>>类型的成员变量，这个成员变量存在的
+意义只是为了防止SystemC编译报错，实际仿真运行过程中，m_dummy永远不会用到。
+
+.src/tlm_utils/multi_passthrough_initiator_socket.h
+[source,cpp]
+----
+  base_type*  m_hierarch_bind; //pointer to hierarchical bound multi port
+  bool m_beoe_disabled;  // bool that remembers whether this socket shall bind callbacks or not
+  callback_binder_bw<TYPES> m_dummy; //a callback binder that is bound to the underlying export
+                                     // in case there was no real bind
+----
+
+---
+
+当做完层次化绑定之后，`get_hierarch_bind` 就需要返回层次化绑定 *最里层* 的指针，而不是自己的指针了。这个函数在实现的
+时候判断一下当前的multi initiator socket是否层次化绑定了其他，如果没有，就返回自己的指针，如果已经层次化绑定其他，那么
+就返回绑定了的下一层的 `get_hierarch_bind` 的结果：
+
+.src/tlm_utils/multi_passthrough_initiator_socket.h
+[source,cpp]
+----
+  base_type* get_hierarch_bind(){if (m_hierarch_bind) return m_hierarch_bind->get_hierarch_bind(); else return this;}
+
+  std::vector<callback_binder_bw<TYPES>* >& get_binders(){return m_binders;}
+  std::vector<tlm::tlm_fw_transport_if<TYPES>*>& get_sockets(){return m_sockets;}
+----
+
+现在我们回头重新审视一下before_end_of_elaboration的实现：
+
+.src/tlm_utils/multi_passthrough_initiator_socket.h
+[source,cpp]
+----
+  //SystemC standard callback before end of elaboration
+  void before_end_of_elaboration(){
+    //if our export hasn't been bound yet (due to a hierarch binding)
+    // we bind it now to avoid a SystemC error.
+    //We must do that, because it is legal not to register a callback on this socket
+    // as the user might only use b_transport
+    if (!base_type::m_export.get_interface()){
+      base_type::m_export.bind(m_dummy);
+    }
+
+    //'break' here if the socket was told not to do callback binding
+    if (m_beoe_disabled) return;
+
+    //get the callback binders of the top of the hierachical bind chain
+    // NOTE: this could be the same socket if there is no hierachical bind
+    std::vector<callback_binder_bw<TYPES>* >& binders=get_hierarch_bind()->get_binders();
+
+    //get the interfaces bound to the top of the hierachical bind chain
+    // NOTE: this could be the same socket if there is no hierachical bind
+    m_used_sockets=get_hierarch_bind()->get_sockets();
+
+    //register the callbacks of this socket with the callback binders
+    // we just got from the top of the hierachical bind chain
+    for (unsigned int i=0; i<binders.size(); i++) {
+      binders[i]->set_callbacks(m_nb_f, m_dmi_f);
+    }
+  }
+----
+
+首先判断下自己的 `m_export` 是否被绑定了，如果没绑定，那么就绑定到 m_dummy上。如果
+`m_beoe_disabled` 为true，说明自己是层次化绑定的里层中的一个（而不是最外层），这种情况下无需处理
+任何事情。对于层次化绑定 *最外层* 的multi initiator socket，调用 `get_hierarch_bind()`
+的 `get_binders()`，返回 *最里层* 的binders，为这些binders设置回调函数。
+
+NOTE: 这相当于，*最外层* 的multi initiator socket注册回调函数，然后设置到 *最里层*
+的binder上，注意hierarchy bind的这种关系。
+
+=== bind to target
+
+.src/tlm_utils/multi_passthrough_initiator_socket.h
+[source,cpp]
+----
+  //bind against a target socket
+  virtual void bind(base_target_socket_type& s)
+  {
+    //error if this socket is already bound hierarchically
+    if (m_hierarch_bind) {
+      display_error("Already hierarchically bound.");
+      return;
+    }
+
+    base_type::bind(s); //satisfy systemC, leads to a call to get_base_interface()
+
+    //try to cast the target socket into a fw interface
+    sc_core::sc_export<tlm::tlm_fw_transport_if<TYPES> >* p_ex_s=dynamic_cast<sc_core::sc_export<tlm::tlm_fw_transport_if<TYPES> >*>(&s);
+    if (!p_ex_s) {
+      display_error("Multi socket not bound to tlm_socket.");
+      return;
+    }
+
+    //try a cast into a multi sockets
+    multi_to_multi_bind_base<TYPES>* test=dynamic_cast<multi_to_multi_bind_base<TYPES>*> (p_ex_s);
+    if (test) //did we just do a multi-multi bind??
+      //if that is the case the multi target socket must have just created a callback binder
+      // which we want to get from it.
+      //Moreover, we also just created one, which we will pass to it.
+      m_sockets.push_back(test->get_last_binder(m_binders[m_binders.size()-1]));
+    else{  // if not just bind normally
+      sc_core::sc_export<tlm::tlm_fw_transport_if<TYPES> >& ex_s=*p_ex_s;
+      m_sockets.push_back(&((tlm::tlm_fw_transport_if<TYPES>&)ex_s)); //store the interface we are bound against
+    }
+  }
+
+  //operator notation for direct bind
+  void operator() (base_target_socket_type& s)
+  {
+    bind(s);
+  }
+----
+
+当multi initiator socket绑定到target上时，首先检查这个multi initiator socket是否已经绑定了
+其他的multi initiator socket，如果已经绑定，则说明绑定错误，直接报错。hierarchy binding中，只有
+*最里层* 的multi initiator socket才可以绑定到target socket。
+
+之后，先做基类的绑定。做完基类绑定之后，尝试将被绑定对象转为一个
+`sc_export<FW_IF>` 指针，如果转出来的指针非空（大部分都是这样），说明被绑定对象是一个TLM里的target socket。
+这是为了防止multi initiator socket绑定到非TLM Socket上，因为
+这里的 `base_target_socket_type` 只是继承自
+<<api::tlm_base_socket_if, tlm_base_socket_if>>的
+<<api::tlm_base_target_socket_b, tlm_base_target_socket_b>>，不一定是
+<<api::tlm_base_target_socket, tlm_base_target_socket>>。如果被绑定的target socket
+是用户自定义的继承自<<api::tlm_base_target_socket_b, tlm_base_target_socket_b>>，
+但没有继承自 `sc_export<tlm_fw_transport_if>`，这个dynamic cast就返回空指针。
+
+接下来，继续尝试将其cast成一个<<data::multi_to_multi_bind_base, multi_to_multi_bind_base>>
+的指针。注意，只有后续的<<data::multi_passthrough_target_socket, multi_passthrough_target_socket>>
+才继承自multi_to_multi_bind_base，其他诸如
+<<data::simple_target_socket, simple_target_socket>>
+和<<data::passthrough_target_socket, passthrough_target_socket>>都
+没有继承自multi_to_multi_bind_base.
+如果dynamic cast
+出来的指针是空的，说明不是multi bind的情况，这时候只需要将被绑定对象作为一个tlm_fw_transport_if指针，
+保存到m_sockets里即可。
+
+如果cast出来的指针非空，说明被绑定对象是一个multi_passthrough_target_socket。
+这时候因为是多对多的绑定，需要调用multi_to_multi_bind_base的last_binder接口函数。multi_passthrough_target_socket
+实现这个接口函数的细节我们后续再介绍。
+
+=== constructor
+
+multi_passthrough_initiator_socket的构造函数比较简单，因为是单参数的，所以设置了explicit，防止出现
+意料之外的构造。构造函数只需要一个名字即可，如果不提供的话，则使用default_name()函数生成一个独特的名字。
+
+.src/tlm_utils/multi_passthrough_initiator_socket.h
+[source,cpp]
+----
+  static const char* default_name()
+    { return sc_core::sc_gen_unique_name("multi_passthrough_initiator_socket"); }
+
+  //CTOR
+  explicit multi_passthrough_initiator_socket(const char* name = default_name())
+      : base_type(name)
+      , m_hierarch_bind(0)
+      , m_beoe_disabled(false)
+      , m_dummy(this,42)
+  {
+  }
+----
+
+值得注意的是，m_dummy被初始化具有ID 42。这是一个magic数字。因为m_dummy实际并不参与到仿真的过程，因此即使
+多对多绑定，有超过42个transport_bw_transport_if被绑定上来，也不会造成冲突的。
+
+== multi_passthrough_initiator_socket_optional
+[[data::multi_passthrough_initiator_socket_optional]]
+
+multi_passthrough_initiator_socket_optional，相比于
+<<data::multi_passthrough_initiator_socket, multi_passthrough_initiator_socket>>，
+特化了绑定的策略，设置为SC_ZERO_OR_MORE_BOUND。这样一来，作为一个sc_port<FW_IF>的继承类，
+multi_passthrough_initiator_socket_optional可以不绑定任何其他的FW_IF实现:
+
+.src/tlm_utils/multi_passthrough_initiator_socket.h
+[source,cpp]
+----
+template <typename MODULE,
+          unsigned int BUSWIDTH = 32,
+          typename TYPES = tlm::tlm_base_protocol_types,
+          unsigned int N=0>
+class multi_passthrough_initiator_socket_optional
+  : public multi_passthrough_initiator_socket<MODULE,BUSWIDTH,TYPES,N,sc_core::SC_ZERO_OR_MORE_BOUND>
+{
+  typedef multi_passthrough_initiator_socket<MODULE,BUSWIDTH,TYPES,N,sc_core::SC_ZERO_OR_MORE_BOUND> socket_b;
+public:
+  multi_passthrough_initiator_socket_optional() : socket_b() {}
+  explicit multi_passthrough_initiator_socket_optional(const char* name) : socket_b(name) {}
+};
+----
+
+== multi_passthrough_target_socket
+[[data::multi_passthrough_target_socket]]
+
+multi_passthrough_target_socket继承自<<data::multi_target_base, multi_target_base>>，
+此外还继承自<<data::multi_to_multi_bind_base, multi_to_multi_bind_base>>，继承自后者，允许
+在多对多的绑定中，做一些特殊的处理：
+
+.src/tlm_utils/multi_passthrough_target_socket.h
+[source,cpp]
+----
+template <typename MODULE,
+          unsigned int BUSWIDTH = 32,
+          typename TYPES = tlm::tlm_base_protocol_types,
+          unsigned int N=0,
+          sc_core::sc_port_policy POL = sc_core::SC_ONE_OR_MORE_BOUND>
+class multi_passthrough_target_socket
+  : public multi_target_base< BUSWIDTH, TYPES, N, POL>
+  , public multi_to_multi_bind_base<TYPES>
+{
+  //blabla
+  //vector of connected sockets
+  std::vector<tlm::tlm_bw_transport_if<TYPES>*> m_sockets;
+  //vector of binders that convert untagged interface into tagged interface
+  std::vector<callback_binder_fw<TYPES>*> m_binders;
+
+  base_type*  m_hierarch_bind; //pointer to hierarchical bound multi port
+  bool m_eoe_disabled; //bool that disables callback bindings at end of elaboration
+  bool m_export_callback_created; //bool that indicates that a binder has been created from a callback registration
+
+  //callbacks as functors
+  // (allows to pass the callback to another socket that does not know the type of the module that owns
+  //  the callbacks)
+  typename callback_binder_fw<TYPES>::nb_func_type    m_nb_f;
+  typename callback_binder_fw<TYPES>::b_func_type     m_b_f;
+  typename callback_binder_fw<TYPES>::debug_func_type m_dbg_f;
+  typename callback_binder_fw<TYPES>::dmi_func_type   m_dmi_f;
+};
+----
+
+=== register call-back
+
+multi_passthrough_target_socket提供了4个API函数，register_nb_transport_fw, register_b_transport,
+register_transport_dbg和register_get_direct_mem_ptr，用来注册回调函数：
+
+.src/tlm_utils/multi_passthrough_target_socket.h
+[source,cpp]
+----
+  //register callback for nb transport of fw interface
+  void register_nb_transport_fw(MODULE* mod,
+                              nb_cb cb)
+  {
+    check_export_binding();
+
+    //warn if there already is a callback
+    if (m_nb_f.is_valid()){
+      display_warning("NBTransport_bw callback already registered.");
+      return;
+    }
+
+    //set the functor
+    m_nb_f.set_function(mod, cb);
+  }
+
+  //register callback for b transport of fw interface
+  void register_b_transport(MODULE* mod,
+                              b_cb cb)
+  {
+    check_export_binding();
+
+    //warn if there already is a callback
+    if (m_b_f.is_valid()){
+      display_warning("BTransport callback already registered.");
+      return;
+    }
+
+    //set the functor
+    m_b_f.set_function(mod, cb);
+  }
+
+  //register callback for debug transport of fw interface
+  void register_transport_dbg(MODULE* mod,
+                              dbg_cb cb)
+  {
+    check_export_binding();
+
+    //warn if there already is a callback
+    if (m_dbg_f.is_valid()){
+      display_warning("DebugTransport callback already registered.");
+      return;
+    }
+
+    //set the functor
+    m_dbg_f.set_function(mod, cb);
+  }
+
+  //register callback for DMI of fw interface
+  void register_get_direct_mem_ptr(MODULE* mod,
+                                   dmi_cb cb)
+  {
+    check_export_binding();
+
+    //warn if there already is a callback
+    if (m_dmi_f.is_valid()){
+      display_warning("DMI callback already registered.");
+      return;
+    }
+
+    //set the functor
+    m_dmi_f.set_function(mod, cb);
+  }
+----
+
+注册的回调函数分别被放入到了m_nb_f, m_b_f, m_dbg_f和m_dmi_f上了。
+
+注意，每次注册回调函数的时候，都会调用一个check_export_binding的函数，这个函数实现如下：
+
+.src/tlm_utils/multi_passthrough_target_socket.h
+[source,cpp]
+----
+  void check_export_binding()
+  {
+    //if our export hasn't been bound yet (due to a hierarch binding)
+    //  we bind it now.
+    //We do that here as the user of the target port HAS to bind at least on callback,
+    //otherwise the socket was useless. Nevertheless, the target socket may still
+    // stay unbound afterwards.
+    if (!sc_core::sc_export<tlm::tlm_fw_transport_if<TYPES> >::get_interface())
+    {
+      // We bind to a callback_binder that will be used as the first interface
+      // i.e. calls to the sc_export will have the same ID as calls from the first initator
+      // socket bound
+      callback_binder_fw<TYPES> * binder;
+
+      if (m_binders.size() == 0)
+      {
+        binder = new callback_binder_fw<TYPES>(this, m_binders.size());
+        m_binders.push_back(binder);
+        m_export_callback_created = true;
+      }
+      else
+      {
+        binder = m_binders[0];
+      }
+
+      sc_core::sc_export<tlm::tlm_fw_transport_if<TYPES> >::bind(*binder);
+    }
+  }
+----
+
+multi_passthrough_target_socket继承自tlm_target_socket，所以天然是一个 `sc_export<FW_IF>`
+的派生类。首先判断下这个sc_export有没有绑定到某个FW_IF上。如果没有，则这里新建一个
+<<data::callback_binder_fw, callback_binder_fw>>，然后将本sc_export绑定到这个
+callback_binder_fw上。注意，新建的callback_binder_fw保存的ID都是0，因为只有m_binders为空
+的时候，才会新建并push进去。
+
+=== end of elaboration
+
+multi_passthrough_target_socket override了end_of_elaboration（
+multi_passthrough_initiator_socket override的是before_end_of_elaboration）:
+
+.src/tlm_utils/multi_passthrough_target_socket.h
+[source,cpp]
+----
+  //the standard end of elaboration callback
+  void end_of_elaboration(){
+    //'break' here if the socket was told not to do callback binding
+    if (m_eoe_disabled) return;
+
+    //get the callback binders and the multi binds of the top of the hierachical bind chain
+    // NOTE: this could be the same socket if there is no hierachical bind
+    std::vector<callback_binder_fw<TYPES>* >& binders=get_hierarch_bind()->get_binders();
+    std::map<unsigned int, tlm::tlm_bw_transport_if<TYPES>*>&  multi_binds=get_hierarch_bind()->get_multi_binds();
+
+    // complete binding only if there has been a real bind
+    bool locally_unbound = (binders.size() == 1 && m_export_callback_created);
+    // no call to get_base_interface has consumed the export - ignore
+    if (locally_unbound && !m_hierarch_bind)
+        return;
+
+    // iterate over all binders
+    for (unsigned int i=0; i<binders.size(); i++) {
+      binders[i]->set_callbacks(m_nb_f, m_b_f, m_dmi_f, m_dbg_f); //set the callbacks for the binder <1>
+      if (multi_binds.find(i)!=multi_binds.end()) //check if this connection is multi-multi
+        //if so remember the interface
+        m_sockets.push_back(multi_binds[i]);
+      else{ //if we are bound to a normal socket
+        //get the calling port and try to cast it into a tlm socket base
+        base_initiator_socket_type* test=dynamic_cast<base_initiator_socket_type*>(binders[i]->get_other_side());
+        if (!test){display_error("Not bound to tlm_socket.");}
+        m_sockets.push_back(&test->get_base_interface()); //remember the interface
+      }
+    }
+  }
+----
+
+在这里，binders被调用了set_callbacks，将4个注册了的回调函数放到binder中。
+
+在end_of_elaboration中，首先检查m_eoe_disabled，如果是true，表明这不是层次化绑定的 *最里层* ，那么
+就无需执行end_of_elaboration的其他操作。在层次化绑定的场景下，只有 *最里层* 才能够执行后续的操作。footnote:[这和multi
+initiator socket相反，后者层次化绑定只有最外层才能够执行before_end_of_elaboration]
+
+=== hierarchy binding
+
+当一个multi target socket绑定到另一个target sockeet上（即层次化绑定）的时候，实现如下：
+
+.src/tlm_utils/multi_passthrough_target_socket.h
+[source,cpp]
+----
+  //
+  // Bind multi target socket to multi target socket (hierarchical bind)
+  //
+  virtual void bind(base_type& s)
+  {
+    //warn if already bound hierarchically
+    if (m_eoe_disabled){
+      display_warning("Socket already bound hierarchically. Bind attempt ignored.");
+      return;
+    }
+
+    //disable our own end of elaboration call
+    disable_cb_bind();
+
+    //inform the bound target socket that it is bound hierarchically now
+    s.set_hierarch_bind((base_type*)this);
+    base_type::bind(s); //satisfy SystemC
+  }
+
+  //operator notation for hierarchical bind
+  void operator() (base_type& s)
+  {
+    bind(s);
+  }
+----
+
+首先检查 `m_eoe_disabled` 是否为true，如果为true，则表明已经完成层次化绑定，这里打印出一个
+warning，然后退出。然后，调用 *自己* 的disable_cb_bind函数：
+
+.src/tlm_utils/multi_passthrough_target_socket.h
+[source,cpp]
+----
+  void disable_cb_bind(){ m_eoe_disabled=true;}
+----
+
+这会将自己的 `m_eoe_disabled` 设置为true。
+
+之后，使用被绑定者的set_hierarch_bind，将绑定者的指针传入。这样一来，对于multi target socket，
+层次化绑定中，被绑定者就拿到了绑定者的指针。
+
+最后，调用基类的层次化绑定，满足SystemC的需求。
+
+[NOTE]
+====
+
+multi target socket的层次化绑定和multi initiator socket的层次化绑定方向是相反的。
+当一个multi initiator socket层次化绑定另一个multi initiator socket，被绑定者被标记为层次化
+绑定，绑定者拿到了被绑定者的指针。而当multi target socket层次化绑定到另一个multi target socket的时候，
+绑定者被标记为层次化绑定，被绑定者拿到了绑定者的指针。
+
+例如，IA, IB, IC, ID是multi initiator socket:
+
+[source,cpp]
+----
+IC.bind(ID); // mark ID as hierarchy bound, IC.m_hierarch_bind = &ID
+IB.bind(IC); // mark IC as hierarchy bound, IB.m_hierarch_bind = &IC
+IA.bind(IB); // mark IB as hierarchy bound, IA.m_hierarch_bind = &IB
+----
+
+最终，`IA.get_hierarch_bind()` 返回的是 `&ID`，最里层的实现。在before_end_of_elaboration
+的时候，也只有 `IA` 没有标记为hierarchy bound，才能过运行before_end_of_elaboration的回调
+设置部分。IA设置的回调，都设置到了ID的binder中。
+
+如果，TA, TB, TC, TD是multi target socket:
+
+[source,cpp]
+----
+TC.bind(TD); // mark TC as hierarchy bound, TD.m_hierarch_bind = &TC
+TB.bind(TC); // mark TB as hierarchy bound, TC.m_hierarch_bind = &TB
+TA.bind(TB); // mark TA as hierarchy bound, TB.m_hierarch_bind = &TA
+----
+
+最终， `TD.get_hierarch_bind()` 返回的是 `&TA`，即最外层的实现。在end_of_elaboration的时候，
+也只有 `TD` 没有标记为 hierarchy bound，才能够运行end_of_elaboration函数的回调设置部分。
+TD设置的回调，都设置到了TA的binder中。
+
+====
+
+=== initiator binding
+
+initiator socket绑定到multi_passthrough_target_socket的过程，是通过override
+get_base_interface实现的（和截获multi initiator socket的方式是一样的，但具体
+实现并不一样）：
+
+.src/tlm_utils/multi_passthrough_target_socket.h
+[source,cpp]
+----
+  //Override virtual functions of the tlm_target_socket:
+  // this function is called whenever an sc_port (as part of a init socket)
+  //  wants to bind to the export of the underlying tlm_target_socket
+  //At this time a callback binder is created an returned to the sc_port
+  // of the init socket, so that it binds to the callback binder
+  virtual tlm::tlm_fw_transport_if<TYPES>& get_base_interface()
+  {
+    //error if this socket is already bound hierarchically
+    if (m_hierarch_bind) display_error("Socket already bound hierarchically.");
+
+    if (m_export_callback_created) {
+      // consume binder created from the callback registration
+      m_export_callback_created = false;
+    } else {
+      m_binders.push_back(new callback_binder_fw<TYPES>(this, m_binders.size()));
+    }
+
+    return *m_binders[m_binders.size()-1];
+  }
+----
+
+当initiator socket绑定到一个taget socket的时候，实现如下：
+
+.src/tlm_core/tlm_2/tlm_sockets/tlm_initiator_socket.h
+[source,cpp]
+----
+  //
+  // Bind initiator socket to target socket
+  // - Binds the port of the initiator socket to the export of the target
+  //   socket
+  // - Binds the port of the target socket to the export of the initiator
+  //   socket
+  //
+  virtual void bind(base_target_socket_type& s)
+  {
+    // initiator.port -> target.export
+    (get_base_port())(s.get_base_interface());
+    // target.port -> initiator.export
+    (s.get_base_port())(get_base_interface());
+  }
+----
+
+所以这里override了multi target socket的get_base_interface成员函数。首先，如果
+这个multi target socket已经 *被* hierarchy bind到其他上了（作为bind右侧的参数），那么就不能由initiator socket
+绑定，这里就会报错。在层次化绑定场景下，只有处于最左段的multi target socket才能用来作为initiator socket
+的绑定对象。关于绑定顺序，我们会在后续根据具体的例子来讨论总结规律。
+
+如果已经注册了回调函数，注册回调函数会创建一个 `binder[0]`，这种时候返回这个 `binder[0]` 即可。
+除了第一次绑定外，其他多次的绑定都需要创建一个新的binder，放入到数组 `m_binders` 中。
+这些binder都是<<data::callback_binder_fw, callback_binder_fw>>类型，持有的ID从0开始递增。
+
+这意味着，每次initiator socket绑定multi target socket，都会调用了get_base_interface，
+返回一个指向新建（或者注册回调函数时候创建）的callback_binder_fw指针。
+
+=== constructor
+
+multi_passthrough_target_socket的构造函数相对来说也比较简单：
+
+.src/tlm_utils/multi_passthrough_target_socket.h
+[source,cpp]
+----
+  static const char* default_name()
+    { return sc_core::sc_gen_unique_name("multi_passthrough_target_socket"); }
+
+  //CTOR
+  explicit multi_passthrough_target_socket(const char* name = default_name())
+      : base_type(name)
+      , m_hierarch_bind(0)
+      , m_eoe_disabled(false)
+      , m_export_callback_created(false)
+  {
+  }
+----
+
+== multi_passthrough_target_socket_optional
+[[data::multi_passthrough_target_socket_optional]]
+
+multi_passthrough_target_socket_optional是
+<<data::multi_passthrough_target_socket, multi_passthrough_target_socket>>的特化，主要设置了默认
+的POL为SC_ZERO_OR_MORE_BOUND，这就允许空绑定的实现：
+
+.src/tlm_utils/multi_passthrough_target_socket.h
+[source,cpp]
+----
+template <typename MODULE,
+          unsigned int BUSWIDTH = 32,
+          typename TYPES = tlm::tlm_base_protocol_types,
+          unsigned int N=0>
+class multi_passthrough_target_socket_optional
+  : public multi_passthrough_target_socket<MODULE,BUSWIDTH,TYPES,N,sc_core::SC_ZERO_OR_MORE_BOUND>
+{
+  typedef multi_passthrough_target_socket<MODULE,BUSWIDTH,TYPES,N,sc_core::SC_ZERO_OR_MORE_BOUND> socket_b;
+public:
+  multi_passthrough_target_socket_optional() : socket_b() {}
+  explicit multi_passthrough_target_socket_optional(const char* name) : socket_b(name) {}
+};
+----
+
+== multi socket binding orders
+
+multi socket在做hierarchy binding的时候，需要遵循一定的顺序。
+
+具体来说，multi initiator socket在做hierarchy binding之后，只有bind序列的最右端可以绑定
+target socket。这是因为multi initiator socket在做hierarchy binding的时候，会将
+左侧multi initiator socket的 `m_hierarch_bind` 设置为右侧的指针。而当multi initiator
+socket绑定到一个target socket的时候，则需要检查这个指针，保证这个指针为空指针，否则报错。
+
+当multi target socket在做hierarchy binding的时候，只有bind序列的最左端可以被绑定
+到initiator socket。这是因为multi target socket在做hierarchy binding的时候，会将
+右侧multi initiator socket的 `m_hierarch_bind` 设置为左侧对象的指针。而当multi
+target socket被绑定到一个initiator socket的时候，需要检查这个指针，保证指针为空（参考
+multi target socket的get_base_interface实现），否则报错。
+
+multi initiator socket可以绑定到如下socket上:
+
+* 一个或者多个tlm_target_socket
+* 一个或者多个simple_target_socket
+* 一个或者多个passthrough_target_socket
+* 一个或者多个multi_passthrough_target_socket
+* 以上的任意组合
+
+而multi target socket则可以被以下socket绑定：
+
+* 一个或者多个tlm_initiator_socket
+* 一个或者多个simple_initiator_socket
+* 一个或者多个multi_passthrough_initiator_socket
+* 以上的任意组合
