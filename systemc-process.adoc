@@ -104,6 +104,7 @@ sc_process_b的成员变量比较复杂，这里我们按照这些成员变量�
     int                          m_active_reset_n;  // number of resets active.
 ----
 
+[[api::sc_process_b::dont_initialize]]
 单独的 `m_dont_init` 是用来表示process是否需要在最初执行一遍，参考
 <<api::dont_initialize, 控制METHOD线程是否初始化>>部分的使用，Thread/CThread
 部分和Method线程初始化控制同理：
@@ -1459,6 +1460,7 @@ sc_cthread_process在基类 `sc_thread_process` 基础上，没有新增加其�
 sc_cthread_process并没有新增比较重要的成员函数。
 
 == reset机制
+[[concept::process::reset]]
 
 Process中有一套非常复杂的reset机制，来仿真模拟实际的RTL reset行为。
 
@@ -2440,8 +2442,10 @@ suspend操作会挂起一个线程，而resume操作则会继续此线程的执�
 指的是从用户方显式地要求挂起和唤醒线程，而不是SystemC内部在线程切换的时候的线程挂起
 和唤醒动作。
 
+[[api::sc_process_b::suspend_process]]
 sc_process_handle的suspend和resume都转发给了下层的process的suspend_process()
 和resume_process():
+[[api::sc_process_b::resume_process]]
 
 .src/sysc/kernel/sc_process_handle.h
 [source,cpp]

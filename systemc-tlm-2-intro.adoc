@@ -1503,9 +1503,9 @@ BW_IF是sc_core::sc_interface的子类，默认的BW_IF参数tlm_bw_transport_if
 虚基类，需要实现的接口函数如下：
 
 * FW_IF需要实现<<api::tlm_fw_nonblocking_transport_if::nb_transport_fw, nb_transport_fw>>
-* FW_IF需要实现<<api::tlm_fw_blocking_transport_if::b_transport, b_transport>>
+* FW_IF需要实现<<api::tlm_blocking_transport_if::b_transport, b_transport>>
 * FW_IF需要实现<<api::tlm_fw_direct_mem_if::get_direct_mem_ptr, get_direct_mem_ptr>>
-* FW_IF需要实现<<api::api::tlm_transport_dbg_if::transport_dbg, transport_dbg>>
+* FW_IF需要实现<<api::tlm_transport_dbg_if::transport_dbg, transport_dbg>>
 * BW_IF需要实现<<api::tlm_bw_nonblocking_transport_if::nb_transport_bw, nb_transport_bw>>
 * BW_IF需要实现<<api::tlm_bw_direct_mem_if::invalidate_direct_mem_ptr, invalidate_direct_mem_ptr>>
 
@@ -2175,10 +2175,10 @@ tlm_bw_transport_if的组件，这在下一部分介绍。
 
 == Global Quantum
 [[api::tlm_global_quantum]]
-[[data::tlm_global_quantum]]
 
 Global Quantum是一个概念上非常重要，但实现起来相对简单的设计。tlm_global_quantum是一个直接设计的类，没有
 继承自其他任何基类，同时也没有虚函数可以重写：
+[[data::tlm_global_quantum]]
 
 .src/tlm_core/tlm_2/tlm_quantum/tlm_global_quantum.h
 [source,cpp]

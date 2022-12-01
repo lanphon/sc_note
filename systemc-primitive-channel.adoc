@@ -590,10 +590,10 @@ sc_signal_t<T,POL>::write( const T& value_ )
 
 ==== update函数实现
 
+[[api::sc_signal_t::update]]
 被注册到registry的update链表中的 `sc_signal_t<>` 会在UPDATE阶段回调自己的
 `update` 函数，而这里的update函数的实现主要是：
 
-[[api::sc_signal_t::update]]
 [[api::sc_signal_t::do_update]]
 .src/sysc/communication/sc_signal.h
 [source,cpp]

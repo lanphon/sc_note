@@ -196,10 +196,9 @@ public:
 
 这里定义的接口函数基本和get/put一样，就不再赘述了。
 
-此外，还有三个组合起来的interface, tlm_get_if, tlm_put_if和tlm_peek_if:
 [[tlm::1::tlm_get_if]]
+此外，还有三个组合起来的interface, tlm_get_if, tlm_put_if和tlm_peek_if:
 [[tlm::1::tlm_put_if]]
-[[tlm::1::tlm_peek_if]]
 
 .src/tlm_core/tlm_1/tlm_req_resp/tlm_1_interfaces/tlm_core_ifs.h
 [source,cpp]
@@ -220,12 +219,13 @@ class tlm_peek_if :
   public virtual tlm_nonblocking_peek_if< T > {};
 ----
 
+[[tlm::1::tlm_peek_if]]
 这3个interface，都是对应的阻塞和非阻塞interface组合在一起。
 
-除此之外，还有get和peek组合起来的interface, tlm_blocking_get_peek_if, tlm_nonblocking_get_peek_if
-和tlm_get_peek_if:
 [[tlm::1::tlm_blocking_get_peek_if]]
+除此之外，还有get和peek组合起来的interface, tlm_blocking_get_peek_if, tlm_nonblocking_get_peek_if
 [[tlm::1::tlm_nonblocking_get_peek_if]]
+和tlm_get_peek_if:
 [[tlm::1::tlm_get_peek_if]]
 
 
@@ -290,11 +290,11 @@ tlm_fifo_debug_if是一个用来辅助debug的interface，定义的接口函数�
 * nb_peek
 * nb_poke
 
+[[tlm::1::tlm_fifo_put_if]]
 在tlm_fifo_debug_if的基础上，扩充出来了两个interface：和
 <<tlm::1::tlm_put_if, tlm_put_if>>组合得到的tlm_put_if，
 以及和<<tlm::1::tlm_get_peek_if, tlm_get_peek_if>>组合
 得到的tlm_fifo_get_if:
-[[tlm::1::tlm_fifo_put_if]]
 [[tlm::1::tlm_fifo_get_if]]
 
 .src/tlm_core/tlm_1/tlm_req_resp/tlm_1_interfaces/tlm_fifo_ifs.h
@@ -367,8 +367,8 @@ class tlm_blocking_slave_if :
 这是符合逻辑的。对于master而言，发起（put）请求，获取（get/peek）应答。而对于slave而言，则是
 获取（get/peek）请求，响应（put）应答。
 
-对应的非阻塞版本则是：
 [[tlm::1::tlm_nonblocking_master_if]]
+对应的非阻塞版本则是：
 [[tlm::1::tlm_nonblocking_slave_if]]
 
 .src/tlm_core/tlm_1/tlm_req_resp/tlm_1_interfaces/tlm_master_slave_ifs.h
@@ -387,9 +387,9 @@ class tlm_nonblocking_slave_if :
   public virtual tlm_nonblocking_get_peek_if< REQ > {};
 ----
 
+[[tlm::1::tlm_master_if]]
 以及组合了阻塞和非阻塞的总的tlm_master_if和tlm_slave_if:
-[[tlm:;1::tlm_master_if]]
-[[tlm:;1::tlm_slave_if]]
+[[tlm::1::tlm_slave_if]]
 
 .src/tlm_core/tlm_1/tlm_req_resp/tlm_1_interfaces/tlm_master_slave_ifs.h
 [source,cpp]
@@ -894,7 +894,7 @@ tlm_fifo<T>::nb_bound( unsigned int new_size ) {
 ----
 
 === tlm_put_get_imp
-[[tlm:1:tlm_put_get_imp]]
+[[tlm::1::tlm_put_get_imp]]
 
 tlm_put_get_imp是实现tlm req-rsp channel的基础。tlm_put_get_imp直接继承自
 <<tlm::1::tlm_put_if, tlm_put_if>>
@@ -929,11 +929,11 @@ tlm_put_get_imp实现相应的接口函数的功能，实际上都是直接调�
 
 === tlm_master_imp and tlm_slave_imp
 [[tlm::1::tlm_master_imp]]
-[[tlm::1::tlm_slave_imp]]
 
 在<<tlm::1::tlm_put_get_imp, tlm_put_get_imp>>的基础上，TLM 1.0实现了tlm_master_imp和
 tlm_slave_imp。实际上，tlm_master_imp和tlm_slave_imp只不过是特化了的tlm_put_get_imp而已。
 tlm_master_imp是put REQ，get/peek RSP，而tlm_slave_imp则相反，是get/peek REQ，put RSP：
+[[tlm::1::tlm_slave_imp]]
 
 .src/tlm_core/tlm_1/tlm_req_resp/tlm_channels/tlm_req_rsp_channels/tlm_put_get_imp.h
 [source,cpp]
@@ -1120,7 +1120,7 @@ tlm_req_rsp_channel是一个拥有双FIFO的数据结构，并且暴露出来了
 === tlm_transport_channel
 [[tlm::1::tlm_transport_channel]]
 
-tlm_transport_channel，是一个sc_module，用来讲一个<<tlm::1::tlm_req_resp_channel, tlm_req_resp_channel>>
+tlm_transport_channel，是一个sc_module，用来将一个<<tlm::1::tlm_req_rsp_channel, tlm_req_rsp_channel>>
 转成一个transport chnanel:
 
 .src/tlm_core/tlm_1/tlm_req_resp/tlm_channels/tlm_req_rsp_channels/tlm_req_rsp_channels.h
@@ -1204,11 +1204,11 @@ private:
 ----
 
 模板类型为<<tlm::1::tlm_transport_if, tlm_transport_if>>的export类型的成员变量target_export被绑定到了
-<<tlm::1::tlm_master_to_transport, tlm_master_to_transport>>的成员变量target_export上，注意，这是一个export
-到export的绑定，所以实际上绑定的结果是tlm_master_to_transport的成员变量target_export先转成一个interface类型，再被
+<<tlm::1::tlm_transport_to_master, tlm_transport_to_master>>的成员变量target_export上，注意，这是一个export
+到export的绑定，所以实际上绑定的结果是tlm_transport_to_master的成员变量target_export先转成一个interface类型，再被
 tlm_transport_channel的target_export所绑定。
 
-接下来，tlm_master_to_transport的master_port绑定了这里req_rsp的master_export。get_request_export和put_response_export
+接下来，tlm_transport_to_master的master_port绑定了这里req_rsp的master_export。get_request_export和put_response_export
 分贝绑定了req_rsp的对应接口，这两个都是export到export的绑定。
 
 最后，slave_export绑定到了req_rsp channnel的slave_export上，这同样是一个export到export的绑定。
@@ -1226,7 +1226,7 @@ tlm_transport_channel实现的目的在于，将数据从一个实现了tlm_tran
 
 tlm_transport_channel并没有对称性的相反的实现。从实现了get/put协议的接口，转到tlm_transport_if的接口，只需要使用
 <<tlm::1::tlm_slave_to_transport, tlm_slave_to_transport>>即可。从这方面来说，tlm_transport_channel
-与随后要介绍的<<tlm::1::tlm_save_to_transport>>才是一对。
+与随后要介绍的<<tlm::1::tlm_slave_to_transport>>才是一对。
 
 == TLM 1.0 Adapter
 
@@ -1612,10 +1612,10 @@ public:
 === tlm_analysis_if and tlm_delayed_analysis_if
 
 [[tlm::1::tlm_analysis_if]]
-[[tlm::1::tlm_delayed_analysis_if]]
 tlm_analysis_if是<<tlm::1::tlm_write_if, tlm_write_if>>的别名（基本上，因为直接继承，没有改写任何方法，也没增加
 其他的功能。同样的，tlm_delayed_analysis_if是<<tlm::1::tlm_delayed_analysis_if, tlm_delayed_analysis_if>>
 的别名：
+[[tlm::1::tlm_delayed_analysis_if]]
 
 .src/tlm_core/tlm_1/tlm_analysis/tlm_analysis_if.h
 [source,cpp]

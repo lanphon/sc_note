@@ -109,7 +109,7 @@ queue或者stack等）。这是因为C++原始的数据结构并没有delta cycl
 
 [source,cpp]
 ----
-std:;queue<data_t> m_queue;
+std::queue<data_t> m_queue;
 sc_event m_data_ready;
 
 void thread_a {
@@ -192,7 +192,7 @@ export类型出现的理由，在 <<data::sc_export, sc_core::sc_export>> 部分
 
 与port类似，export也不只是一个简单的 `sc_export<IF>`，而是一系列与之相关的数据结构，包括：
 
-* <<api:;sc_export_base, sc_core::sc_export_base>>
+* <<api::sc_export_base, sc_core::sc_export_base>>
 * <<api::sc_export, sc_core::sc_export<IF> >>
 
 sc_export_base直接继承自sc_object，同样是一个非模板的基类。sc_export_base设计的主要目的是为了和

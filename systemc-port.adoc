@@ -28,6 +28,7 @@ sc_export的地方。
 
 sc_port_registry是一个管理类，这个类管理了所有生成的sc_port_base以及派生类：当每个
 sc_port_base以及派生类构造的时候，都会将自己注册到sc_port_registry中。
+[[api::sc_port_base]]
 
 .src/sysc/communication/sc_port.cpp
 [source,cpp]
@@ -271,7 +272,7 @@ sc_port作为设置对象。这里存在的主要的设计问题在于，static 
 sc_module构造的时候设置，而sc_port到sc_interface的绑定，发生在sc_module构造以后，由
 外部代码完成。
 
-为了能让sc_port作为static sensitive的源，这里使用了<<api::event_finder, event_finder>>来作为占位符，将
+为了能让sc_port作为static sensitive的源，这里使用了<<api::sc_event_finder, sc_event_finder>>来作为占位符，将
 具体的event的设置延迟到了elaboration阶段。
 
 一个sc_port作为static sensitive的源，其本质就是所有绑定在这个sc_port上的
@@ -301,7 +302,7 @@ sc_port_base::make_sensitive( sc_method_handle handle_,
 }
 ----
 
-sc_port_base的make_sensitive只是将需要绑定的handle和<<api::event_finder, event_finder>>放入一个
+sc_port_base的make_sensitive只是将需要绑定的handle和<<api::sc_event_finder, sc_event_finder>>放入一个
 vector中。这里的event_finder指针可能为空，表明自己不需要一个成员函数指针就能够找到event。在
 event_finder指针为空的情况下，SystemC总是调用interface的default_event函数（这是个接口函数）
 来获取与之关联的event事件对象。
@@ -496,7 +497,7 @@ complete_binding，如同名字所暗示的，是完成绑定的动作。实际�
 ----
 
 这一步完成了对static sensitive在本sc_port_base上的process handle的处理。这里
-主要调用了<<api::event_finder, event_finder>>部分的功能，我们在event_finder
+主要调用了<<api::sc_event_finder, sc_event_finder>>部分的功能，我们在event_finder
 部分再介绍。这里核心的部分是在于寻找如何寻找sc_event: 要么是event_finder寻找到的
 sc_event，要么是这个interface的default event。
 
@@ -612,6 +613,7 @@ sc_port为具体的sc_interface，并resolve相关static sensitive的时候，hi
 已经建立起来。
 
 == sc_port_b<IF>
+[[api::sc_port_b]]
 
 sc_port_b<IF>继承自sc_port_base，主要增加的实现是增加了interface的模板信息：
 
@@ -832,6 +834,7 @@ m_bind_info指针为空，只会发生在elaboration done之后。这种时候�
 [[data::sc_port]]
 
 sc_port继承自sc_port_b<IF>，同时增加了更多的模板参数和功能：
+[[api::sc_port]]
 
 .src/sysc/communication/sc_port.h
 [source,cpp]
@@ -1025,13 +1028,13 @@ sc_out 相关函数的实现基本都是转交给了基类，也就是 `sc_inout
 
 == sc_export
 [[api::sc_export]]
-[[data::sc_export]]
 
 对于只有sc_port和sc_interface（例如sc_signal或者sc_fifo）的体系而言，模块之间互联是这样的。模块MA
 内部有一个sc_port PA，模块B内部有另一个sc_port PB。如果需要从PA传递信息到PB，我们需要在TOP模块中
 实例化一个sc_interface的继承类，例如sc_signal或者sc_fifo，然后将PA绑定到这个sc_interface上，并
 将PB绑定在这个sc_interface上，这就实现了一个双端口的连接。
 如下图所示：
+[[data::sc_export]]
 
 .不使用sc_export做binding的场景
 image::bind_without_export.png[]
@@ -1078,6 +1081,69 @@ sc_interface则专注于impl部分。
 绑定多个interface，完全根据需要而来。而sc_export则是sc_interface的接口能力的提现，必须要具体绑定到一个精确
 的sc_interface上才可以。
 ====
+
+=== sc_export_base
+[[api::sc_export_base]]
+
+sc_export_base是所有sc_export<IF>的基类，而sc_export_base则直接继承自
+sc_object，是一个纯虚的基类：
+
+.src/sysc/communication/sc_export.h
+[source,cpp]
+----
+class SC_API sc_export_base : public sc_object
+{
+};
+----
+
+sc_export_base没有定义任何成员变量，这意味着这个类主要的功能是：
+
+* 为export提供一个非模板类型的抽象定义
+* 与export registry打交道
+* 定义接口函数
+
+.src/sysc/communication/sc_export.h
+[source,cpp]
+----
+sc_export_base::sc_export_base() : sc_object(sc_gen_unique_name("export"))
+{
+    simcontext()->get_export_registry()->insert(this);
+}
+    
+sc_export_base::sc_export_base(const char* name_) : sc_object(name_)
+{
+    simcontext()->get_export_registry()->insert(this);
+}
+    
+sc_export_base::~sc_export_base()
+{
+    simcontext()->get_export_registry()->remove(this);
+}
+----
+
+sc_export_base的两种类型的构造函数，都是把自己注册到systemc kernrl维护的
+`export registry` 中去，而析构的时候，则从这个export中挪去。这样一来，所有继承自
+sc_export_base的派生类就不必与 `export registry` 打交道，因为基类sc_export_base
+已经完成了相应的工作了。
+
+=== sc_export
+
+sc_export是一个模板类，直接继承自sc_export_base:
+
+.src/sysc/communication/sc_export.h
+[source,cpp]
+----
+template<class IF>
+class sc_export : public sc_export_base
+{
+    typedef sc_export<IF> this_type;
+    //blabla
+    protected: // data fields:
+    IF* m_interface_p;		// Interface this port provides.
+};
+----
+
+sc_export<IF>模板类拥有的唯一一个成员变量，就是指向 `IF` 的指针 `m_interface_p`。
 
 [[api::sc_export::operator_IF]]
 sc_export<IF>模板类提供了隐式转换功能，可以将自己转成一个 `IF&` 或者 `const IF&`
@@ -1129,6 +1195,7 @@ MB.EB已经完成了到 sc_interface的绑定工作。对于sc_port而言这是�
 的sc_interface在模块**之外**，无法保证初始化的顺序。而对于sc_export而言，其需要绑定的sc_interface
 位于自己内部，或者更下层次的模块，绑定的顺序是可控的。
 
+=== export vs port
 
 相比于sc_port，sc_export的缺点有：
 
@@ -1152,6 +1219,7 @@ EPC绑定内部模块MD的sc_export MD，而MD则绑定MD自己内部的channel�
 降低了仿真的效率。
 
 === sc_event_queue_port
+[[data::sc_event_queue_port]]
 
 sc_event_queue_port就是保存一个sc_event_queue_if指针的port:
 
@@ -1362,13 +1430,13 @@ typedef sc_out<bool>   sc_out_clk;
 
 
 == event_finder
-[[api::event_finder]]
-[[data::event_finder]]
+[[api::sc_event_finder]]
 
 sc_event_finder数据结构的主要作用，就是为sc_port作为static sensitive源的时候，解决
 此时sc_port没有绑定具体的interface，因此无法指定sc_event的问题。sc_event_finder
 主要作用是提供一个占位符，能够在sc_port作为static sensitive的时候，设置一个未来要绑定
 的interface的成员函数，这个成员函数应当返回一个sc_event的指针。
+[[data::sc_event_finder]]
 
 sc_event_finder在构造的时候只需要保存成员函数指针，而不需要保存interface自己的指针，这是
 因为此时没有绑定具体的interface，无法给出这个指针。在<<api::sc_port_registry::elaboration_done, sc_port_registry的elaboration_done>>
@@ -1377,6 +1445,7 @@ sc_port_base的<<api::sc_port_base::complete_binding, complete_binding>>函数�
 complete_binding中，SystemC结合所设置的sc_event_finder，以及interface指针，调度
 给成interface对象的给定成员函数，获得sc_event引用。
 
+[[data::sc_event_finder_t]]
 sc_event_finder的数据结构有两个，作为接口类，并且不带具体interface模板参数的sc_event_finder，
 以及作为模板类，继承自sc_event_finder，带具体interface模板参数的sc_event_finder_t<IF>。
 在sc_event_finder中，成员函数cached_create作为一个模板函数，可以将模板信息带入函数内部，

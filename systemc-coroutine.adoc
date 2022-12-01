@@ -145,7 +145,8 @@ void sc_thread_cor_fn( void* arg )
 <2> `sc_process_b::semantics()` 函数会实际调用线程的主体部分代码，理论上协程函数执行到这里之后就
 永远不会返回，除非semantic内部抛出异常，由接下来的异常处理部分分别处理
 <3> 如果抛出的异常是 `sc_unwind_exception`，并且指定是reset，则重新执行semantics函数，相当于
-从头开始执行thread的代码，不是reset的 `sc_unwind_exception` 会结束当前while循环，表现为本线程执行结束，实际是被kill掉了，参见<<api::sc_thread_process::suspend_me::kill, kill>> 部分
+从头开始执行thread的代码，不是reset的 `sc_unwind_exception` 会结束当前while循环，表现为本线程执行结束，实际是被kill掉了，参见
+<<concept::process::control::kill::thread, kill>> 部分
 
 这里的处理主要是考虑协程抛出异常，或者意外退出的时候，我们需要保证整个仿真器的工作正常.
 

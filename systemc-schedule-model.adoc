@@ -397,13 +397,16 @@ main() -> sc_core::sc_elab_and_sim() // sc_main.cpp
 [[concept::crunch]]
 Crunch函数执行多次Delta Cycle，直到没有事件发生，没有可执行的列表。
 
+[[phase::evaluate]]
 Crunch函数的执行分为三个阶段：
+[[phase::update]]
 
-1. EVALUATE PHASE[[phase::evaluate]]，本阶段将调度执行所有处于调度列表中<<concept::pop_queue, Pop Queue>>的线程
-2. UPDATE PHASE[[phase::update]]，调用primitive channel registry的 `perform_update` 函数，更新primitive channel
-3. NOTIFICATION PHASE[[phase::notification]]，对于上述两个阶段过程中更新了的delta event列表，执行这些
+1. EVALUATE PHASE，本阶段将调度执行所有处于调度列表中<<concept::pop_queue, Pop Queue>>的线程
+2. UPDATE PHASE，调用primitive channel registry的 `perform_update` 函数，更新primitive channel
+3. NOTIFICATION PHASE，对于上述两个阶段过程中更新了的delta event列表，执行这些
 delta事件列表的trigger函数，尝试将依赖这些delta event的线程放入<<concept::push_queue, Push Queue>>中，未下一此循环做准备
 
+[[phase::notification]]
 三个阶段完成后，仿真器会检查是否还有可执行的线程。如果有，则重复上述循环，直到满足退出条件为止。
 crunch函数的退出条件包括：delta event列表为空，并且可运行的调度单元也为空。这类比于仿真过程
 进入starvation模式，没有新的激励可以执行了。

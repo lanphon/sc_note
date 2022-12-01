@@ -112,8 +112,8 @@ simple socket，是最简单类型的一种socket。simple socket包括initiator
 保证primitive channel的同步原语，而是采用了定义接口函数，并提供延时的方式（延时至少是SC_ZERO_time），
 完成同步的目的。
 
-而对于simple socket，则在内部实现了继承有<<data::tlm_fw_transport_if, tlm_fw_transport_if>>
-和<<data::tlm_bw_transport_if, tlm_bw_transport_if>>的对象，提供了相应接口函数的实现。这些接口函数内部仍然
+而对于simple socket，则在内部实现了继承有<<api::tlm_fw_transport_if, tlm_fw_transport_if>>
+和<<api::tlm_bw_transport_if, tlm_bw_transport_if>>的对象，提供了相应接口函数的实现。这些接口函数内部仍然
 需要回调函数来完成实际的工作，而simple socket的设计则只是提供注册回调函数的API调用，持有
 回调函数的指针（一般回调函数是成员函数，所以这里需要模板类），然后完成一些必要的转换，例如，对于实现了
 non-blocking语义的回调函数，如果调用blocking语义的API，则需要使用non-blocking来实现blocking，反之亦然。
@@ -407,14 +407,14 @@ MODULE的指针，以及两个成员函数指针均为空。这三个成员变�
 <<api::tlm_bw_transport_if, tlm_bw_transport_if>>的模板类。
 
 === simple_initiator_socket_b
+[[data::simple_initiator_socket_b]]
 
 simple_initiator_socket_b是一个模板类，需要4个模板参数:
 
 1. 对象的类型，这个对象是拥有兼容tlm_bw_transport_if接口函数为成员函数的类
 2. 位宽
-3. 类型，即拥有两个成员类型tlm_payload_type和tlm_phase_type的类，默认是<<api:;tlm_base_protocol_types, tlm_base_protocol_types>>
+3. 类型，即拥有两个成员类型tlm_payload_type和tlm_phase_type的类，默认是<<api::tlm_base_protocol_types, tlm_base_protocol_types>>
 4. 作为一个sc_port时候的绑定策略
-[[data::simple_initiator_socket_b]]
 
 .src/tlm_utils/simple_initiator_socket.h
 [source,cpp]
@@ -737,10 +737,10 @@ simple_initiator_socket_tagged_b的构造非常简单：
 ----
 <1> 将tlm_initiator_socket的m_export绑定到m_process上
 
+[[data::simple_initiator_socket_tagged_b::register_nb_transport_bw]]
 这里的绑定和<<data::simple_initiator_socket_b, simple_initiator_socket_b>>基本一样。simple_initiator_socket_tagged_b
 同样提供了注册函数register_nb_trasnport_bw和register_invalidate_direct_mem_ptr，用来为m_process的成员变量提供值：
 
-[[data::simple_initiator_socket_tagged_b::register_nb_transport_bw]]
 [[data::simple_initiator_socket_tagged_b::register_invalidate_direct_mem_ptr]]
 
 .src/tlm_utils/simple_initiator_socket.h
@@ -1451,7 +1451,7 @@ TLM_ACCEPTED，这意味着后续还需要一个END_REQ的bw通路的请求。
 
 (还没有定论，需要继续分析)
 bw通路的END_REQ和BEGIN_RESP都在
-<<bw_process::nb_transport_bw>>中处理，直到fw返回END_RESP的时候，才再次调用这个API：
+<<data::simple_target_process_b::bw_process::nb_transport_bw>>中处理，直到fw返回END_RESP的时候，才再次调用这个API：
 
 由于blocking API没有反向的Path，所以能够接受的phase参数只有前向的 BEGIN_REQ和 END_RESP。
 如果再次调用的是END_RESP，这是initiator向target发送的本次transaction最后一笔数据了，此时标记m_response_in_progress
@@ -1607,6 +1607,7 @@ public:
 
 ---
 
+[[data::simple_target_process_b::bw_nb_transport]]
 simple_target_socket_b提供了两个private的成员函数，供自己的友元类fw_process和bw_process使用(
 主要是bw_process实现
 <<data::simple_target_process_b::bw_process::nb_transport_bw, bw_process::nb_transport_bw>>
@@ -1614,7 +1615,6 @@ simple_target_socket_b提供了两个private的成员函数，供自己的友元
 <<data::simple_target_process_b::bw_process::invalidate_direct_mem_ptr, bw_process::invalidate_direct_mem_ptr>>
 这两个tlm_bw_transport_if函数的时候使用
 )：
-[[data::simple_target_process_b::bw_nb_transport]]
 [[data::simple_target_process_b::bw_invalidate_direct_mem_ptr]]
 
 .src/tlm_utils/simple_target_socket.h

@@ -14,10 +14,10 @@ passthrough target socket, multiple socket以及组合类型。
 
 == passthrough_socket_base and multi_socket_base
 [[data::passthrough_socket_base]]
-[[data::multi_socket_base]]
 
 passthrough_socket_base，实际上和<<data::convenience_socket_base, convenience_socket_base>>
 没有任何区别，直接继承自convenience_socket_base，并且没有增加或者修改任何其他的成员函数或变量：
+[[data::multi_socket_base]]
 
 .src/tlm_utils/convenience_socket_bases.h
 [source,cpp]
@@ -39,9 +39,9 @@ multi_socket_base同样如此。
 
 ---
 
-[[data::convenience_socket_cb_holder]]
+[[data::convenience_socket_cb_holder::2]]
 
-convenience_socket_cb_holder则是用来吃有一个convenience_soket_base的：
+<<data::convenience_socket_cb_holder, convenience_socket_cb_holder>>则是用来持有一个convenience_soket_base的：
 
 .src/tlm_utils/convenience_socket_bases.h
 [source,cpp]
@@ -143,7 +143,7 @@ passthrough_target_socket的实现如同<<data::simple_target_socket, simple_tar
     GetDirectMem_ptr m_get_direct_mem_ptr;
   };
 ----
-<1> 继承自<<data::convenience_socket_cb_holder, convenience_socket_cb_holder>>，所以可以持有一个 `convenience_socket_base` 指针，用来做辅助debug
+<1> 继承自<<data::convenience_socket_cb_holder::2, convenience_socket_cb_holder>>，所以可以持有一个 `convenience_socket_base` 指针，用来做辅助debug
 
 passthrough_target_socket_b::process本身继承自<<api::tlm_fw_transport_if, tlm_fw_transport_if>>，
 同时继承自convenience_socket_cb_holder。
@@ -276,6 +276,7 @@ process持有类对象的指针，同时持有注册了的四个成员函数指�
 设定为 `explicit` 的。
 
 === passthrough_target_socket_b
+[[data::passthrough_target_socket_b]]
 
 passthrough_target_socket_b继承自<<api::tlm_target_socket, tlm_target_socket>>，
 同时继承自<<data::passthrough_socket_base, passthrough_socket_base>>：
@@ -294,7 +295,7 @@ private:
   process m_process; <1>
 };
 ----
-<1> 唯一一个成员变量，就是<<data:;passthrough_target_socket_b::process, process>>类型的成员变量
+<1> 唯一一个成员变量，就是<<data::passthrough_target_socket_b::process, process>>类型的成员变量
 
 构造函数也比较简单，构造 `m_process` 的时候，将this指针传入：
 
@@ -655,7 +656,11 @@ TLM_DEFINE_FUNCTOR到此结束。
 
 ---
 
-TLM_DEFINE_FUNCTOR主要用来简化如下几个类模板和函数模板的建立：
+TLM_DEFINE_FUNCTOR主要用来简化如下几个类模板和函数模板的建立。
+
+当返回参数类型是 `tlm::tlm_sync_enum`，传入参数的类型依次是 `tlm_payload_type`, `tlm_phase_type`
+和 `sc_time` 的时候，定义的则是nb_transport_functor:
+[[data::nb_transport_functor]]
 
 .src/tlm_utils/multi_socket_bases.h
 [source,cpp]
@@ -667,7 +672,15 @@ TLM_DEFINE_FUNCTOR(nb_transport);
 #undef TLM_RET_VAL
 #undef TLM_FULL_ARG_LIST
 #undef TLM_ARG_LIST_WITHOUT_TYPES
+----
 
+当返回参数是void，输入参数类型一次是 `tlm_payload_type` 和 `sc_time` 的时候，定义出来
+的则是b_transport_functor:
+[[data::b_transport_functor]]
+
+.src/tlm_utils/multi_socket_bases.h
+[source,cpp]
+----
 #define TLM_RET_VAL void
 #define TLM_FULL_ARG_LIST typename TRAITS::tlm_payload_type& txn, sc_core::sc_time& t
 #define TLM_ARG_LIST_WITHOUT_TYPES txn,t
@@ -675,7 +688,14 @@ TLM_DEFINE_FUNCTOR(b_transport);
 #undef TLM_RET_VAL
 #undef TLM_FULL_ARG_LIST
 #undef TLM_ARG_LIST_WITHOUT_TYPES
+----
 
+debug_transport_functor的参数则是 `tlm_payload_type`，返回一个 `unsigned int` 类型的数据：
+[[data::debug_transport_functor]]
+
+.src/tlm_utils/multi_socket_bases.h
+[source,cpp]
+----
 #define TLM_RET_VAL unsigned int
 #define TLM_FULL_ARG_LIST typename TRAITS::tlm_payload_type& txn
 #define TLM_ARG_LIST_WITHOUT_TYPES txn
@@ -683,7 +703,15 @@ TLM_DEFINE_FUNCTOR(debug_transport);
 #undef TLM_RET_VAL
 #undef TLM_FULL_ARG_LIST
 #undef TLM_ARG_LIST_WITHOUT_TYPES
+----
 
+get_dmi_ptr_functor则是输入 `tlm_payload_type` 和 `tlm_dmi` ，返回 `bool`
+类型的数据：
+[[data::get_dmi_ptr_functor]]
+
+.src/tlm_utils/multi_socket_bases.h
+[source,cpp]
+----
 #define TLM_RET_VAL bool
 #define TLM_FULL_ARG_LIST typename TRAITS::tlm_payload_type& txn, tlm::tlm_dmi& dmi
 #define TLM_ARG_LIST_WITHOUT_TYPES txn,dmi
@@ -691,7 +719,15 @@ TLM_DEFINE_FUNCTOR(get_dmi_ptr);
 #undef TLM_RET_VAL
 #undef TLM_FULL_ARG_LIST
 #undef TLM_ARG_LIST_WITHOUT_TYPES
+----
 
+invalidate_dmi_functor则输入两个 `uint64_t` 数据，返回void:
+[[data::invalidate_dmi_functor]]
+
+
+.src/tlm_utils/multi_socket_bases.h
+[source,cpp]
+----
 #define TLM_RET_VAL void
 #define TLM_FULL_ARG_LIST sc_dt::uint64 l, sc_dt::uint64 u
 #define TLM_ARG_LIST_WITHOUT_TYPES l,u
@@ -700,12 +736,6 @@ TLM_DEFINE_FUNCTOR(invalidate_dmi);
 #undef TLM_FULL_ARG_LIST
 #undef TLM_ARG_LIST_WITHOUT_TYPES
 ----
-
-[[data::nb_transport_functor]]
-[[data::b_transport_functor]]
-[[data::debug_transport_functor]]
-[[data::get_dmi_ptr_functor]]
-[[data::invalidate_dmi_functor]]
 
 这里定义了 nb_transport_functor, b_transport_functor, debug_transport_functor,
 get_dmi_ptr_functor和invalidate_dmi_functor。这些functor实现的作用基本一致，都是
@@ -758,7 +788,7 @@ class callback_binder_fw
     sc_core::sc_port_base* m_caller_port;   
 };
 ----
-<1> 继承自<<data::convenience_socket_cb_holder, convenience_socket_cb_holder>>，所以可以持有一个 `convenience_socket_base` 指针，用来做辅助debug
+<1> 继承自<<data::convenience_socket_cb_holder::2, convenience_socket_cb_holder>>，所以可以持有一个 `convenience_socket_base` 指针，用来做辅助debug
 
 成员变量包括：
 
@@ -1100,7 +1130,7 @@ private:
 disable_cb_bind和 get_hierarch_bind两个接口函数。
 
 === multi_target_base
-[[data::multi_terget_base]]
+[[data::multi_target_base]]
 
 `multi_target_base`
 继承自<<api::tlm_target_socket, tlm_target_socket>>

@@ -134,7 +134,7 @@ sc_clock的工作主要分为3个stage：
 
 在sc_module的构造函数中，SC_CTHREAD/SC_THREAD可以将sc_in<bool>变量clk的pos()/neg()设置为静态
 敏感事件。然而，此时sc_in<bool> clk并没有绑定具体的sc_clock。所以，这里SystemC用一个
-sc_event_finder来代替。
+<<api::sc_event_finder, sc_event_finder>>来代替。
 
 在SC_THREAD的情况下，`sensitive << clk.pos()` , `sc_in<bool> clk` 的pos()返回的并不是
 一个具体的sc_event，而是一个sc_event_finder:
