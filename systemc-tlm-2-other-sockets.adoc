@@ -95,7 +95,7 @@ simple_target_socket之所以实现的非常复杂，是为了在两种不同类
 passthrough_target_socket了。passthrough socket只有target socket，因为passthrough
 的initiator socket就是simple_initiator_socket本身了。
 
-passthrough_target_socket的实现和simple_initiator_socket的实现是对称的，都是只
+((passthrough_target_socket))的实现和simple_initiator_socket的实现是对称的，都是只
 将接口函数实现转发给相应的注册回调函数上。 passthrough_target_socket都是继承自
 <<api::tlm_target_socket, tlm_target_socket>>，同时内部有一个继承自
 <<api::tlm_fw_transport_if, tlm_fw_transport_if>>的类process，实现了
@@ -1210,7 +1210,7 @@ public:
 
 `multi_passthrough_initiator_socket` 的基本思想在于，相比于
 <<data::simple_initiator_socket, simple_initiator_socket>>，
-multi_passthrough_initiator_socket可以绑定多个
+((multi_passthrough_initiator_socket))可以绑定多个
 <<api::tlm_bw_transport_if, tlm_bw_transport_if>>，并将这些对
 tlm_bw_transport_if的API调用，打上对应的ID，转发给注册的回调函数。
 
@@ -1699,7 +1699,7 @@ public:
 === multi_passthrough_target_socket
 [[data::multi_passthrough_target_socket]]
 
-multi_passthrough_target_socket继承自<<data::multi_target_base, multi_target_base>>，
+((multi_passthrough_target_socket))继承自<<data::multi_target_base, multi_target_base>>，
 此外还继承自<<data::multi_to_multi_bind_base, multi_to_multi_bind_base>>，继承自后者，允许
 在多对多的绑定中，做一些特殊的处理：
 

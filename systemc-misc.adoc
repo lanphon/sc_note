@@ -8,7 +8,7 @@ SystemC中的其他组件和用例分析
 === sc_interface
 [[data::sc_interface]]
 
-sc_interface是一个抽象基类，提供了带interface能力类的接口信息。
+((sc_interface))是一个抽象基类，提供了带interface能力类的接口信息。
 
  DEFINITION: A SystemC interface is an abstract class that inherits from sc_interface and provides only pure virtual declarations of methods referenced by SystemC channels and ports. No implementations or data are provided in a SystemC interface.
  -- <<SystemC: from ground up>>
@@ -114,7 +114,7 @@ sc_port/sc_export中，也只保存指向这些sc_interface或者sc_interface子
 
 === sc_clock是如何工作的
 
-sc_clock是一个sc_signal<bool, SC_ONE_WRITER>的继承类，sc_signal<bool, SC_ONE_WRITER> 
+((sc_clock))是一个sc_signal<bool, SC_ONE_WRITER>的继承类，sc_signal<bool, SC_ONE_WRITER> 
 实现了sc_signal_in_if<bool>接口定义的功能，因此sc_clock可以被sc_in<bool> 绑定：
 
 .src/sysc/communication/sc_clock.h

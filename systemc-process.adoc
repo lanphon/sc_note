@@ -104,6 +104,7 @@ sc_process_b的成员变量比较复杂，这里我们按照这些成员变量�
     int                          m_active_reset_n;  // number of resets active.
 ----
 
+(((dont_initialize)))
 [[api::sc_process_b::dont_initialize]]
 单独的 `m_dont_init` 是用来表示process是否需要在最初执行一遍，参考
 <<api::dont_initialize, 控制METHOD线程是否初始化>>部分的使用，Thread/CThread
@@ -976,7 +977,7 @@ sc_process_handle的成员函数，绝大多数都是调用保存的 `m_target_p
 
 ==== 成员变量
 
-除了基类 `sc_process_b` 的成员变量以外，sc_thread_process为支持协程
+除了基类 `sc_process_b` 的成员变量以外，((sc_thread_process))为支持协程
 能力，增加了如下几个成员变量：
 
 .src/sysc/kernel/sc_thread_process.h
@@ -1233,7 +1234,7 @@ reset
 
 ==== 成员变量
 
-sc_method_process在基类 `sc_process_b` 的基础上增加了如下几个成员变量：
+((sc_method_process))在基类 `sc_process_b` 的基础上增加了如下几个成员变量：
 
 .src/sysc/kernel/sc_method_process.h
 [source,cpp]
@@ -1462,6 +1463,7 @@ sc_cthread_process并没有新增比较重要的成员函数。
 === reset机制
 [[concept::process::reset]]
 
+(((sc_thread_process, reset)))
 Process中有一套非常复杂的reset机制，来仿真模拟实际的RTL reset行为。
 
 ==== reset设置流程

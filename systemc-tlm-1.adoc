@@ -416,7 +416,7 @@ TLM 1.0定义了几种channel，包括tlm_fifo，request-response channel等。
 ==== tlm fifo
 [[tlm::1::tlm_fifo]]
 
-tlm_fifo是TLM 1.0中最为重要的channel之一。tlm_fifo重新实现了fifo功能，而不是直接继承自sc_fifo：
+((tlm_fifo))是TLM 1.0中最为重要的channel之一。tlm_fifo重新实现了fifo功能，而不是直接继承自sc_fifo：
 
 .src/tlm_core/tlm_1/tlm_req_resp/tlm_channels/tlm_fifo/tlm_fifo.h
 [source,cpp]

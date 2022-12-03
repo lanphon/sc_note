@@ -5,3 +5,7 @@
 SystemC可综合部分
 
 === 引言
+
+=== Reference
+
+https://www.accellera.org/images/downloads/standards/systemc/SystemC_Synthesis_Subset_1_4_7-Apache.pdf

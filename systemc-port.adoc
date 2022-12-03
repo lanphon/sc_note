@@ -541,6 +541,7 @@ sc_bind_info::max_size() const
 设置为0，那么永远返回实际的interface数目（这里的vec已经是替换为所有sc_interface以后的vec了）。
 这样一来，如果绑定数目为0，那么永远不会出现绑定数目超出设定数目的情况。所以，如果将绑定数目
 设置为0，实质上设定的是无限制的绑定。
+(((sc_port, bind, policy)))
 
 [[api::sc_port::bind::policy]]
 接下来是对绑定策略的检查了：
@@ -833,7 +834,8 @@ m_bind_info指针为空，只会发生在elaboration done之后。这种时候�
 === sc_port
 [[data::sc_port]]
 
-sc_port继承自sc_port_b<IF>，同时增加了更多的模板参数和功能：
+
+((sc_port))继承自sc_port_b<IF>，同时增加了更多的模板参数和功能：
 [[api::sc_port]]
 
 .src/sysc/communication/sc_port.h
@@ -890,8 +892,9 @@ sc_in和sc_out是sc_port对于signal interface的特化形式，从本质上来�
 sc_port，需要绑定到具体的signal上才能够起作用。
 
 ===== sc_in
+[[data::sc_in]]
 
-sc_in是signal类型的输入端口模型，需要绑定到signal类型上，不能绑定到fifo类型上。
+((sc_in))是signal类型的输入端口模型，需要绑定到signal类型上，不能绑定到fifo类型上。
 
 .src/sysc/communication/sc_signal_ports.cpp
 [source,cpp]
@@ -937,8 +940,9 @@ public:
 4. `get_data_ref` 这个主要为了tracing用，普通用户用不到
 
 ===== sc_inout
+[[data::sc_inout]]
 
-介绍sc_out之前，我们先介绍一下sc_inout类型。sc_inout并不像verilog HDL那种inout类型一样，
+介绍sc_out之前，我们先介绍一下((sc_inout))类型。sc_inout并不像verilog HDL那种inout类型一样，
 是双向端口类型，而更多的是一种能够读回值的输出端口。由于SystemC使用sc_interface的原因，
 单纯的sc_signal_out_if是无法读取写入的值的（如果相关的interface没有read函数接口的话），这对于熟悉HDL的人来说会感到很惊讶：写出去的值
 居然无法读取回来。鉴于此，SystemC定义了sc_signal_inout_if模板类的interface类型，并据此定义了
@@ -1008,8 +1012,9 @@ class sc_signal_inout_if
 并没有任何区别。
 
 ===== sc_out
+[[data::sc_out]]
 
-sc_out类型其实就是一个sc_inout类型。SystemC在代码里给出了定义一个新的模板类，而不是
+((sc_out))类型其实就是一个sc_inout类型。SystemC在代码里给出了定义一个新的模板类，而不是
 简单做一个typedef的原因：为了方便debug。
 
 .src/sysc/communication/sc_signal_ports.cpp
@@ -1053,7 +1058,7 @@ PB中的这个sc_interface继承类上。对于模块PB，不再需要多余的s
 .不使用sc_export做binding的场景
 image::bind_with_export.png[]
 
-使用sc_export的应用场景和上边的第二种情况差不多。所不同的是，此时PB声明自己有一个public的
+使用((sc_export))的应用场景和上边的第二种情况差不多。所不同的是，此时PB声明自己有一个public的
 sc_export，模板参数是sc_interface类（类似于sc_port）。PB内部的sc_interface继承类
 的实例可以是私有的，只需要PB自己在构造函数中将sc_export绑定这个sc_interface继承类的实例
 即可。对于PA而言，PB暴露出来的只是一个sc_export接口而已，PA可以将自己的PA绑定到这个

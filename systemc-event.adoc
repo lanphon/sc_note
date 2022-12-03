@@ -343,7 +343,7 @@ wait/next_trigger调用时候参数类型是sc_event_and_list还是sc_event_or_l
 === sc_event
 [[data::sc_event]]
 
-在<<chap::schedule_model, 调度模型>>一章，我们已经看到了sc_event数据结构所扮演的重要角色。本部分
+在<<chap::schedule_model, 调度模型>>一章，我们已经看到了((sc_event))数据结构所扮演的重要角色。本部分
 我们会深入系统地汇总下sc_event相关的内容。
 
 sc_event是个基础类，没有继承自其它类。这也就意味着sc_event并没有继承自sc_object，没有
@@ -943,7 +943,7 @@ sc_event::reset()
 === wait
 [[concept::wait]]
 
-wait是Thread/CThread线程用以同步的一个API调用。SystemC中定义了多种形式的wait。例如，sc_module
+((wait))是Thread/CThread线程用以同步的一个API调用。SystemC中定义了多种形式的wait。例如，sc_module
 定义了具有多种重载形式的成员函数wait:
 [[api::wait]]
 
@@ -1292,7 +1292,7 @@ wait( int n, sc_simcontext* simc )
 
 === next_trigger
 [[concept::next_trigger]]
-类似于wait, next_trigger也在多个地方有定义。sc_module中的next_trigger定义有：
+类似于wait, ((next_trigger))也在多个地方有定义。sc_module中的next_trigger定义有：
 
 .src/sysc/kernel/sc_module.h
 [source,cpp]

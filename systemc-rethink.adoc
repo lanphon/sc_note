@@ -179,3 +179,9 @@ callback函数，这样SC在仿真的相应阶段，会调用这些函数：
 
 注意，这四个call-back函数并不是sc_object对象拥有的，所以只有sc_module, sc_port, sc_export和
 sc_primitive_channel的派生类才可以override。
+
+例如，在<<data::multi_passthrough_initiator_socket, multi_passthrough_initiator_socket>>中，使用了
+了before_end_of_elaboration。而<<data::multi_passthrough_target_socket, multi_passthrough_target_socket>>
+则使用了end_of_elaboration，来为仿真前的所有注册的binder设置callback函数。这样一来，从机制上就保证了
+所有的multi_passthrough_initiator_socket注册一定发生在所有的
+multi_passthrough_target_socket注册之前。

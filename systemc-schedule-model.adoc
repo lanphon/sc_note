@@ -80,6 +80,7 @@ CThread是Thread的一种特殊形式。在之后讨论中，如非必要，我�
 ==== 创建METHOD线程
 [[api::SC_METHOD]]
 
+(((SC_METHOD)))
 我们首先看一下 `SC_METHOD` 是怎么实现的：
 
 .src/sysc/kernel/sc_module.h
@@ -271,6 +272,7 @@ CTHREAD现呈上，这也是这个 `dont_initialize` 函数被设计成为一个
 ==== 创建THREAD线程
 [[api::SC_THREAD]]
 
+(((SC_THREAD)))
 构造函数里使用 `SC_THREAD` 宏创建一个THREAD线程，代码如下：
 
 .src/sysc/kernel/sc_module.h
@@ -375,6 +377,7 @@ Cycle。而我们探索线程的调度，也将着重放在一个Delta
 Cycle内部，观察线程是如何调度的。在实际的代码中，也只有 `crunch`
 函数内部才会调度所创建的各种类型的线程。
 
+(((sc_start)))
 我们这里简单介绍一下SystemC的仿真器启动流程：
 
 ----
@@ -395,15 +398,15 @@ main() -> sc_core::sc_elab_and_sim() // sc_main.cpp
 ===== Crunch函数
 
 [[concept::crunch]]
-Crunch函数执行多次Delta Cycle，直到没有事件发生，没有可执行的列表。
+((Crunch))函数执行多次Delta Cycle，直到没有事件发生，没有可执行的列表。
 
 [[phase::evaluate]]
 Crunch函数的执行分为三个阶段：
 [[phase::update]]
 
-1. EVALUATE PHASE，本阶段将调度执行所有处于调度列表中<<concept::pop_queue, Pop Queue>>的线程
-2. UPDATE PHASE，调用primitive channel registry的 `perform_update` 函数，更新primitive channel
-3. NOTIFICATION PHASE，对于上述两个阶段过程中更新了的delta event列表，执行这些
+1. ((EVALUATE PHASE))，本阶段将调度执行所有处于调度列表中<<concept::pop_queue, Pop Queue>>的线程
+2. ((UPDATE PHASE))，调用primitive channel registry的 `perform_update` 函数，更新primitive channel
+3. ((NOTIFICATION PHASE))，对于上述两个阶段过程中更新了的delta event列表，执行这些
 delta事件列表的trigger函数，尝试将依赖这些delta event的线程放入<<concept::push_queue, Push Queue>>中，未下一此循环做准备
 
 [[phase::notification]]

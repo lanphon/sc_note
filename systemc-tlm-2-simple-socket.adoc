@@ -277,7 +277,7 @@ done之前发生。
 
 === simple_initiator_socket
 
-simple_initiator_socket包括一系列sockets定义，同样有着一套复杂的继承关系：
+((simple_initiator_socket))包括一系列sockets定义，同样有着一套复杂的继承关系：
 
 * simple_initiator_socket_b继承自tlm_initiator_socket和simple_socket_base
 * 从simple_initiator_socket_b，派生出
@@ -852,7 +852,7 @@ hierarchy binding的终点（对于BW_IF而言）
 
 === simple_target_socket
 
-simple_target_socket，类似于simple_initiator_socket，同样由多种类型的socket组成：
+((simple_target_socket))，类似于simple_initiator_socket，同样由多种类型的socket组成：
 
 * simple_target_socket_b继承自tlm_target_socket和simple_socket_base
 * 从simple_target_socket_b，派生出

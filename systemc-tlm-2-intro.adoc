@@ -1463,7 +1463,7 @@ enum tlm_socket_category
 ===== tlm_base_initiator_socket_b
 [[api::tlm_base_initiator_socket_b]]
 
-在定义 tlm_initiator_socket之前，先定义一个tlm_base_initiator_socket_b的模板虚基类：
+在定义 ((tlm_initiator_socket))之前，先定义一个tlm_base_initiator_socket_b的模板虚基类：
 
 .src/tlm_core/tlm_2/tlm_sockets/tlm_initiator_socket.h
 [source,cpp]
@@ -1825,7 +1825,7 @@ public:
 
 ==== tlm_target_socket
 
-tlm_target_socket的定义方式和tlm_initiator_socket的定义方式基本一样，也是分为tlm_base_target_socket_b
+((tlm_target_socket))的定义方式和tlm_initiator_socket的定义方式基本一样，也是分为tlm_base_target_socket_b
 ，tlm_base_target_socket和tlm_taregt_socket三层。
 
 ===== tlm_base_target_socket_b
