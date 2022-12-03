@@ -4,7 +4,7 @@
 
 SystemC中的Trace组件
 
-== 引言
+=== 引言
 
 SystemC中的trace组件，为SystemC提供了类似于Verilog HDL, VHDL等语言的仿真器中，dump出
 波形相关的能力，为Debug并行逻辑提供了有力的支持。

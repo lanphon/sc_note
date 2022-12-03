@@ -5,7 +5,7 @@
 SystemC: 重新审视
 [[chap::rethink]]
 
-== 引言
+=== 引言
 
 在开始TLM的代码学习之前，这里我们对Systemc再次审视一遍，汇总下SystemC其内在的设计组件
 是如何组织，以及如何构成整个仿真体系的。
@@ -153,7 +153,7 @@ primitive channel的隔绝，主要是在一个delta cycle内，对所有的线�
 
 在不同线程之间传递信息，最好总是使用primitive channel，这样可以避免因为调度顺序而带来的潜在bug。
 
-== SystemC中的时间
+=== SystemC中的时间
 
 这里我们考察下SystemC中的时间、时钟，以及由此引发开来的不同的编程模型的区别。
 
@@ -165,7 +165,7 @@ primitive channel的隔绝，主要是在一个delta cycle内，对所有的线�
 
 SystemC中的时间，是配合着event使用的。没有event与之关联的时间，是无法SystemC中使用的。
 
-== Notification Phase Call back
+=== Notification Phase Call back
 
 对于派生自sc_module, sc_port, sc_export和sc_primitive_channel的子类，可以实现以下几种
 callback函数，这样SC在仿真的相应阶段，会调用这些函数：

@@ -5,7 +5,7 @@
 再谈SystemC中的Interface, Port和Export
 [[chap::interface_and_port_and_export]]
 
-== 引言
+=== 引言
 
 在<<chap::misc, SystemC中的其他组件和用例分析>>中，我们从源代码层次介绍了
 <<data::sc_interface, sc_core::sc_interface>>，并且在
@@ -25,7 +25,7 @@ Interface, port和export虽然不参与仿真的过程，但提供了模型构�
 方法学的来源。TLM中，最多的还是关于interface, port和export之间相互绑定关系的使用、约束以及限制。
 因此，在此厘清Interface, port和export之间的关系，是进一步学习TLM的基础。
 
-== Interface
+=== Interface
 [[discuss::sc_interface]]
 
 <<data::sc_interface, sc_core:::sc_interface>>并不简单是一个基类。准确来说，sc_interface
@@ -83,7 +83,7 @@ class sc_fifo
 
 如果需要使用输入或者输出对应的blocking/non-blocking功能，则需要进一步细化模板参数。
 
-=== sc_interface的使用
+==== sc_interface的使用
 
 对于SystemC的用户而言，一般sc_interface数据类型是很少直接用到的，大多数情况下，用到的都是sc_interface
 的派生类，或者实现了sc_interface派生类接口函数的组件，例如使用的都是 `sc_fifo_in_if<T>`
@@ -96,7 +96,7 @@ class sc_fifo
 `sc_interface*` 的方法很类似。这时候就可以使用 `sc_interface*`
 或者 `sc_interface&` 作为类型，而在需要具体类型的时候dynamic cast。
 
-=== interface的使用
+==== interface的使用
 
 对于广泛意义上的interface，在SystemC中一般需要配合primitive channel来使用，这是因为
 primitive channel提供了primitive通信的能力，同时需要使用interface讲这种通信的能力
@@ -143,7 +143,7 @@ void thread_b {
 此外，如果不涉及数据的交互，那么可以用interface抽象出来类的基本能力。不过这种用法其实和普通的C++虚函数
 使用方法就很相似了。(IMG的CMOD代码中大量使用这种方式)
 
-== Port
+=== Port
 [[discuss::sc_port]]
 
 对于interface，以及实现了interface能力的primitive channel，已经足以在不同的thread之间传到信息了。但这样
@@ -183,7 +183,7 @@ port的bind情况：是否允许空绑定，是否允许多绑定，是否允许
 * 允许用户提供绑定策略，在仿真开始的时刻检查所设定的策略，如果不满足，则报错退出
 * 在使用的过程中，一个port可以当做指向 `IF*` 的指针使用，这是因为 `sc_port_b<IF>` 重载了 `operator->`， 返回一个 `IF*`
 
-== Export
+=== Export
 [[discuss::sc_export]]
 
 export类型出现的理由，在 <<data::sc_export, sc_core::sc_export>> 部分已经介绍了。简言之，sc_export
@@ -202,7 +202,7 @@ export的registry打交道。sc_export_base没有任何类型的成员变量。
 这里并没有显式约束，但IF必须是一个sc_interface的派生类才可以。一个 `sc_export<IF>` 能且只能绑定一个
 interface。
 
-== 绑定关系
+=== 绑定关系
 
 port可以绑定到port。这个我们之前介绍过，绑定时只是将被绑定的port先记录在port内，而在仿真开始之前，
 需要解决本port内所有绑定了的对象，如果绑定的对象是一个port，则将port内的所有interface取出来（因为

@@ -5,7 +5,7 @@
 SystemC调度模型
 [[chap::schedule_model]]
 
-== 引言
+=== 引言
 
 SystemC作为 {CPP} 语言写成的库，可以像其他HDL语言一样，描述数字电路的并行性。这其中，其独特的线程模型起到了非常重要的作用。本部分我们将尝试梳理清楚：
 
@@ -15,7 +15,7 @@ SystemC作为 {CPP} 语言写成的库，可以像其他HDL语言一样，描述
 
 我们这里以SystemC 2.3.3为例，尝试探索SystemC的内部细节。这应当可以覆盖之前SystemC版本的内容，并且原理和未来版本应该是相通的。
 
-=== 术语
+==== 术语
 
 对于SystemC而言， `sc_simcontext`
 数据结构实现了仿真器，我们一般提到simcontext的时候，指的都是实例化simcontext的唯一的一个全局仿真器实例，有时候我们也会用
@@ -35,7 +35,7 @@ typedef class sc_thread_process*  sc_thread_handle;
 ----
 
 
-== 线程的类型
+=== 线程的类型
 
 SystemC中的线程概念，并不同于操作系统中的进程/线程概念。对于SystemC而言，所谓的线程，更多的类似于HDL语言中的一个`always@`模块。从概念上来讲，所有的线程都是并行运行的。而SystemC仿真器则使用了一系列包括Delta原理在内的技术，使用串行执行的{CPP}语言，来模拟这种并行行为。SystemC的线程之于SystemC的内核，恰恰等同于操作系统概念上的线程之于操作系统，这也是为何我们在SystemC中将这些并行运行的调度模块称之为线程的一个非常重要的原因。
 
@@ -45,7 +45,7 @@ SystemC中一般分为三种线程（有时候也翻译为三种进程/process�
 * Thread，叫做thread线程
 * CThread，即clock驱动的Thread，可以认为是Thread的一种特殊形式，一般和Thread放在一起
 
-=== Method线程
+==== Method线程
 [[concept::method]]
 
 Method线程在SystemC中一般用于建模组合逻辑。相比于其他两种类型的线程，Method线程的特定是**非阻塞**。这意味着每一次调度
@@ -60,7 +60,7 @@ Method可以使用<<api::next_trigger, next_trigger>> 来动态设置下一次�
 
 所谓的调度条件，指的是何时Method线程会被再次执行。所以在仿真器运行过程中，一个Method线程可以被多次执行。
 
-=== ( C )Thread线程
+==== ( C )Thread线程
 [[concept::c_thread]]
 
 Thread线程在SystemC中一般用来建模时序逻辑。相比于Method线程，Thread线程的特点是**阻塞式**的，在仿真器运行过程中，每个Thread
@@ -71,13 +71,13 @@ Thread线程在SystemC中一般用来建模时序逻辑。相比于Method线程�
 
 CThread是Thread的一种特殊形式。在之后讨论中，如非必要，我们不会特意区分Thread或者Thread。当提及Thread的时候，除非特殊强调，否则这些讨论同样适用于CThread.
 
-== 线程的创建
+=== 线程的创建
 
 在一个继承自 `sc_module` 的class实现中，我们需要在构造函数中使用 `SC_METHOD` 创建method
 线程，使用 `SC_THREAD` 创建thread线程，使用 `SC_CTHREAD` 创建cthread线程。这三个类似于
 函数的东西，其实是Systemc定义的宏。
 
-=== 创建METHOD线程
+==== 创建METHOD线程
 [[api::SC_METHOD]]
 
 我们首先看一下 `SC_METHOD` 是怎么实现的：
@@ -207,7 +207,7 @@ class SC_API sc_process_handle {
     operator sc_thread_handle ();
 ----
 
-==== 控制METHOD线程是否初始化
+===== 控制METHOD线程是否初始化
 [[api::dont_initialize]]
 
 默认情况下， `SC_METHOD`  所创建的METHOD线程会执行初始化，即在仿真器开始的零时刻，METHOD会被调度执行一次。为了控制是否执行
@@ -268,7 +268,7 @@ CTHREAD现呈上，这也是这个 `dont_initialize` 函数被设计成为一个
 
 对于 `SC_CTHREAD`  所创建的CTHREAD线程而言，永远执行初始化。我们无法通过 `dont_initialize` 来阻止一个CTHREAD的初始化过程。
 
-=== 创建THREAD线程
+==== 创建THREAD线程
 [[api::SC_THREAD]]
 
 构造函数里使用 `SC_THREAD` 宏创建一个THREAD线程，代码如下：
@@ -297,7 +297,7 @@ CTHREAD现呈上，这也是这个 `dont_initialize` 函数被设计成为一个
 
 THREAD线程同样使用<<api::dont_initialize, dont_initialize>>来控制是否在零时刻执行一次以进行初始化。
 
-=== 创建CTHREAD线程
+==== 创建CTHREAD线程
 [[api::SC_CTHREAD]]
 
 当使用 `SC_CTHREAD`  创建一个CTHREAD时候，宏的实现就有所不同：
@@ -363,9 +363,9 @@ sc_sensitive::operator () ( sc_cthread_handle handle_,
 
 这部分内容我们后续再展开来讲。
 
-== 线程的调度
+=== 线程的调度
 
-=== simcontext中的调度器
+==== simcontext中的调度器
 [[concept::simcontext::intro]]
 
 `simc` 中，成员函数 `crunch`
@@ -392,7 +392,7 @@ main() -> sc_core::sc_elab_and_sim() // sc_main.cpp
 函数调用了simcontext的 `simulate` 函数，而这个函数则主要调用 `crunch`
 ，实现了基于Delta模型的硬件仿真模型。
 
-==== Crunch函数
+===== Crunch函数
 
 [[concept::crunch]]
 Crunch函数执行多次Delta Cycle，直到没有事件发生，没有可执行的列表。
@@ -411,7 +411,7 @@ delta事件列表的trigger函数，尝试将依赖这些delta event的线程放
 crunch函数的退出条件包括：delta event列表为空，并且可运行的调度单元也为空。这类比于仿真过程
 进入starvation模式，没有新的激励可以执行了。
 
-==== 两个调度列表
+===== 两个调度列表
 [[concept::runnable]]
 
 `simc` 中用 `sc_runnable` 建模了两个调度列表，分别为thread的调度列表，和method的调度列表，数据成员如下：
@@ -463,10 +463,10 @@ inline void sc_runnable::toggle_methods()
 某些事件，或者某些条件达成，需要调度新的线程，这些新加入的线程会被压入Push Queue中去，而不会
 影响本次delta cycle的执行。 这些新加入的线程会在下一个delta cycle开始的时候，被toggle_methods/toggle_threads函数从Push Queue挪到Pop Queue.
 
-=== Method的静态调度
+==== Method的静态调度
 [[concept::method::static]]
 
-==== 设置Method线程的静态调度事件
+===== 设置Method线程的静态调度事件
 
 使用 <<api::SC_METHOD, `SC_METHOD`>> 创建Method线程时，所创建线程的process handle会被<<function::sensitive_set_handle, 注册>>到sensitive中。之后
 我们可以使用 sensitive/sensitive_pos/sensitive_neg 来为Method线程设置调度事件。使用这种方式设置调度事件，称之为Method线程
@@ -587,7 +587,7 @@ sc_event::add_static( sc_thread_handle thread_h ) const
 * process handle的 `m_static_events` 中保存了线程静态敏感事件对象event的指针
 * event中分别用 `m_methods_static` 和 `m_threads_static` 保存了此事件需要触发的线程handle
 
-==== 事件引发调度
+===== 事件引发调度
 [[api::event::trigger::static_method]]
 
 在仿真器的<<phase::notification, NOTIFICATON>> Phase, event的 `trigger()`
@@ -672,7 +672,7 @@ sc_method_process::trigger_static()
 3. 线程是静态触发的，动态触发比静态触发拥有更高的优先级
 
 
-==== 多个EVENT
+===== 多个EVENT
 [[method::static::multi_event]]
 
 在使用 `sensitive` 等注册敏感事件时，我们可以注册多个事件对象。这样一来，对于所创建的
@@ -690,7 +690,7 @@ Runnable Push Queue中的下一个节点。当其他时间满足条件，从而�
 有一个事件发生，都会导致与之关联的Method线程被调度执行。
 
 
-=== Method的动态调度
+==== Method的动态调度
 [[api::next_trigger]]
 
 在Method内部，可以使用 `next_trigger` 注册下一次这个Method线程的调度时机。这种调度方式即为Method线程
@@ -1008,7 +1008,7 @@ bool sc_method_process::trigger_dynamic( sc_event* e )
 PHASE执行调度任务
 
 
-==== 动态触发类型
+===== 动态触发类型
 [[concept::trigger_type]]
 
 对于Method线程而言，我们介绍了一种使用单一事件动态触发的触发类型。除此之外，可能的触发类型
@@ -1036,7 +1036,7 @@ PHASE执行调度任务
 的时候释放完毕。
 
 
-=== Thread的静态调度
+==== Thread的静态调度
 [[concept::thread::static]]
 
 使用 <<api::SC_THREAD, `SC_THREAD`>> 创建Thread线程时，所创建线程的process handle会被<<function::sensitive_set_handle, 注册>>到sensitive中。之后
@@ -1096,14 +1096,14 @@ sc_thread_process::trigger_static()
 这里的结构基本等同于<<api::sc_method_process::trigger_static, Method线程的 `trigger_static`>>函数，除了
 多了个 `m_wait_cycle_n` 的判断，这个是为了建模时钟精确模型而添加的。
 
-==== 多个EVENT
+===== 多个EVENT
 
 与<<method::static::multi_event, Method线程多个EVENT静态调度>> 一样，如果一个Thread线程
 敏感列表中有多个EVENT，那么这些EVENT彼此之间是**或**的关系：只要有一个事件触发，都会将与之关联的
 Thread线程加入到runnable <<concept::push_queue, Push Queue>>，而之后其他的时间调用到
 Thread线程的 `trigger_static()` 函数时候，由于Thread已经是runnable的了，只会简单返回。
 
-=== Thread的动态调度
+==== Thread的动态调度
 [[api::wait]]
 [[concept::thread::dynamic]]
 
@@ -1169,7 +1169,7 @@ sc_thread_process::wait_cycles( int n )
 时间，在这个THREAD线程中使用 `wait()` 调用的结果等同于等待下一次敏感信号发生。
 
 [NOTE]
-====
+=====
 
 [[api::suspend_me]]
 在 `sc_thread_process::wait_cycles( int n )` 函数里，我们发现有一个非常有趣的函数， `suspend_me` ，这是实现协程的一部分，这个函数会：
@@ -1179,7 +1179,7 @@ sc_thread_process::wait_cycles( int n )
 
 `suspend_me` 是实现阻塞式调用的核心所在，我们在后续部分会具体分析这个函数的实现机制。
 
-====
+=====
 
 如果 `wait` 调用给予一个事件对象，那么:
 
@@ -1249,7 +1249,7 @@ Thread线程的动态调度过程和<<sc_process_b::trigger_dynamic, Method线�
 合并成为基类 `sc_process_b` 的 `trigger_dynamic` 。两边代码实际上是一致的，如果修改了其中一个，另一个也需要
 同步得到修改。
 
-=== 初始化
+==== 初始化
 [[concept::simulate::initialize]]
 
 到现在我们已经可以理解在运行过程中，各个method/thread线程是如何通过event来交互的，然而要让整个
@@ -1298,7 +1298,7 @@ method/thread线程，这些线程都没有设置静态调度条件，并且都�
 * 所有未指明dont_initialize的Method线程都会被完整执行一遍
 * 所有未指明dont_initialize的Thread线程都会执行直到阻塞
 
-=== 小结
+==== 小结
 
 Method和Thread线程都可以用 `sensitive` `sensitive_pos` `sensitive_neg` 来设置静态调度事件列表。
 当这些静态事件发生的时候，对应的Method线程会被完整执行一遍，对应的Thread线程则会被调度，从上次 `suspend_me`
@@ -1312,7 +1312,7 @@ Method和Thread线程都可以用 `sensitive` `sensitive_pos` `sensitive_neg` �
 动态设置的条件会覆盖静态调度条件。当动态设置的调度条件满足时，此Thread线程会加入 `simc` 的可执行
 列表，重置为静态调度，从上次休眠的地方恢复出来继续执行，直到再次被阻塞（或者极端情况下，执行结束返回）。
 
-== Event
+=== Event
 
 在之前的介绍中，我们已经可以看到event是如何与Method/Thread线程交互，静态或者动态地设置
 这些线程的调度条件的。在这些描述中，我们用了一个模糊的词，“满足条件” 时候被调度，而现在
@@ -1336,7 +1336,7 @@ Method和Thread线程都可以用 `sensitive` `sensitive_pos` `sensitive_neg` �
 
 而在这里，我们就会尝试探索并理解SystemC的event机制。
 
-=== EVENT的类型
+==== EVENT的类型
 
 EVENT可选的类型有3种：
 
@@ -1346,7 +1346,7 @@ EVENT可选的类型有3种：
 
 一个特定EVENT并不会固定在一个状态中，而是在这三种状态之间不断跳转的。
 
-=== TIMED EVENT的创建和销毁
+==== TIMED EVENT的创建和销毁
 
 对于timed event对象，是由SystemC内部创建并维护的。一个timed event并不是真正意义上的event，而是包含了一个与之关联的, trigger类型为TIMED的event的指针，和一个时间信息的数据组合体。
 有时候我么提到TIMED event，指代的是由SystemC内部创建并销毁的组合体对象，有时候则指代都是
@@ -1509,7 +1509,7 @@ sc_method_process::next_trigger( const sc_time& t, const sc_event& e )
 从这层意义上来讲，TIMED event用于clock之间的通信，而DELTA event用于一个clock内部多个delta cycle
 之间的通信。
 
-=== DELTA EVENT
+==== DELTA EVENT
 
 DELTA EVENT就是将 `m_notify_type` 设置为DELTA类型的event。所有的DELTA event都会
 加入 `simc` 的 `m_delta_events` 成员中，在crunch的<<phase::notification, NOTIFICATION PHASE>> 激发并trigger.
@@ -1534,7 +1534,7 @@ DELTA EVENT的trigger效果等同于将所有阻塞在本DELTA EVENT上的线程
 
 <<phase::notification, NOTIFICATION>>阶段不会产生DELTA EVENT（存疑）。
 
-=== 不带时间参数的notify
+==== 不带时间参数的notify
 
 现在我们可以得出结论，一个event的发生，是调用成员函数<<api::event::notify, `notify()`>> 的结果。
 
@@ -1576,7 +1576,7 @@ sc_event::notify()
 顺序的。所以在用户代码中，请务必避免使用不带参数的 `notify()` 。
 
 [NOTE]
-====
+=====
 不带参数的 `sc_event::notify()` 一般用于如下场合：
 
 1. SystemC内部的elaboration
@@ -1585,13 +1585,13 @@ sc_event::notify()
 
 除了SystemC内部以外，不建议在用户代码中使用不带参数的notify。
 
-====
+=====
 
 对于用户代码而言，替代不带参数的 `notify()` 功能的形式是 `notify(SC_ZERO_TIME)` ，这在<<phase::evaluate, EVALUATE>>阶段会设定事件为一个DELTA类型的
 event，注册到 `simc` 的 `m_delta_events` 成员变量中。等全部的线程都完成一轮调度之后，再
 执行此event对应的 `trigger()` ，这就天然保证了顺序。
 
-== 仿真调度
+=== 仿真调度
 
 在<<concept::simcontext::intro, simcontext中的调度器>>部分，我们简单介绍了SystemC的
 仿真器启动流程，以及核心的<<concept::crunch, `crunch`>>函数，以及在 `crunch` 函数中使用
@@ -1664,7 +1664,7 @@ delta event事件列表为空，不会再产生新的runnable调度单元为止�
 * 仿真时间达到
 * 没有多余的事件，仿真器进入STARVATION状态
 
-== 总结
+=== 总结
 
 本部分我们探索了SystemC的调度原理和具体的实现框架。总的来说, SystemC以Method线程和Thread线程
 为调度单元，以EVENT对象为通道，实现了clock内部（delta event）和clock之间（timed event），

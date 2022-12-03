@@ -5,26 +5,26 @@
 SystemC内的Primitive Channel
 [[chap::prim_channel]]
 
-== 引言
+=== 引言
 
 在 `simc` 的 `crunch` 函数中，UPDATE PHASE只有一个函数调用，就是primitive channel registry的 `perform_update()` 函数。
 primitie channel registry是所有的primitive channel，包括 `sc_signal`, `sc_fifo`, `sc_clock`, `sc_buffer` 等
 继承自 `sc_prim_channel` 的所有对象注册表。primitive channel是用来模拟多个线程之间信号传输的工具，为此，primitive channel
 建立了一套复杂但有效的更新机制，避免了信号在primitive channel传递过程中出现丢失，或者提前响应的情况。
 
-== Primitive Channel框架
+=== Primitive Channel框架
 
 Primitive Channel有两个类组成，一个负责管理所有注册的primitive channel的 `sc_prim_channel_registry`, 另一个则是所有primitive channel
 的基类 `sc_prim_channel`.
 
-=== `sc_prim_channel_registry`
+==== `sc_prim_channel_registry`
 
 `sc_prim_channel_registry` 中，保存了一个需要在UPDATE PHASE执行
 <<api::sc_prim_channel::update, update>>函数的所有 `sc_prim_channel`
 对象的指针， `sc_prim_channel` 中有一个指向下一个 `sc_prim_channel` 的指针，
 从而组成一条链表。
 
-==== request_update
+===== request_update
 [[api::sc_prim_channel_registry::request_update]]
 
 `sc_prim_channel_registry` 的 `request_update` 函数接受一个 `sc_prim_channel`
@@ -46,7 +46,7 @@ sc_prim_channel_registry::request_update( sc_prim_channel& prim_channel_ )
 
 `sc_prim_channel_registry::request_update` 函数应当在EVALUATE PHASE调用。
 
-==== perform_update
+===== perform_update
 [[api::sc_prim_channel_registry::perform_update]]
 
 `sc_prim_channel_registry` 的 `perform_update` 函数，主要是遍历链表中的每一个节点，
@@ -89,12 +89,12 @@ sc_prim_channel_registry::perform_update()
 `crunch` 的UPDATE PHASE唯一一个函数调用就是 `sc_prim_channel_registry::perform_update` 。
 
 
-=== `sc_prim_channel`
+==== `sc_prim_channel`
 [[data::sc_prim_channel]]
 
 `sc_prim_channel` 是所有channel的基类。
 
-==== request_update
+===== request_update
 [[api::sc_prim_channel::request_update]]
 
 `sc_prim_channel::request_update` 函数会将自己放入 `sc_prim_channel_registry`
@@ -126,7 +126,7 @@ registry中，如果在的话就无需再次放入。
 `sc_prim_channel::request_update` 设计的目的是为了sc_prim_channel的继承类直接使用的。sc_prim_channel
 的继承类无需重新实现request_update，所以这里request_update函数是一个非虚的函数。
 
-==== perform_update
+===== perform_update
 [[api::sc_prim_channel::perform_update]]
 
 对于 `sc_prim_channel` 的 `perform_update` 函数，只是简单地调用 <<api::sc_prim_channel::update, update成员函数>>， 然后将本节点中保存
@@ -158,7 +158,7 @@ sc_prim_channel::perform_update()
 我们在后续能够看到不同 `update` 的具体实现，这些都是根据具体的primitive channel功能
 而定制的。
 
-==== update函数
+===== update函数
 [[api::sc_prim_channel::update]]
 
 `sc_prim_channel::update()` 函数是一个虚函数。对于 `sc_prim_channel` 而言，update函数没有
@@ -175,7 +175,7 @@ sc_prim_channel::update()
 所有继承 `sc_prim_channel` 的类都应当事先自己的 `update` 函数。此函数会在UPDATE PHASE被 `simc`
 间接调用。
 
-=== 小结
+==== 小结
 
 `sc_prim_channel_registry` 和 `sc_prim_channel` 组成了SystemC中的primitive channel
 机制的基石。
@@ -195,15 +195,15 @@ primitive channel registry通信，通知primitive channel registry自己需要�
 sc_prim_channel的继承类在何时调用 request_update，以及如何实现update接口函数，是这个继承类
 本身的能力所在。不同的primitive channel在这两个问题的选择上有着不同的答案。
 
-== 几种Primitive Channel
+=== 几种Primitive Channel
 
 这里我们尝试探索几种类型的primitive channel，研究一下这些类是如何
 使用SystemC的primitive channel框架来实现相应的功能的。
 
-=== `sc_fifo`
+==== `sc_fifo`
 [[data::sc_fifo]]
 
-==== 使用request_update的地方
+===== 使用request_update的地方
 
 对于sc_fifo，如果非阻塞的读或者写成功的话，就会调用 `request_update` 成员函数，将自己
 注册到primitive channel registry的update链表中：
@@ -287,7 +287,7 @@ sc_fifo<T>::write( const T& val_ )
 <1> 调用非阻塞版本的读
 <2> 调用非阻塞版本的写
 
-==== update函数的实现
+===== update函数的实现
 [[api::sc_fifo::update]]
 
 sc_fifo的update函数主要实现了读和写事件的触发，以及内部状态的更新：
@@ -329,7 +329,7 @@ sc_fifo<T>::update()
 在UPDATE PHASE，读或者写事件的 `trigger()` 可以将可能pending在本时间上的线程纳入调度队列，在下一个
 delta cycle恢复相应的线程。
 
-==== fifo中的计数器
+===== fifo中的计数器
 
 sc_fifo中有几个计数器：
 
@@ -362,7 +362,7 @@ sc_fifo中有几个计数器：
 
 num_available直接使用本delta cycle初始时可读取的大小，减去已经读取的大小。
 
-==== 场景分析
+===== 场景分析
 
 我们这里尝试分析几种读写的场景，来加深理解sc_fifo的行为。本部分我们用RT表示读线程, Read Thread，WT表示写线程，Write Thread. 读写均采用阻塞读写方法。
 
@@ -460,7 +460,7 @@ WT被重新调度，完成写入动作，并在 `update` 阶段将阻塞在写�
 
 在这种情况下，无论读写发生的顺序，RT和WT都能够在被调度的clock cycle完成。
 
-==== 行为描述
+===== 行为描述
 
 +++<del>+++`sc_fifo` 令人比较困惑的一点在于，在FIFO为空的情况下，如果读写发生在同一个clock cycle，那么
 读在本clock cycle能够读到写入的数据。这对于一个正常的FIFO来说是错误的行为：数据起码要先进入
@@ -482,12 +482,12 @@ cycle的读写绕过FlipFlop，直接将数据透传过去的行为是存在的�
 与读和写线程调度执行的顺序无关，这就是sc_fifo设计的初衷。如果是clock accurate的建模，这意味着FIFO的数据至少有一个
 时钟的延时，这就达到了FIFO的重要功能，即切断双向的延时。
 
-==== 其他
+===== 其他
 
 sc_fifo不仅是一个sc_prim_channel，同时也是一个sc_interface，实现了 `register_port`
 功能，将一个 `sc_port_base` 对象注册为自己的reader或者write(根据类型信息来判断是读还是写)。
 
-=== `sc_signal`
+==== `sc_signal`
 [[data::sc_signal]]
 
 不同于 `sc_fifo` 建模一个具有一定深度的先进先出队列以hide住latency, `sc_signal` 建模的
@@ -554,7 +554,7 @@ sc_signal_channel::do_update()
 当前值 `m_cur_val` 和 下一个值 `m_new_val` 。这两个值在每个delta cycle开始的EVALUATE阶段之前
 都是一致的footnote:[我们后续在<<concept::cur_and_new, cur和new的取值>>中证明这一点]。
 
-==== 使用request_update的地方
+===== 使用request_update的地方
 
 对于 `sc_signal_t<>` ，只有成员函数 `write` 使用到了 `request_update`:
 
@@ -588,7 +588,7 @@ sc_signal_t<T,POL>::write( const T& value_ )
 `m_new_val != value_` ，这是因为sc_signal_t是个模板类，为了放松对模板参数的要求，这里
 只要求类型数据T实现相等判断即可，而不需要实现不相等判断。
 
-==== update函数实现
+===== update函数实现
 
 [[api::sc_signal_t::update]]
 被注册到registry的update链表中的 `sc_signal_t<>` 会在UPDATE阶段回调自己的
@@ -639,7 +639,7 @@ sc_signal_channel::do_update()
 这里调用了 `notify_next_delta` 将阻塞在 `m_change_event_p` 事件上的线程放入runnable链表，等待
 下一个delta cycle的EVALUATE PHASE执行。
 
-==== cur和new的取值
+===== cur和new的取值
 [[concept::cur_and_new]]
 
 在初始化的时候，当前值 `m_cur_val` 和下一个取值 `m_new_val` 是一致的。这种一致保持到
@@ -691,7 +691,7 @@ cycle中被唤醒，并且用 `sc_signal_t<>::read()` 读回最新的值。
 	{ return m_cur_val; }
 ----
 
-==== 特化版本的sc_signal
+===== 特化版本的sc_signal
 
 `sc_signal_t` 是 `sc_signal` 的唯一基类，这么做更像是为 `sc_signal_t<>` 取了
 一个别名 `sc_signal<>` 。然而 `sc_signal<>` 的引入主要是为了两种特化形式
@@ -761,7 +761,7 @@ sc_signal<bool,POL>::do_update()
 获取上升沿事件或者下降沿事件的引用，使用动态或者静态以来的方式阻塞在此事件上。这样，等到事件发生
 的时候（从0到1，或者从1到0），阻塞的事件会在下一个delta cycle的EVALUATE PHASE恢复调度执行。
 
-=== `sc_buffer`
+==== `sc_buffer`
 
 sc_buffer继承自sc_signal:
 
@@ -784,7 +784,7 @@ public:
 
 sc_buffer根据自己需要，重写了sc_signal中的write和update函数。
 
-==== 调用request_update的地方
+===== 调用request_update的地方
 
 相比于<<api::sc_signal_t::write, `sc_signal_t::write`>>, sc_buffer的write
 不去检查值是否改变。只要有写入动作，在更新值之后，就调用 `request_update`:
@@ -810,7 +810,7 @@ sc_buffer<T,POL>::write( const T& value_ )
 sc_signal的do_update等地方都会检查值最终是否改变）。而对于sc_buffer而言，可能写入的
 值没改变，但是每一次写入都会调度相关线程。
 
-==== update函数实现
+===== update函数实现
 
 .src/sysc/communication/sc_buffer.h
 [source,cpp]
@@ -830,7 +830,7 @@ sc_buffer的 `update` 函数实际上跳过了值的相等性检查。这样一�
 和一开始的值一样，只要有写入的动作发生，所有阻塞在本sc_buffer上的线程都会在下一个
 delta cycle调度执行.
 
-=== `sc_signal_resolved`
+==== `sc_signal_resolved`
 
 `sc_signal_resolved` 建模的是一种可以被多个源同时写入的signal，这个signal是个典型的
 四值信号，有着 '0', '1', 'X', 'Z' 四个取值。 `sc_signal_resolved` 也会根据多个
@@ -846,7 +846,7 @@ class SC_API sc_signal_resolved
 以上是 `sc_signal_resolved` 的类型信息。可以看出 `sc_signal_resolved` 已经是一个完全类，
 不是类模板了。
 
-==== 调用`request_update`的地方
+===== 调用`request_update`的地方
 
 在 `sc_signal_resolved::write()` 中，根据最终的值是否改变，来决定是否调用 `request_update`
 将自己注册到registry的update链表中：
@@ -888,7 +888,7 @@ sc_signal_resolved::write( const value_type& value_ )
 从这段代码我们也能看出， `sc_signal_resolved` 的多个输入来源应当是来自不同的线程。如果
 来自同一个线程，那么多次写入将会被替换掉。
 
-==== `update` 实现
+===== `update` 实现
 
 `sc_signal_resolved` 在UPDATE阶段， `update` 函数被调用：
 
@@ -911,7 +911,7 @@ sc_signal_resolved::update()
 与 `sc_signal_resolved` 类似的还有 `sc_signal_rv` ，是一种vector形式的
 四值信号决议，其代码整体和 `sc_signal_resolved` 一致，这里就不再详述了。
 
-=== `sc_clock`
+==== `sc_clock`
 [[data::sc_clock]]
 
 `sc_clock` 继承自特化版本的 `sc_signal` :
@@ -923,12 +923,12 @@ class SC_API sc_clock
   : public sc_signal<bool,SC_ONE_WRITER>
 ----
 
-==== `update` 的实现
+===== `update` 的实现
 
 sc_clock的update函数没有实现额外的功能，与<<api::sc_signal_bool::update, 特化版本的sc_signal的update函数实现>>
 保持一致。
 
-== sc_host_semaphore
+=== sc_host_semaphore
 [[data::sc_host_semaphore]]]
 
 sc_host_semaphore是一个用来在多个thread之间做同步的信号量。sc_host_semaphore的实现
@@ -955,7 +955,7 @@ class SC_API sc_host_semaphore : public sc_semaphore_if
 
 sc_host_semaphore继承自sc_semaphore_if，主要实现了包括wait, trywait和post语义的接口。
 
-=== wait
+==== wait
 [[api::sc_host_semaphore::wait]]
 
 wait接口函数由do_wait实现：
@@ -976,7 +976,7 @@ wait接口函数由do_wait实现：
 do_wait是一个阻塞的接口，如果value不大于0，那么就会等待条件变量cond_var。
 等到value不大于0之后，do_wait将value值减去一。
 
-=== trywait
+==== trywait
 [[api::sc_host_semaphore::trywait]]
 
 trywait接口函数由do_trywait完成：
@@ -1003,7 +1003,7 @@ false，否则将value值减去一，然后返回true。
 
 trywait如果成功减去value值，则返回0，否则返回-1.
 
-=== post
+==== post
 [[api::sc_host_semaphore::post]]
 
 post接口函数由do_post完成：
@@ -1023,11 +1023,11 @@ post操作是一个非阻塞的操作，获得锁之后，将value值加一，�
 唤醒一个阻塞在此条件变量的 <<api::sc_host_semaphore::wait, wait>>
 调用上。如果有多个wait阻塞，则随机选取一个wait调用唤醒。
 
-=== destory
+==== destory
 
 无需实现destory功能。
 
-== Primitive Channel的异步框架
+=== Primitive Channel的异步框架
 [[concept::primitive::async]]
 
 SystemC的primitive channel框架不仅仅有同步部分，还存在异步部分。所谓的同步，指的是
@@ -1051,7 +1051,7 @@ SystemC的primitive channel框架不仅仅有同步部分，还存在异步部�
 主要讨论这个API。 `async_attach_suspending` 和 `async_detach_suspending`
 主要和异步阻塞有关，后续我们有空再讨论。
 
-=== async_update_list
+==== async_update_list
 [[data::async_update_list]]
 
 异步相关的处理都是由sc_primitive_channel_registry命名空间下的async_update_list
@@ -1088,7 +1088,7 @@ async_update_list主要持有以下成员变量
 关于<<data::async_update_list::accept_updates, accept_updates>>，以及
 <<data::async_update_list::append, append>>成员函数的实现，我们将在下一部分介绍。
 
-==== async_update_list::pending
+===== async_update_list::pending
 [[data::async_update_list::pending]]
 
 async_update_list的成员函数 `pending` 用来返回是否有需要处理的
@@ -1106,7 +1106,7 @@ async_update_list的成员函数 `pending` 用来返回是否有需要处理的
 如果 `pending` 返回true，表明本delta cycle内有需要处理的异步primitive channel
 更新请求。如果返回false，那就是没有异步更新请求。
 
-==== async_update_list::attach_suspending
+===== async_update_list::attach_suspending
 [[data::async_update_list::attach_suspending]]
 
 sc_prim_channel的async_attach_suspending最终调用的就是async_update_list的attach_suspending
@@ -1169,7 +1169,7 @@ m_suspend_channels列表中：
 
 如果primitive channel已经存在于m_suspend_channels，那么直接返回false。
 
-==== async_update_list::detach_suspending
+===== async_update_list::detach_suspending
 [[data::async_update_list::detach_suspending]]
 
 sc_prim_channel的async_detach_suspending最终调用的就是async_update_list的detach_suspending
@@ -1205,7 +1205,7 @@ detach_suspending的目的和attach_suspending刚好相反，是需要从m_suspe
 
 如果待移除的primitive channel不存在，那么直接返回false.
 
-==== attach/detach suspending framework
+===== attach/detach suspending framework
 
 在没有attach_suspending和detach_suspending调用的情况下，async_update_list
 的m_has_suspending_channels应当始终为false。在这种情况下，
@@ -1293,7 +1293,7 @@ async_attach_suspending，那么仿真内核永远不会退出，总要等到一
 
 NOTE: 这种semaphore的使用方式非常有趣，模式值得探究下
 
-=== async_request_update
+==== async_request_update
 [[api::primitive_channel::async_request_update]]
 
 .src/sysc/communication/sc_prim_channel.cpp
@@ -1365,7 +1365,7 @@ registry的 `async_request_update` 调用了 `async_update_list::append` 函数�
 的 `async_request_update` 就只能等待下一个delta cycle了。
 
 
-=== async event sample
+==== async event sample
 
 Async的primitive channel提供了一个框架，用以让非SystemC的线程将自己的行为
 注册到SystemC的不同stage。这种能力不局限于primitive channel才可以。例如，在
@@ -1529,7 +1529,7 @@ primitive channel registry调度async_update_list的accept_updates，执行push 
 增加了async_attach_suspending和async_detach_suspending之后，可以看到SC内核收到异步通知，执行了 `sc_method_process`
 之后，才退出的。
 
-=== 异步应用场景
+==== 异步应用场景
 
 异步的primitive channel主要用于SystemC主线程和其他线程协同工作。例如，可以基于异步的primitive channel机制
 实现一个watch dog。当SystemC主线程阻塞超过一定时间，就认为超时，打印出超时信息。这种机制只能用异步来做，是因为
@@ -1539,7 +1539,7 @@ primitive channel registry调度async_update_list的accept_updates，执行push 
 异步的另外一些应用场景是多线程运行，其他工作线程用来处理数据，然后将数据通过异步的primitive channel送到
 Systemc主线程中，作进一步的仿真处理。
 
-== 其他
+=== 其他
 
 在SystemC中，除了primitive channel，还有一种hierarchical channel, `sc_channel` 。然而
 这种类型不过是一个 `sc_module` 而已：
@@ -1558,6 +1558,6 @@ typedef sc_module sc_behavior;
 hierarchical channel经常用于建模诸如 AMBA总线，PCI-X总线等具有复杂结构的总线结构，这些总线
 表现如同channel一样，可以传递数据，然而其本质则是和 sc_module 别无二致的设计。
 
-== References
+=== References
 
 https://theses.hal.science/tel-01778172/document

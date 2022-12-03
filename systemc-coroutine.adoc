@@ -5,7 +5,7 @@
 SystemC中的协程以及应用
 [[chap::coroutine]]
 
-== 协程原理
+=== 协程原理
 
 所谓的协程，指的是协作式线程。不同于普通的线程，协程的重点突出在一个**协作**上。
 
@@ -35,7 +35,7 @@ SystemC中提供了三种协程的实现方案：
 在SystemC编译过程中，这三个方案都是全部加入到编译文件列表中，而根据不同的宏定义，决定这些
 文件是否有具体的实现内容的。
 
-== SystemC中的协程
+=== SystemC中的协程
 
 协程的管理器在 `simc` 中，在 `sc_simcontext::prepare_to_simulate` 的时候被创建：
 
@@ -61,7 +61,7 @@ sc_simcontext::prepare_to_simulate()
 
 
 
-=== 协程的建立
+==== 协程的建立
 
 对于一个Thread/Cthread而言，所需要的协程参数在 `sc_thread_process::prepare_for_simulation` 时候
 完成：
@@ -221,7 +221,7 @@ Method线程而言，每次启动都相当于调用一次 <<api::semantic, `sema
 -> 用户自定义的线程成员函数，一般为一个永不返回的函数
 ----
 
-=== 协程的调度
+==== 协程的调度
 
 每个 `sc_thread_process` 都有一个 `m_cor_p` 的成员变量，保存着与这个thread线程关联的
 协程的信息，包括但不限于
@@ -366,7 +366,7 @@ sc_simcontext::next_cor()
 的时候，所有可执行的线程就都已经执行完毕了。
 
 
-=== 协程的销毁
+==== 协程的销毁
 
 对于一个设计良好的协程而言， <<api::sc_thread_cor_fn, `sc_thread_cor_fn`>>中的
 `semantic` 函数永远不应该返回。只有如下几种情况， `semantic` 才会返回：

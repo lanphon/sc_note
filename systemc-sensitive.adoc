@@ -5,7 +5,7 @@
 SystemC中的sensitive
 [[chap::sensitive]]
 
-== 引言
+=== 引言
 
 SystemC中的sensitive，指的是3个sc_module的成员变量：
 
@@ -70,7 +70,7 @@ SC_CHTERAD是一个clock驱动的THREAD，edge信息在创建的时候就已经�
 
 在取得process handle之后，sensitive主要的目标和用途就是如何获取与之关联的sc_event对象了。
 
-== sc_sensitive
+=== sc_sensitive
 
 sc_sensitive是个独立设计的类，没有继承自其他类。
 
@@ -94,7 +94,7 @@ sc_sensitive是个独立设计的类，没有继承自其他类。
 其中， `operator()` 形式的重载方式全都标记为deprecated，后续我们应当只使用 `operator<<` 形式
 的重载方式。
 
-=== sc_event作为敏感源设置
+==== sc_event作为敏感源设置
 
 如果将一个sc_event事件对象作为静态敏感源直接设置，那么调用的就是以下这个函数：
 
@@ -129,7 +129,7 @@ sc_sensitive::operator << ( const sc_event& event_ )
 的add_static_event成员函数，而对于SC_CTHREAD而言，m_mode等同于SC_THREAD，因此
 被当做SC_THREAD来处理。
 
-=== sc_interface作为敏感源设置
+==== sc_interface作为敏感源设置
 
 如果将一个sc_interface派生类作为敏感源设置进来，那么调用的则是这个函数：
 
@@ -166,7 +166,7 @@ sc_sensitive::operator << ( const sc_interface& interface_ )
 sc_signal，sc_fifo，sc_buffer, sc_clock等是sc_interface派生类，这些都可以借助这个函数，将
 default_event作为静态敏感源设置进来。
 
-=== sc_port_base作为敏感源设置
+==== sc_port_base作为敏感源设置
 
 如果将一个sc_port_base派生类作为敏感源设置进来，那么调用的则是这个函数：
 
@@ -234,7 +234,7 @@ sc_port_base未来所绑定的**所有**的sc_interface的default_event()返回�
 sc_in, sc_out, sc_fifo_in, sc_fifo_out等都是sc_port_base的派生类，这些都可以借助
 这个函数，设置静态敏感源。
 
-=== sc_event_finder作为敏感源设置
+==== sc_event_finder作为敏感源设置
 
 如果将一个sc_event_finder派生类作为敏感源设置进来，那么调用的则是这个函数：
 
@@ -278,7 +278,7 @@ sc_sensitive::operator << ( sc_event_finder& event_finder_ )
 elaboration_done阶段被调用的<<usage::sc_port_base::complete_binding, comptete_binding>>的时候会被使用，以返回与之关联的事件对象（而不是
 调用default_event()返回事件对象）。
 
-=== 静态成员函数make_static_sensitivity
+==== 静态成员函数make_static_sensitivity
 
 除了这8个重载的operator以外，sc_sensitive中还设计了四个具有不同重载形式的静态函数
 make_static_sensitivity，以满足在dynamic process时候设置静态敏感源：
@@ -325,7 +325,7 @@ port必然已经绑定了interface。如果仿真没有开始，那么就如同�
 sc_event_finder作为静态敏感源设置，那么将永远不会有时机决议出真正作为静态
 铭感源的事件对象了。
 
-=== 为SC_CTHREAD准备的静态敏感源函数
+==== 为SC_CTHREAD准备的静态敏感源函数
 
 如前所述， `operator<<` 以及废弃形式的 `operator()`，还有静态成员函数make_static_sensitivity
 都可以为SC_CTHREAD设置静态敏感源。
@@ -347,7 +347,7 @@ sc_event_finder作为静态敏感源设置，那么将永远不会有时机决�
 
 这些重载形式第一个参数都是一个sc_cthread_handle，主要的区别在于第二个参数的类型。
 
-==== 使用sc_event_finder为SC_CTHREAD设置静态敏感源
+===== 使用sc_event_finder为SC_CTHREAD设置静态敏感源
 
 如果使用sc_event_finder为SC_CTHREAD设置静态敏感源，那么实现如下：
 
@@ -367,7 +367,7 @@ sc_sensitive::operator () ( sc_cthread_handle handle_,
 成员函数，将sc_cthread_handle和event_finder设置进去。这么做的效果和
 为普通的SC_METHOD/SC_THREAD设置sc_event_finder作为静态敏感源是一样的。
 
-==== 使用in_if_b_type/in_if_l_type为SC_CTHREAD设置静态敏感源
+===== 使用in_if_b_type/in_if_l_type为SC_CTHREAD设置静态敏感源
 
 in_if_b_type和in_if_l_type的定义是：
 
@@ -406,7 +406,7 @@ sc_sensitive::operator () ( sc_cthread_handle handle_,
 实际效果等同于将这两种sc_interface的 `posedge_event` 成员函数返回的事件对象
 设置为process handle的静态敏感事件。
 
-==== 使用in_port_b_type/in_port_l_type/inout_port_b_type/inout_port_l_type为SC_CTHREAD设置静态敏感源
+===== 使用in_port_b_type/in_port_l_type/inout_port_b_type/inout_port_l_type为SC_CTHREAD设置静态敏感源
 
 in_port_b_type, in_port_l_type, inout_port_b_type, inout_port_l_type的定义分别是：
 
@@ -474,7 +474,7 @@ sc_sensitive::operator () ( sc_cthread_handle handle_,
 SC_CTHRAD的静态敏感事件，被设置进去。这也就意味着无法使用这种方式为SC_CTHREAD设置
 下降沿作为静态敏感事件。
 
-== sc_sensitive_pos和sc_sensitive_neg
+=== sc_sensitive_pos和sc_sensitive_neg
 
 sc_sensitive_pos和sc_sensitive_neg都被废弃掉了，因为这两个类的功能都可以被sc_sensitive
 覆盖。

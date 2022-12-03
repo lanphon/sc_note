@@ -5,7 +5,7 @@
 SystemC中的Port和Export
 [[chap::port_and_export]]
 
-== 引言
+=== 引言
 
 SystemC的Port，抽象的是物理设计中，划分不同模块后，每个模块对外的接口信息，包括输入和输出端口。
 
@@ -23,7 +23,7 @@ sc_port和sc_export底层仍然是SystemC核心的event, prim channel的概念�
 处理的是primitive channel，NOTIFICATION PHASE处理的则是event。在crunch中，没有sc_port和
 sc_export的地方。
 
-== sc_port_registry
+=== sc_port_registry
 [[api::sc_port_registry]]
 
 sc_port_registry是一个管理类，这个类管理了所有生成的sc_port_base以及派生类：当每个
@@ -72,7 +72,7 @@ sc_port_registry和sc_port的关系，就像sc_prim_channel_registry和sc_prim_c
 一样：注册表提供了管理所有对象的能力。
 
 
-== sc_port_base
+=== sc_port_base
 [[api::sc_port_base]]
 [[data::sc_port_base]]
 
@@ -80,7 +80,7 @@ sc_port_base是一个继承自sc_object的接口类，并且不是一个模板�
 任何模板信息的。这么设计的原因，是为了保证在一些需要使用sc_port的场合，可以直接将参数设置为
 `sc_port_base*` ，这样就可以使用接口类定义的接口函数，而无需提供模板参数了。
 
-=== Port和Interface之间的绑定
+==== Port和Interface之间的绑定
 
 Port和Interface之间的绑定，可以分为两种：
 
@@ -94,7 +94,7 @@ PA绑定PB的时候，Systemc内部只会暂时将这个信息记录下来。等
 被绑定Port的Interface。
 
 
-=== 接口函数
+==== 接口函数
 
 sc_port_base定义了如下几个接口函数：
 
@@ -106,12 +106,12 @@ sc_port_base定义了如下几个接口函数：
 * `interface_count` 返回现有的interface数目
 * `vbind` 包括sc_interface和sc_port_base两种引用参数的重载形式，用以完成绑定，一般内部使用
 
-=== 实现函数
+==== 实现函数
 
 sc_port_base除了定义接口函数以外，还实现了一些非常有用的函数，用来帮助继承类完成相关工作。
 其中，有一个非常重要的保存绑定信息的私有类，sc_bind_info，需要着重介绍。
 
-==== sc_bind_info私有类
+===== sc_bind_info私有类
 [[api::sc_bind_info]]
 
 sc_bind_info是一个私有类：
@@ -170,7 +170,7 @@ sc_port上。当一个sc_port有能力绑定到另一个sc_port上的时候，�
 parent。
 
 
-==== bind
+===== bind
 [[api::sc_port_base::bind]]
 
 bind包括两种形式的绑定。第一种，绑定一个具体的sc_interface：
@@ -251,7 +251,7 @@ PA则是PB的子Port。
 
 这里有个疑问，SystemC是如何解决类似于 `PA.bind(PB); PB.bind(PA);` 这种循环绑定的？
 
-==== pbind
+===== pbind
 [[api::sc_port_base::pbind]]
 
 pbind实现的功能看起来和bind基本一致，实际上pbind最后调用了vbind，而接口的vbind在继承类
@@ -263,7 +263,7 @@ sc_module里用到这个函数的地方基本都deprecated了。
 
 pbind的特点，从代码里看，是必须作为sc_port的第一个绑定点才能绑定。
 
-==== make_sensitive
+===== make_sensitive
 [[api::sc_port_base::make_sensitive]]
 
 make_sensitive这个函数，主要实现的功能是为了在static sensitive设置的时候，将
@@ -307,7 +307,7 @@ vector中。这里的event_finder指针可能为空，表明自己不需要一�
 event_finder指针为空的情况下，SystemC总是调用interface的default_event函数（这是个接口函数）
 来获取与之关联的event事件对象。
 
-==== add_static_event
+===== add_static_event
 [[api::sc_port_base::add_static_event]]
 
 sc_port_base的add_static_event成员函数，只是为了避免VC6.0的一个bug而做的workaround。
@@ -341,7 +341,7 @@ add_static_event是PROTECTED/PRIVATE的，如果想要直接调用，那么需�
 派生类所调用。这样一来，只需要将sc_port_base设定为sc_method_handle/sc_thread_handle的友元类
 即可，从而绕过这个问题。
 
-==== first_parent和insert_parent
+===== first_parent和insert_parent
 [[api::sc_port_base::first_parent]]
 
 .src/sysc/communication/sc_port.cpp
@@ -414,7 +414,7 @@ sc_port_base::insert_parent( int i )
 依赖，PA的绑定就变成了ia, ib, if, ig, ih, PC, ic, id, ie。至于PB还绑定了另一个
 sc_port_base PC，如何替换PC，就需要和find_parent结合起来循环使用了。
 
-==== complete_binding
+===== complete_binding
 [[api::sc_port_base::complete_binding]]
 
 这是一个非常重要的函数实现，可以说这个函数实现的才是sc_port的核心功能。也正是这个函数的实现，包括
@@ -593,7 +593,7 @@ ERROR。这意味着如果设定为SC_ALL_BOUND，那么必须精确地符合设
 complete_binding是sc_port_base非常重要的一个函数，理解complete_binding，是理解sc_port
 核心逻辑的基础。
 
-==== 其他在simulation不同stage调用的函数
+===== 其他在simulation不同stage调用的函数
 
 sc_port_base还实现了一系列在simulation不同的stage调度的函数(继承自sc_object的函数)。这些函数绝大多数都是空函数，不需要
 做具体的动作。这些函数包括
@@ -612,7 +612,7 @@ sc_port_base还实现了一系列在simulation不同的stage调度的函数(继�
 sc_port为具体的sc_interface，并resolve相关static sensitive的时候，hierarchy
 已经建立起来。
 
-== sc_port_b<IF>
+=== sc_port_b<IF>
 [[api::sc_port_b]]
 
 sc_port_b<IF>继承自sc_port_base，主要增加的实现是增加了interface的模板信息：
@@ -648,7 +648,7 @@ sc_port_b<IF>中的IF的约束，是通过函数get_interface体现出来的：
 
 这里应该是用{cpp}20的concept来描述模板参数IF的能力会更加合适。
 
-=== 成员变量
+==== 成员变量
 
 sc_port_b<IF>的核心成员主要有两个：
 
@@ -666,7 +666,7 @@ sc_port_b<IF>的成员变量也是理解sc_port的重要途径。对于sc_port�
 就是这两个成员变量了：sc_port_base的sc_bind_info指针在simulation过程中为空，而sc_port虽然
 继承自sc_port_b<IF>，但没有增加任何的成员变量。
 
-=== 绑定函数
+==== 绑定函数
 
 相比于sc_port_base，sc_port_b<IF>还提供了一些辅助函数，帮助更好地使用sc_port_b<IF>。例如
 除了函数形式的绑定以外，sc_port_b<IF>还重载了 `operator()`
@@ -693,7 +693,7 @@ sc_port_b<IF>的成员变量也是理解sc_port的重要途径。对于sc_port�
 
 ----
 
-=== 获取sc_interface指针的函数
+==== 获取sc_interface指针的函数
 
 sc_port_b<IF>重载了 `operator->`，可以用指针调用的方式，调用 **第一个** 绑定的interface
 的成员函数。为了在绑定多个interface的时候索引其他interface，sc_port_b<IF>还重载了
@@ -725,7 +725,7 @@ sc_port_b<IF>重载了 `operator->`，可以用指针调用的方式，调用 **
         { return m_interface; }
 ----
 
-=== add_interface
+==== add_interface
 
 在sc_port_base的<<api::sc_port_base::bind, bind interface>>以及<<api::sc_port_base::complete_binding,  complete_binding>>
 函数中，都会调用add_interface，将interface指针加进来。对于sc_port_base而言，
@@ -770,7 +770,7 @@ sc_port_b<IF>::add_interface( sc_interface* interface_ )
 为interface vector中的第一个元素的值。
 
 
-=== make_sensitive
+==== make_sensitive
 
 sc_port_b<IF>也实现了make_sensitive函数：
 
@@ -830,7 +830,7 @@ m_bind_info指针为空，只会发生在elaboration done之后。这种时候�
 是为数不多的应用场景，可能与动态的thread机制有关。这种机制一般是不可综合的，我们在这里
 也不用深究这部分的实现。
 
-== sc_port
+=== sc_port
 [[data::sc_port]]
 
 sc_port继承自sc_port_b<IF>，同时增加了更多的模板参数和功能：
@@ -848,9 +848,9 @@ class sc_port
 
 sc_port<IF, N, P>相比于sc_port_b<IF>，并没有新增加其他的功能。
 
-== 几种典型的sc_port派生类
+=== 几种典型的sc_port派生类
 
-=== sc_fifo_in和sc_fifo_out
+==== sc_fifo_in和sc_fifo_out
 
 sc_fifo_in和sc_fifo_out是sc_port对于fifo interface的特化形式。从本质上来讲，sc_fifo_in
 和sc_fifo_out仍然是sc_port，需要绑定到具体的sc_fifo上才能够起作用。
@@ -884,12 +884,12 @@ sc_fifo_out_if<T>）。对于module而言，sc_fifo_in这个port相当于从fifo
 因此对于module来说是in。同理，sc_fifo_out这个port对于module而言相当于out。
 
 
-=== sc_in和sc_out
+==== sc_in和sc_out
 
 sc_in和sc_out是sc_port对于signal interface的特化形式，从本质上来讲，sc_in和sc_out仍然是
 sc_port，需要绑定到具体的signal上才能够起作用。
 
-==== sc_in
+===== sc_in
 
 sc_in是signal类型的输入端口模型，需要绑定到signal类型上，不能绑定到fifo类型上。
 
@@ -936,7 +936,7 @@ public:
 3. `read` 返回当前值
 4. `get_data_ref` 这个主要为了tracing用，普通用户用不到
 
-==== sc_inout
+===== sc_inout
 
 介绍sc_out之前，我们先介绍一下sc_inout类型。sc_inout并不像verilog HDL那种inout类型一样，
 是双向端口类型，而更多的是一种能够读回值的输出端口。由于SystemC使用sc_interface的原因，
@@ -1007,7 +1007,7 @@ class sc_signal_inout_if
 正如我们之前分析的一样， `sc_signal_out_if` 其实就是 `sc_signal_inout_if` ，两者
 并没有任何区别。
 
-==== sc_out
+===== sc_out
 
 sc_out类型其实就是一个sc_inout类型。SystemC在代码里给出了定义一个新的模板类，而不是
 简单做一个typedef的原因：为了方便debug。
@@ -1026,7 +1026,7 @@ class sc_out
 
 sc_out 相关函数的实现基本都是转交给了基类，也就是 `sc_inout` 来做的。
 
-== sc_export
+=== sc_export
 [[api::sc_export]]
 
 对于只有sc_port和sc_interface（例如sc_signal或者sc_fifo）的体系而言，模块之间互联是这样的。模块MA
@@ -1082,7 +1082,7 @@ sc_interface则专注于impl部分。
 的sc_interface上才可以。
 ====
 
-=== sc_export_base
+==== sc_export_base
 [[api::sc_export_base]]
 
 sc_export_base是所有sc_export<IF>的基类，而sc_export_base则直接继承自
@@ -1126,7 +1126,7 @@ sc_export_base的两种类型的构造函数，都是把自己注册到systemc k
 sc_export_base的派生类就不必与 `export registry` 打交道，因为基类sc_export_base
 已经完成了相应的工作了。
 
-=== sc_export
+==== sc_export
 
 sc_export是一个模板类，直接继承自sc_export_base:
 
@@ -1195,7 +1195,7 @@ MB.EB已经完成了到 sc_interface的绑定工作。对于sc_port而言这是�
 的sc_interface在模块**之外**，无法保证初始化的顺序。而对于sc_export而言，其需要绑定的sc_interface
 位于自己内部，或者更下层次的模块，绑定的顺序是可控的。
 
-=== export vs port
+==== export vs port
 
 相比于sc_port，sc_export的缺点有：
 
@@ -1218,7 +1218,7 @@ EPC绑定内部模块MD的sc_export MD，而MD则绑定MD自己内部的channel�
 如果替换为sc_port和module外的channel，那么这个调用很可能需要三四次channel的转发，极大地
 降低了仿真的效率。
 
-=== sc_event_queue_port
+==== sc_event_queue_port
 [[data::sc_event_queue_port]]
 
 sc_event_queue_port就是保存一个sc_event_queue_if指针的port:
@@ -1415,7 +1415,7 @@ const sc_event& sc_event_queue::default_event() const
 所以如果将一个 `sc_event_queue` 作为静态敏感源，实质上等同于将这个 `m_e` 事件
 设置为敏感事件源。
 
-=== sc_clock相关的port
+==== sc_clock相关的port
 
 clock相关的port分别为 `sc_in_clk`, `sc_inout_clk` 和 `sc_out_clk` 。SystemC在
 代码注释里明确这部分只是为了提供兼容性：
@@ -1429,7 +1429,7 @@ typedef sc_out<bool>   sc_out_clk;
 ----
 
 
-== event_finder
+=== event_finder
 [[api::sc_event_finder]]
 
 sc_event_finder数据结构的主要作用，就是为sc_port作为static sensitive源的时候，解决
@@ -1544,7 +1544,7 @@ default_event接口类不满足需求的情况下（例如，对于sc_clock，�
 
 ====
 
-== 小结
+=== 小结
 
 sc_port和sc_export是作为module之间互联而提出的数据结构，这两个数据结构大多数
 情况下在elaboration done之前阶段起作用，elaboration done之后，就转变成了

@@ -5,7 +5,7 @@
 SystemC中的其他组件和用例分析
 [[chap::misc]]
 
-== sc_interface
+=== sc_interface
 [[data::sc_interface]]
 
 sc_interface是一个抽象基类，提供了带interface能力类的接口信息。
@@ -112,7 +112,7 @@ sc_port/sc_export中，也只保存指向这些sc_interface或者sc_interface子
 实现这些具体的接口函数。这样一来，从概念上，sc_port/sc_export就可以调用pirmitive channel的
 接口函数了。
 
-== sc_clock是如何工作的
+=== sc_clock是如何工作的
 
 sc_clock是一个sc_signal<bool, SC_ONE_WRITER>的继承类，sc_signal<bool, SC_ONE_WRITER> 
 实现了sc_signal_in_if<bool>接口定义的功能，因此sc_clock可以被sc_in<bool> 绑定：
@@ -130,7 +130,7 @@ sc_clock的工作主要分为3个stage：
 2. 在hierarchy建立之后，仿真开始之前，如何resolve之前设置的静态敏感源，使之获取真正的event事件
 3. 在仿真过程中，sc_clock是如何调度相关的process handle的
 
-=== module构造时
+==== module构造时
 
 在sc_module的构造函数中，SC_CTHREAD/SC_THREAD可以将sc_in<bool>变量clk的pos()/neg()设置为静态
 敏感事件。然而，此时sc_in<bool> clk并没有绑定具体的sc_clock。所以，这里SystemC用一个
@@ -232,7 +232,7 @@ module构造的结果是，在 `sc_in<bool> clk` 中，保存了相应的event f
 只能暂时先保存一个sc_event_finder，等待绑定完成后，使用所绑定的interface提供的指针，结合
 保存的成员函数指针，调用得到真正的sc_event事件对象。
 
-=== elaboration done时
+==== elaboration done时
 
 在所有的hierarchy都初始化，并且port绑定到interface之后，sc_in<bool> clk即绑定到sc_clock
 上。在elaboration_done阶段，sc_port_registry调用所有port的complete_binding函数，
@@ -378,7 +378,7 @@ elaboration done阶段的结果则是，对于 `sc_clock clock`，其内部的 `
 保存了所有静态设置时对其sensitive的SC_THREAD/SC_CTHREAD的process handle，同时这些
 process handle内部也保存了 `*m_posedge_event_p` 的指针。
 
-=== 仿真过程中
+==== 仿真过程中
 
 在运行中，由于sc_clock的<<usage::sc_spawn::sc_clock, 自激励>>，在UPDATE PHASE，根据
 primitive channel的framework, `*m_posedge_event_p` 的成员函数 `update` 函数被调用：
@@ -445,9 +445,9 @@ simc delta event列表中的事件都会调度其trigger函数，从而调度pro
 
 至此，sc_clock的pos()完成了将所有对这个事件敏感的process handle的调度工作。
 
-== CALLBACK
+=== CALLBACK
 
-=== sc_module的callback
+==== sc_module的callback
 
 sc_module为派生类提供了四个虚函数，派生类实现这些函数后，可以在合适的
 时机做需要的事情：
@@ -457,4 +457,4 @@ sc_module为派生类提供了四个虚函数，派生类实现这些函数后�
 3. `void start_of_simulation(void)`
 4. `void end_of_simulation(void)`
 
-=== PHASE CALLBACK机制
+==== PHASE CALLBACK机制

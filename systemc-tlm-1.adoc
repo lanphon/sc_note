@@ -5,7 +5,7 @@
 SystemC中的TLM 1.0 组件
 [[chap::tlm_1_0]]
 
-== 引言
+=== 引言
 
 SystemC的TLM分为1.0版和2.0版本，虽然1.0版本的TLM已经不推荐使用，但在一些legacy的Code
 （例如我们和UVM做仿真的TLM接口定义中）仍然存在。所以本部分我们主要介绍TLM 1.0版本的内容。
@@ -20,7 +20,7 @@ TLM 1.0时代的建模，主要基于REQUEST和RESPONSE的思想。即，发起�
 * adaptor部分
 * analysis部分
 
-== TLM 1.0 Interfaces
+=== TLM 1.0 Interfaces
 
 tlm 1.0的Interfaces部分主要有如下几类：
 
@@ -44,7 +44,7 @@ image::tlm_1_interfaces.png[]
 注意tlm_transport_if游离在主要的继承体系之外。tlm_transport_if的作用主要是提供一种简单的req-rsp机制，对于简单的建模来说这就足够了。如果需要较为
 复杂的建模方式，就需要区分读和写（put/get/peek）了。
 
-=== core interfaces 
+==== core interfaces 
 
 core interfaces的内容之前已经罗列了。首先是tlm_transport_if，定义如下：
 [[tlm::1::tlm_transport_if]]
@@ -252,7 +252,7 @@ class tlm_get_peek_if :
   {};
 ----
 
-=== fifo interfaces
+==== fifo interfaces
 
 tlm中的fifo interfaces，主要为TLM FIFO提供interface能力的描述。
 
@@ -333,7 +333,7 @@ public:
 };
 ----
 
-=== master-slave interfaces
+==== master-slave interfaces
 
 master-slave的interface定义结合了之前的interface部分。master-slave部分需要两个模板参数，分别
 标识请求数据点类型和应答数据的类型。
@@ -409,11 +409,11 @@ class tlm_slave_if :
   public virtual tlm_nonblocking_slave_if< REQ , RSP > {};
 ----
 
-== TLM 1.0 Channels
+=== TLM 1.0 Channels
 
 TLM 1.0定义了几种channel，包括tlm_fifo，request-response channel等。
 
-=== tlm fifo
+==== tlm fifo
 [[tlm::1::tlm_fifo]]
 
 tlm_fifo是TLM 1.0中最为重要的channel之一。tlm_fifo重新实现了fifo功能，而不是直接继承自sc_fifo：
@@ -506,7 +506,7 @@ tlm_fifo<T>::update()
 
 在实现这些接口函数的时候，tlm_fifo可以调用request_update，实现自己作为一个primitive channel的功能。
 
-==== tlm_fifo_debug_if implementation
+===== tlm_fifo_debug_if implementation
 
 首先看下tlm_fifo是如何实现<<tlm::1::tlm_fifo_debug_if, tlm_fifo_debug_if>>的接口函数的。
 
@@ -580,7 +580,7 @@ tlm_fifo<T>::nb_poke( const T &t , int n ) {
 索引值超出索引范围，或者小于-1，那么就无法peek。如果设定为-1，那么peek的就是可用的数据中最后一个。poke操作
 泽合peak相反，相当于为一个位置设定值。如果位置等于size，则相当于append。（这一点待确认）
 
-==== tlm_blocking_get_if implementation
+===== tlm_blocking_get_if implementation
 
 <<tlm::1::tlm_blocking_get_if, tlm_blocking_get_if>>所需要实现的接口函数只有一个阻塞的get方法：
 
@@ -608,7 +608,7 @@ tlm_fifo<T>::get( tlm_tag<T> * )
 
 这个get的实现还是比较简单的，基本和sc_fifo的read操作一样。
 
-==== tlm_nonblocking_get_if implementation
+===== tlm_nonblocking_get_if implementation
 
 <<tlm::1::tlm_nonblocking_get_if, tlm_nonblocking_get_if>>所需要实现的接口函数需要nb_get, nb_can_get和ok_to_get三个接口函数。
 
@@ -660,7 +660,7 @@ tlm_fifo<T>::nb_can_get( tlm_tag<T> * ) const {
 
 基本上这两个函数的实现和sc_fifo的nb_read和num_available差不多。
 
-==== tlm_blocking_put_if implementation
+===== tlm_blocking_put_if implementation
 
 <<tlm::1::tlm_blocking_put_if, tlm_blocking_put_if>>的接口函数只有一个put：
 
@@ -691,7 +691,7 @@ tlm_fifo<T>::put( const T& val_ )
 
 put的实现基本和sc_fifo的write方法一样。
 
-==== tlm_nonblocking_put_if implementation
+===== tlm_nonblocking_put_if implementation
 
 <<tlm::1::tlm_nonblocking_put_if, tlm_nonblocking_put_if>>的接口函数有nb_put, nb_can_put和ok_to_put。
 其中ok_to_put的实现最为简单，只需要将读事件返回即可：
@@ -744,7 +744,7 @@ tlm_fifo<T>::nb_can_put( tlm_tag<T> * ) const {
 
 基本上这两个函数的实现和sc_fifo的nb_write和num_free差不多。
 
-==== tlm_blocking_peek_if implementation
+===== tlm_blocking_peek_if implementation
 
 <<tlm::1::tlm_blocking_peek_if, tlm_blocking_peek_if>>的接口函数只有peek一个：
 
@@ -773,7 +773,7 @@ tlm_fifo<T>::peek( tlm_tag<T> * ) const {
 只读取数据，并不移动读指针。而read则调用read_data之后，移动读指针。所以这里peek调用read_data之后，数据仍然存在fifo内。
 这也是为何peek是一个const函数的原因了。
 
-==== tlm_nonblocking_peek_if implementation
+===== tlm_nonblocking_peek_if implementation
 
 <<tlm::1::tlm_nonblocking_peek_if, tlm_nonblocking_peek_if>>的接口函数有nb_peek, nb_can_peek和ok_to_peek三个。
 
@@ -821,7 +821,7 @@ tlm_fifo<T>::nb_can_peek( tlm_tag<T> * ) const
 
 这两个函数的实现相对还是比较简单的。注意nb_can_peek的入参实际上是没有使用到的。
 
-==== tlm fifo resize
+===== tlm fifo resize
 
 tlm_fifo并没有直接或者间接继承自<<tlm::1::tlm_fifo_config_size_if, tlm_fifo_config_size_if>>，但却实现了同样的接口函数。
 这是否是TLM 1.0中遗漏的一个bug？tlm_fifo应该直接继承自tlm_fifo_config_size_if的。
@@ -893,7 +893,7 @@ tlm_fifo<T>::nb_bound( unsigned int new_size ) {
 }
 ----
 
-=== tlm_put_get_imp
+==== tlm_put_get_imp
 [[tlm::1::tlm_put_get_imp]]
 
 tlm_put_get_imp是实现tlm req-rsp channel的基础。tlm_put_get_imp直接继承自
@@ -927,7 +927,7 @@ private:
 tlm_put_get_imp实现相应的接口函数的功能，实际上都是直接调用了成员变量 `put_fifo`
 和 `get_fifo` 的相应功能。
 
-=== tlm_master_imp and tlm_slave_imp
+==== tlm_master_imp and tlm_slave_imp
 [[tlm::1::tlm_master_imp]]
 
 在<<tlm::1::tlm_put_get_imp, tlm_put_get_imp>>的基础上，TLM 1.0实现了tlm_master_imp和
@@ -970,7 +970,7 @@ public:
 
 tlm_master_imp继承自tlm_master_if，对应的接口函数实现在tlm_put_get_imp中实际已经实现了，tlm_slave_imp同理。
 
-=== tlm_req_rsp_channel
+==== tlm_req_rsp_channel
 [[tlm::1::tlm_req_rsp_channel]]
 
 tlm_req_rsp_channel虽然名字里带一个channel，但实际上并不是一个primitive channel，而是直接继承自sc_module。其实现
@@ -1117,7 +1117,7 @@ get_request_export和put_response_export两个组合，与slave相比，有着�
 tlm_req_rsp_channel是一个拥有双FIFO的数据结构，并且暴露出来了合适的接口，方便其他的port/export进行绑定，来调用内部
 两个FIFO对应的能力。双FIFO，一个用来传输request，另一个则用来传输response。
 
-=== tlm_transport_channel
+==== tlm_transport_channel
 [[tlm::1::tlm_transport_channel]]
 
 tlm_transport_channel，是一个sc_module，用来将一个<<tlm::1::tlm_req_rsp_channel, tlm_req_rsp_channel>>
@@ -1228,7 +1228,7 @@ tlm_transport_channel并没有对称性的相反的实现。从实现了get/put�
 <<tlm::1::tlm_slave_to_transport, tlm_slave_to_transport>>即可。从这方面来说，tlm_transport_channel
 与随后要介绍的<<tlm::1::tlm_slave_to_transport>>才是一对。
 
-== TLM 1.0 Adapter
+=== TLM 1.0 Adapter
 
 TLM 1.0中设计了两个adapter，分别是tlm_transport_to_master，以及tlm_slave_to_transport。所谓的adapter，指的是需要在
 不同的协议之间做桥接。对于TLM 1.0，interface协议的类型分为两种，一种是一个API就完成所有事情的类型，只有一个
@@ -1236,7 +1236,7 @@ TLM 1.0中设计了两个adapter，分别是tlm_transport_to_master，以及tlm_
 之前介绍的除了<<tlm::1::tlm_transport_if, tlm_transport_if>>之外的其他的interface类型。而adapter则需要在这两种
 不同设计思想的类型之间做转换。
 
-=== tlm_transport_to_master
+==== tlm_transport_to_master
 [[tlm::1::tlm_transport_to_master]]
 
 tlm_transport_to_master是一个sc_module，同时继承自
@@ -1314,7 +1314,7 @@ tlm_transport_if来使用。同时，内部的公共成员变量master_port可�
 tlm_transport_if的transport是一个阻塞的函数，而tlm_master_if的接口函数虽然也是阻塞函数，但分成了两个实现。这种阻塞函数
 到阻塞函数的实现相对还是比较简单的。
 
-=== tlm_slave_to_transport
+==== tlm_slave_to_transport
 [[tlm::1::tlm_slave_to_transport]]
 
 与<<tlm::1::tlm_transport_to_master, tlm_transport_to_master>>不同，
@@ -1380,7 +1380,7 @@ tlm_slave_to_transport的构造函数并没有将这个线程函数run列为自�
   {}
 ----
 
-== TLM 1.0 Ports
+=== TLM 1.0 Ports
 
 TLM 1.0的Ports部分主要为三种interface, 
 <<tlm::1::tlm_nonblocking_get_if, tlm_nonblocking_get_if>>, 
@@ -1388,7 +1388,7 @@ TLM 1.0的Ports部分主要为三种interface,
 <<tlm::1::tlm_nonblocking_peek_if, tlm_nonblocking_peek_if>>所对应的port
 做了特殊处理，以应对这些port作为sensitive设置时的应用场景。
 
-=== tlm_event_finder_t
+==== tlm_event_finder_t
 [[tlm::1::tlm_event_finder_t]]
 
 tlm_event_finder_t继承自<<data::sc_event_finder, sc_core::sc_event_finder>>，其主要目的是为了支持TLM 1.0
@@ -1447,7 +1447,7 @@ get_interface返回值，注意find_event调用的时候，已经是所有的por
 的指针之后，将其cast，然后调用注册的成员函数指针。注意，这里成员函数指针的调用的时候入参为0. 从这方面来讲，TLM 1.0
 中这个 `tlm_tag<T>*` 并没有起到什么实际的作用。
 
-=== tlm_nonblocking_get_port
+==== tlm_nonblocking_get_port
 [[tlm::1::tlm_nonblocking_get_port]]
 
 tlm_nonblocking_get_port是用来绑定实现了<<tlm::1::tlm_nonblocking_get_if, tlm_nonblocking_get_if>>
@@ -1504,7 +1504,7 @@ sensitive << m_port.ok_to_get();
 `m_port` 很可能还没有绑定任何interface，所以此时也无法返回event，所以这里需要一个
 <<tlm::1::tlm_event_finder_t, tlm_event_finder_t>>作为占位符，推迟获取event的调用，直到仿真即将开始的时刻。
 
-=== tlm_nonblocking_put_port
+==== tlm_nonblocking_put_port
 [[tlm::1::tlm_nonblocking_put_port]]
 
 与<<tlm::1::tlm_nonblocking_get_port, tlm_nonblocking_get_port>>一样，
@@ -1536,7 +1536,7 @@ public:
 
 最为重要的是实现了一个叫ok_to_put的成员函数，用来作为返回对应event的API，供使用者用来设置sensitive。
 
-=== tlm_nonblocking_peek_port
+==== tlm_nonblocking_peek_port
 [[tlm::1::tlm_nonblocking_peek_port]]
 
 与<<tlm::1::tlm_nonblocking_get_port, tlm_nonblocking_get_port>>一样，
@@ -1569,13 +1569,13 @@ public:
 这里同样实现一个ok_to_peek的成员函数，来返回一个event_finder，当tlm_nonblocking_peek_port
 作为sensitive设置的时候，就可以用这个event_finder延迟event的决议。
 
-== TLM 1.0 Analysis
+=== TLM 1.0 Analysis
 
 TLM 1.0的Analysis部分是一系列小的interface以及fifo的组合，主要用来做辅助性的功能。
 
 相比于TLM 1.0其他的interface, analysis支持多绑定。
 
-=== tlm_write_if and tlm_delayed_write_if
+==== tlm_write_if and tlm_delayed_write_if
 [[tlm::1::tlm_write_if]]
 
 tlm_write_if直接继承自<<data::sc_interface, sc_core::sc_interface>>，定义了一个接口函数
@@ -1609,7 +1609,7 @@ public:
 注意，这个接口函数和 <<tlm::1::tlm_write_if, tlm_write_if>>的接口函数同名，只不过参数不同，多了一个
 设定的延迟时间而已。
 
-=== tlm_analysis_if and tlm_delayed_analysis_if
+==== tlm_analysis_if and tlm_delayed_analysis_if
 
 [[tlm::1::tlm_analysis_if]]
 tlm_analysis_if是<<tlm::1::tlm_write_if, tlm_write_if>>的别名（基本上，因为直接继承，没有改写任何方法，也没增加
@@ -1631,7 +1631,7 @@ class tlm_delayed_analysis_if : public virtual tlm_delayed_write_if<T>
 };
 ----
 
-=== tlm_analysis_triple
+==== tlm_analysis_triple
 [[tlm::1::tlm_analysis_triple]]
 
 tlm_analysis_triple是一种特殊的数据结构，其中名称里的triple表示三，意思是除了本身需要传递的数据结构
@@ -1683,7 +1683,7 @@ tlm_analysis_triple可以默认构造（前提是模板参数T本身支持默认
 这样当需要类型 `T` 的地方，可以使用一个 `tlm_analysis_triple<T>` 来代替，因为编译期会自动调用这里
 定义的operator，完成相应的转换。
 
-=== tlm_analysis_fifo
+==== tlm_analysis_fifo
 [[tlm::1::tlm_analysis_fifo]]
 
 tlm_analysis_fifo是TLM 1.0 Analysis中最为重要的两个数据结构之一，另一个是相应的port。
@@ -1732,7 +1732,7 @@ NOTE: 从tlm_fifo的实现来看，负值和正值似乎没有区别，都是使
 ----
 <1> 因为tlm_fifo的模板类型是 `T`，所以这里先调用 `tlm_analysis_triple<T>`的operator，转出来一个类型 `T`，再放到fifo中
 
-=== tlm_analysis_port
+==== tlm_analysis_port
 [[tlm::1::analysis_port]]
 
 tlm_analysis_port和<<tlm::1::tlm_analysis_fifo, tlm_analysis_fifo>>构成了TLM 1.0 Analysis最为重要的两个部分：
@@ -1820,7 +1820,7 @@ NOTE: 为何tlm_analysis_port名字里带有port，实际上却实现为 tlm_ana
 绑定到相关interface上，然后输出做analysis。tlm_analysis_port使用简单的代码，就可以实现绑定任意数目（包括0个）interface
 的功能，并在API write处广播所有的write请求。这对于需要实现analysis功能是非常有用的。
 
-== TLM 1.0的思考
+=== TLM 1.0的思考
 
 TLM 1.0相比于SystemC，只是一些简单的封装而已。从概念上而言，TLM 1.0所实现的TLM是非常简陋的。这也是为何TLM选择直接推出全新的TLM 2.0
 来实现TLM的概念，而不是在TLM 1.0基础上继续演进的原因了。
@@ -1830,6 +1830,6 @@ TLM 1.0相比于SystemC，只是一些简单的封装而已。从概念上而言
 
 TLM 1.0虽然设计的比较简单粗略，但仍然具有一些实用意义。比好简单的验证环境下，可以使用TLM 1.0和UVM做桥接来进行混合仿真。
 
-== Reference
+=== Reference
 
 https://eda-playground.readthedocs.io/en/latest/_static/uvm-1.2/files/overviews/tlm1-txt.html
