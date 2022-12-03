@@ -1109,6 +1109,40 @@ async_update_list的成员函数 `pending` 用来返回是否有需要处理的
 ==== async_update_list::attach_suspending
 [[data::async_update_list::attach_suspending]]
 
+sc_prim_channel的async_attach_suspending最终调用的就是async_update_list的attach_suspending
+请求。sc_prim_channel的async_attach_suspending首先调用sc_prim_channel_registry的async_attach_suspending:
+
+.src/sysc/communication/sc_prim_channel.h
+[source,cpp]
+----
+inline
+bool
+sc_prim_channel::async_attach_suspending()
+{
+    return m_registry->async_attach_suspending(*this);
+}
+----
+
+而sc_prim_channel_registry的async_attach_suspending调用的则是
+async_update_list的attach_suspending:
+
+.src/sysc/communication/sc_prim_channel.cpp
+[source,cpp]
+----
+bool
+sc_prim_channel_registry::async_attach_suspending(sc_prim_channel& p)
+{
+#ifndef SC_DISABLE_ASYNC_UPDATES
+    return m_async_update_list_p->attach_suspending( p );
+#else
+    SC_REPORT_ERROR( SC_ID_NO_ASYNC_UPDATE_, p.name() );
+    return false;
+#endif
+}
+----
+
+---
+
 从直观来看，attach_suspending的目的在于，将一个primitive channel指针放入到
 m_suspend_channels列表中：
 
@@ -1137,6 +1171,10 @@ m_suspend_channels列表中：
 
 ==== async_update_list::detach_suspending
 [[data::async_update_list::detach_suspending]]
+
+sc_prim_channel的async_detach_suspending最终调用的就是async_update_list的detach_suspending
+请求。具体的调用方式和<<data::async_update_list::attach_suspending, attach_suspending>>
+的方法一样，这里就不再赘述了。
 
 detach_suspending的目的和attach_suspending刚好相反，是需要从m_suspend_channels
 挪去一个primitive channel：
@@ -1347,81 +1385,99 @@ UPDATE PHASE，还来得及把与之相关的delta event加入 `simc` 的 delta 
 [source,cpp]
 ----
 #include <systemc>
-#include <pthread.h>
-#include <unistd.h>
+#include <iostream>
+#include <thread>
+#include <chrono>
 
 using namespace sc_core;
 
-class ThreadSafeEventIf : public sc_interface {
-    virtual void notify(sc_time delay = SC_ZERO_TIME) = 0;
-    virtual const sc_event &default_event(void) const = 0;
-protected:
-    virtual void update(void) = 0;
+class thread_safe_if : public sc_interface
+{
+    public:
+    virtual void notify(sc_time t = SC_ZERO_TIME) = 0;
+    virtual const sc_event& default_event(void) const = 0;
 };
 
-class ThreadSafeEvent : public sc_prim_channel, public ThreadSafeEventIf {
-public:
-    ThreadSafeEvent(const char *name = ""): event(name) {}
+class thread_safe_event final 
+: public sc_prim_channel, public thread_safe_if
+{
+    public:
+    thread_safe_event(sc_module_name name = "")
+    : sc_prim_channel(name)
+    {
+        // async_attach_suspending();
+    }
 
-    void notify(sc_time delay = SC_ZERO_TIME) {
-        this->delay = delay;
+    void notify(sc_time t = SC_ZERO_TIME) override
+    {
+        m_delay = t;
         async_request_update(); <1>
     }
 
-    const sc_event &default_event(void) const { <2>
-        return event;
-    }
-protected:
-    virtual void update(void) {
-        event.notify(delay); <3>
-    }
-    sc_event event; <4>
-    sc_time delay;
-};
+    const sc_event& default_event(void) const override { return m_event; } <2>
 
-SC_MODULE(Foo)
-{
-public:
-    SC_CTOR(Foo)
+    void update() override
     {
-        SC_THREAD(main);
-
-        SC_METHOD(eventTriggered);
-        sensitive << event; <5>
-        dont_initialize();
+        // async_detach_suspending();
+        m_event.notify(m_delay); <3>
     }
-private:
-    void main() {
-        usleep(5 * 1000 * 1000); // Just for the example, event is added to pending events during this sleep
-        wait(SC_ZERO_TIME); // Schedule (event is evaluated here)
-        usleep(1 * 1000 * 1000); // Just for the example
-        std::cout << "Done" << std::endl;
-    }
-
-    void eventTriggered() {
-        std::cout << "Got event" << std::endl;
-    }
-
-public:
-    ThreadSafeEvent event;
+    private:
+    sc_event m_event; <4>
+    sc_time m_delay;
 };
 
-void *externalHostThread(void *arg) {
-    usleep(2 * 1000 * 1000); // Just for the example
-    Foo* foo = (Foo*)(arg);
-    foo->event.notify(); <6>
-    std::cout << "Event notified from an external host thread" << std::endl;
+class m_foo
+: public sc_module
+{
+    public:
+    SC_HAS_PROCESS(m_foo);
+    m_foo(sc_module_name name = "")
+    : sc_module(name)
+    , m_event("async_event")
+    {
+        SC_METHOD(get_event_method);
+        sensitive << m_event; <5>
+        dont_initialize();
+
+        SC_THREAD(main);
+    }
+
+    void main()
+    {
+        while (true) 
+        {
+            std::this_thread::sleep_for(std::chrono::seconds(3));
+            wait(SC_ZERO_TIME);
+            std::cout << "main thread sleep for 3 seconds" << std::endl;
+        }
+    }
+
+    void get_event_method()
+    {
+        std::cout << "get async event" << std::endl;
+    }
+    public:
+    thread_safe_event m_event;
+};
+
+void async_thread(m_foo* foo)
+{
+    std::this_thread::sleep_for(std::chrono::seconds(7));
+    foo->m_event.notify(SC_ZERO_TIME); <6>
+    std::cout << "trigger event from async thread" << std::endl;
 }
 
-int sc_main(int argc, char *argv[])
+int sc_main(int argc, char **argv)
 {
-    Foo foo("foo");
+    m_foo foo("test_module");
 
-    pthread_t thread;
-    pthread_create(&thread, NULL, externalHostThread, &foo);
-
+    std::thread t0(async_thread, &foo);
     sc_start();
 
+    if (t0.joinable())
+    {
+        t0.join();
+    }
     return 0;
 }
 ----
@@ -1458,6 +1514,20 @@ primitive channel registry调度async_update_list的accept_updates，执行push 
 ====
 
 当然，除了这种使用方式以外，primitive channel还提供了其他的异步接口，以供其他方式的使用。
+
+---
+
+上边这个例子使用了一个 `main` 的sc_thread，用来防止sc内核提前退出。如果去掉 `main` 的sc_thread，可以看到
+仿真器很快从 sc_start 返回，接下来等待一段时间后，外部打印一个" trigger event from async thread" 后
+就退出了。
+
+为了避免这种场景的出现，可以在构造函数的地方调用<<data::async_update_list::attach_suspending, async_attach_suspending>>
+函数，并且在update的时候调用 <<data::async_update_list::detach_suspending, async_detach_suspending>>，这种机制
+就可以保证外部的thread没触发之前，SC内核不会退出。注意这里只是一个简单的示例，只能应对一次性的使用场景。
+实际上async_detach_suspending应当在确保没有更多请求数据的时候被调用。
+
+增加了async_attach_suspending和async_detach_suspending之后，可以看到SC内核收到异步通知，执行了 `sc_method_process`
+之后，才退出的。
 
 === 异步应用场景
 
