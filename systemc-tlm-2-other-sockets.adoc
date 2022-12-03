@@ -2118,3 +2118,102 @@ multi initiator socket可以绑定到如下socket上:
 * 一个或者多个simple_initiator_socket
 * 一个或者多个multi_passthrough_initiator_socket
 * 以上的任意组合
+
+== Utils Socket Summary
+
+这部分对Utils，以及基类的socket类型做一个简单的汇总：
+
+[cols="5,2,2,2,2"]
+|===
+| Class | Register Callback | MultiPorts | b/nb conversion | Tagged
+
+| tlm_initiator_socket
+| No
+| Yes
+| --
+| No
+
+| tlm_target_socket
+| No
+| Yes
+| --
+| No
+
+| simple_initiator_socket
+| Yes
+| No
+| --
+| No
+
+| simple_initiator_socket_tagged
+| Yes
+| No
+| --
+| Yes
+
+| simple_target_socket
+| Yes
+| No
+| Yes
+| No
+
+| simple_target_socket_tagged
+| Yes
+| No
+| Yes
+| Yes
+
+| passthrough_target_socket
+| Yes
+| No
+| No
+| No
+
+| passthrough_target_socket_tagged
+| Yes
+| No
+| No
+| yes
+
+| multi_passthrough_initiator_socket
+| Yes
+| Yes
+| --
+| Yes
+
+| multi_passthrough_target_socket
+| Yes
+| Yes
+| no
+| Yes
+
+|===
+
+从图中可以看出，基类的tlm_initiator_socket和tlm_target_socket都是non-register-callback的。实际上，
+tlm_initiator_socket和tlm_target_socket两个仍然是基础的interface定义，需要绑定到实现了
+tlm_fw_transport_if和tlm_bw_transport_if的类上才能使用，否则会编译出错。准确来说，
+tlm_initiator_socket的成员变量 `sc_export<BW_IF>` 需要绑定到实现了tlm_bw_transport_if
+的实现上，而tlm_target_socket作为 `sc_export<FW_IF>` 则需要绑定到实现了tlm_fw_transport_if
+的实现上。这就给这两个基础的socket类型带来了很大的麻烦，因此，才有了后续基于callback函数的其他socket，其
+主要思想是，让这些socket内部分别实现对应的FW_IF和BW_IF的类对象，这些类对象真正实现的方式是调用一个回调
+函数的方式，来完成相应的工作。这样一来，使用这些基于callback函数的其他socket的类，只需要实现相应的回调
+函数，就可以将socket功能实现，而不必额外实现继承自FW_IF/BW_IF的内部类了。
+
+对于这些socket，因为只有target socket才需要注册FW_IF兼容的回调函数，而只有FW_IF才有blocking/nonblocking
+风格的API区分，因此，也只有对于target socket，才有意义区分其是否实现了blocking和nonblocking之间
+的相互转换。所以，对于initiator socket而言， `b/nb conversion` 一栏是无意义的。这其中，只有
+simple_target_socket以及其tagged版本实现了 blocking/nonblocking 之间的转换。
+
+基础的tlm_initiator_socket和tlm_target_socket，本身作为 `sc_port`，天生就是支持多绑定的。然而，由于
+回调版本的socket实现的限制，只有multi initiator socket和multi target socket才能过使用回调的方式
+做多绑定，其他类型的callback socket都只能单绑定（但可以被支持多绑定的socket同时绑定，例如，一个
+multi initiator socket可以绑定两个passthrough target socket）。
+
+Tagged版本的区分主要在于是否支持携带一个额外的整型数据作为tag，来区分不同的tag。对于Multi initiator/target
+socket，这是天然支持的，否则无法区分相应的request/response来自哪个绑定了的部分。对于其他基于callback的
+socket，只有显式实现为tagged类型的socket才支持带tag，并且这些带tagged的socket，tagged类型是注册回调
+函数的时候就已经确定的，无法再修改（不同的API，可以有不同的tag，例如blocking请求和nonblocking fw/bw请求，
+可以使用三个不同的tag值）。
+
+此外，可以注意到表中并没有passthrough_initiator_socket，这是因为simple_initiator_socket本身
+也是由passthrough方式实现的，所以passthrough_initiator_socket就是simple_initiator_socket。

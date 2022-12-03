@@ -1457,18 +1457,18 @@ sc_method_process::next_trigger( const sc_time& t, const sc_event& e )
             if ( !next_time(t) || (t > until_t) ) { <1>
                 if ( (t > until_t) || m_prim_channel_registry->async_suspend() ) {
                     // requested simulation time completed or no external updates
-                    goto exit_time;
+                    goto exit_time; <2>
                 }
                 // received external updates, continue simulation
                 break;
             }
 
             if ( t > m_curr_time )
-                do_timestep(t); <2>
+                do_timestep(t); <3>
 
 	    // PROCESS TIMED NOTIFICATIONS AT THE CURRENT TIME
 
-	    do { <3>
+	    do { <4>
 		sc_event_timed* et = m_timed_events->extract_top();
 		sc_event* e = et->event();
 		delete et;
@@ -1476,15 +1476,19 @@ sc_method_process::next_trigger( const sc_time& t, const sc_event& e )
 		    e->trigger();
 		}
 	    } while( m_timed_events->size() &&
-		     m_timed_events->top()->notify_time() == t ); <4>
+		     m_timed_events->top()->notify_time() == t ); <5>
 
-	} while( m_runnable->is_empty() ); <5>
+	} while( m_runnable->is_empty() ); <6>
 ----
-<1> next_time 会尝试获取最近一个到达超时时间的timed event的时刻
-<2> 这里根据next_time获取的下一个超时时刻，进行了仿真时间的增加
-<3> 在这个循环里， `simc` 会将顶部所有当前仿真时间超时（到达设定的延时时间）的timed event弹出并销毁，如果这个仿真时间关联的event非空，就调用event的trigger参数，event的trigger可以调度Method或者Thread线程
-<4> 退出的条件是timed event为空，或者Quque顶部的时间不等于当前仿真时刻
-<5> 这里保证runnable <<concept::push_queue, Push Queue>>和<<concept::pop_queue, Pop Queue>>有需要运行的线程，如果没有，那当前clock cycle不需要做任何事情，仿真时间可以继续往前走
+<1> next_time 会尝试获取最近一个到达超时时间的timed event的时刻，如果没有可用的timed event，则返回false
+<2> 如果设定的仿真时间达到，或者没有可用的timed event，则退出仿真，async_suspend部分的功能参考<<concept::primitive::async, primitive channel的异步框架>>部分的解释
+<3> 这里根据next_time获取的下一个超时时刻，进行了仿真时间的增加
+<4> 在这个循环里， `simc` 会将顶部所有当前仿真时间超时（到达设定的延时时间）的timed event弹出并销毁，如果这个仿真时间关联的event非空，就调用event的trigger参数，event的trigger可以调度Method或者Thread线程
+<5> 退出的条件是timed event为空，或者Quque顶部的时间不等于当前仿真时刻
+<6> 这里保证runnable <<concept::push_queue, Push Queue>>和<<concept::pop_queue, Pop Queue>>有需要运行的线程，如果没有，那当前clock cycle不需要做任何事情，仿真时间可以继续往前走
+
+关于<<api::sc_prim_channel_registry::async_suspend, async_suspend>>在这个地方的作用，请参考
+<<concept::primitive::async, primitive channel的异步框架>>部分的解释。
 
 在处理 `m_timed_events` 时使用了一个 `do {} while ();` 循环，这是因为仿真时间已经来到了
 最近一个timed event超时的时间，所以 `m_timed_events` 顶部的timed event一定已经达到了超时

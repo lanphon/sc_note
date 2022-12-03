@@ -928,6 +928,104 @@ class SC_API sc_clock
 sc_clock的update函数没有实现额外的功能，与<<api::sc_signal_bool::update, 特化版本的sc_signal的update函数实现>>
 保持一致。
 
+== sc_host_semaphore
+[[data::sc_host_semaphore]]]
+
+sc_host_semaphore是一个用来在多个thread之间做同步的信号量。sc_host_semaphore的实现
+有几种形式，我们这里只考虑基于C++11的标准实现方法。
+
+.src/sysc/communication/sc_host_semaphore.h
+[source,cpp]
+----
+class SC_API sc_host_semaphore : public sc_semaphore_if
+{
+    struct underlying_type
+    {
+      std::mutex mtx;
+      std::condition_variable cond_var;
+      int value;
+    };
+
+    // blabla
+
+    private:
+    underlying_type m_sem;
+};
+----
+
+sc_host_semaphore继承自sc_semaphore_if，主要实现了包括wait, trywait和post语义的接口。
+
+=== wait
+[[api::sc_host_semaphore::wait]]
+
+wait接口函数由do_wait实现：
+
+.src/sysc/communication/sc_host_semaphore.h
+[source,cpp]
+----
+    void do_wait()
+    {
+      std::unique_lock<std::mutex> lock(m_sem.mtx);
+      while (m_sem.value <= 0) {
+        m_sem.cond_var.wait(lock);
+      }
+      --m_sem.value;
+    }
+----
+
+do_wait是一个阻塞的接口，如果value不大于0，那么就会等待条件变量cond_var。
+等到value不大于0之后，do_wait将value值减去一。
+
+=== trywait
+[[api::sc_host_semaphore::trywait]]
+
+trywait接口函数由do_trywait完成：
+
+.src/sysc/communication/sc_host_semaphore.h
+[source,cpp]
+----
+    // lock (take) the semaphore, return -1 if not available
+    virtual int trywait()
+      { return do_trywait() ? 0 : -1; }
+
+    bool do_trywait()
+    {
+      std::unique_lock<std::mutex> lock(m_sem.mtx);
+      if (m_sem.value <= 0)
+        return false;
+      --m_sem.value;
+      return true;
+    }
+----
+
+do_trywait是一个非阻塞的调用，在获得锁之后，判断value的值。如果value值不大于0，那么直接返回
+false，否则将value值减去一，然后返回true。
+
+trywait如果成功减去value值，则返回0，否则返回-1.
+
+=== post
+[[api::sc_host_semaphore::post]]
+
+post接口函数由do_post完成：
+
+.src/sysc/communication/sc_host_semaphore.h
+[source,cpp]
+----
+    void do_post()
+    {
+      std::unique_lock<std::mutex> lock(m_sem.mtx);
+      ++m_sem.value;
+      m_sem.cond_var.notify_one();
+    }
+----
+
+post操作是一个非阻塞的操作，获得锁之后，将value值加一，然后通过cond_var
+唤醒一个阻塞在此条件变量的 <<api::sc_host_semaphore::wait, wait>>
+调用上。如果有多个wait阻塞，则随机选取一个wait调用唤醒。
+
+=== destory
+
+无需实现destory功能。
 
 == Primitive Channel的异步框架
 [[concept::primitive::async]]
@@ -953,7 +1051,212 @@ SystemC的primitive channel框架不仅仅有同步部分，还存在异步部�
 主要讨论这个API。 `async_attach_suspending` 和 `async_detach_suspending`
 主要和异步阻塞有关，后续我们有空再讨论。
 
+=== async_update_list
+[[data::async_update_list]]
+
+异步相关的处理都是由sc_primitive_channel_registry命名空间下的async_update_list
+负责处理的：
+
+.src/sysc/communication/sc_prim_channel.cpp
+[source,cpp]
+----
+class sc_prim_channel_registry::async_update_list
+{
+    //blabla
+private:
+    sc_host_mutex                   m_mutex;
+    sc_host_semaphore               m_suspend_semaphore;
+    std::vector< sc_prim_channel* > m_push_queue;
+    std::vector< sc_prim_channel* > m_pop_queue;
+    std::vector< sc_prim_channel* > m_suspending_channels;
+    bool                            m_has_suspending_channels;
+};
+----
+
+注意，只有SystemC编译的时候，只要没有定义SC_DISABLE_ASYNC_UPDATE宏，async_update_list
+就支持这些特性。
+
+async_update_list主要持有以下成员变量
+
+* 一个host兼容的mutex，用来与其他线程之间交换数据时保护临界区
+* 一个host兼容的<<data::sc_host_semaphore, semaphore>>
+* 一个存放需要update的primitive channel指针的m_push_queue
+* 一个存放执行update的primitive channel指针的m_pop_queue
+* 一个用来存放阻塞的primitive channel指针的m_suspending_channels
+* 一个布尔值，保存是否有suspend的channel
+
+关于<<data::async_update_list::accept_updates, accept_updates>>，以及
+<<data::async_update_list::append, append>>成员函数的实现，我们将在下一部分介绍。
+
+==== async_update_list::pending
+[[data::async_update_list::pending]]
+
+async_update_list的成员函数 `pending` 用来返回是否有需要处理的
+异步primitive channel更新请求：
+
+.src/sysc/communication/sc_prim_channel.cpp
+[source,cpp]
+----
+    bool pending() const
+    {
+	return m_push_queue.size() != 0;
+    }
+----
+
+如果 `pending` 返回true，表明本delta cycle内有需要处理的异步primitive channel
+更新请求。如果返回false，那就是没有异步更新请求。
+
+==== async_update_list::attach_suspending
+[[data::async_update_list::attach_suspending]]
+
+从直观来看，attach_suspending的目的在于，将一个primitive channel指针放入到
+m_suspend_channels列表中：
+
+.src/sysc/communication/sc_prim_channel.cpp
+[source,cpp]
+----
+    bool attach_suspending( sc_prim_channel& p )
+    {
+        sc_scoped_lock lock( m_mutex );
+        std::vector<sc_prim_channel*>::iterator it =
+          std::find(m_suspending_channels.begin(), m_suspending_channels.end(), &p);
+        if ( it == m_suspending_channels.end() ) {
+            m_suspending_channels.push_back(&p);
+            m_has_suspending_channels = true;
+            return true;
+        }
+        return false;
+        // return releases the mutex
+    }
+----
+
+如果primitive channel不存在于m_suspend_channels列表，那么就将指针放入，并且
+设置 m_has_suspending_channels 为true，并返回true。
+
+如果primitive channel已经存在于m_suspend_channels，那么直接返回false。
+
+==== async_update_list::detach_suspending
+[[data::async_update_list::detach_suspending]]
+
+detach_suspending的目的和attach_suspending刚好相反，是需要从m_suspend_channels
+挪去一个primitive channel：
+
+.src/sysc/communication/sc_prim_channel.cpp
+[source,cpp]
+----
+    bool detach_suspending( sc_prim_channel& p )
+    {
+        sc_scoped_lock lock( m_mutex );
+        std::vector<sc_prim_channel*>::iterator it =
+          std::find(m_suspending_channels.begin(), m_suspending_channels.end(), &p);
+        if ( it != m_suspending_channels.end() ) {
+            *it = m_suspending_channels.back();
+            m_suspending_channels.pop_back();
+            m_has_suspending_channels = (m_suspending_channels.size() > 0);
+            return true;
+        }
+        return false;
+        // return releases the mutex
+    }
+----
+
+如果待挪去的primitive channel存在于m_suspend_channels，那么就从中移除（移除的方法
+很巧妙，将尾巴地方的指针赋给当前位置，然后将尾巴弹出，这样需要移除的primitive channel
+的指针就从m_suspend_channels中消失了）。之后，重新设置m_has_suspending_channels
+的值，如果m_suspend_channels为空，则设置为false，否则设置为true .
+
+如果待移除的primitive channel不存在，那么直接返回false.
+
+==== attach/detach suspending framework
+
+在没有attach_suspending和detach_suspending调用的情况下，async_update_list
+的m_has_suspending_channels应当始终为false。在这种情况下，
+m_suspend_semaphore则只在
+<<data::async_update_list::append, append>>时候增加(post)，并且
+总能成功在
+<<data::async_update_list::accept_updates, accept_updates>>时候
+减少(trywait)。
+
+如果有attach_suspending的channel，m_has_suspending_channels不为0，那么
+async_update_list的suspend实现就不再为空了：
+[[data::async_update_list::suspend]]
+
+.src/sysc/communication/sc_prim_channel.cpp
+[source,cpp]
+----
+    void suspend()
+    {
+        if( m_has_suspending_channels ) {
+            m_suspend_semaphore.wait();
+            m_suspend_semaphore.post(); // replace token
+        }
+    }
+----
+
+此时，如果suspend被调用，那么首先wait。由于在没有attach/detach suspending
+时候，<<data::sc_host_semaphore, sc_host_semaphore>>的值总是大于等于0，所以这里
+wait就需要等到大于零的值。如果所有基于async_request_update的primitive channel都得到
+处理，semaphore的值等于0，这显然不符合条件，所以会继续等待，直到有一个
+async_request_update的primitive channel调用append，将semaphore的值post成1（或者继续累加）。
+由于wait操作会将semaphore的值减去一，所以之后调用post，再将值加回去。此时semaphore的值反映
+的就是还有多少async的request_update还没有处理。
+从这个效果来看，async_update_list的suspend请求是一个阻塞的请求，这会阻塞住，直到
+一个可用的async request_update过来为止，才会返回。
+
+async_update_list的suspend函数在primitive channel registry的async_suspend
+函数中被调用了：
+
+.src/sysc/communication/sc_prim_channel.cpp
+[source,cpp]
+----
+bool
+sc_prim_channel_registry::pending_async_updates() const
+{
+#ifndef SC_DISABLE_ASYNC_UPDATES
+    return m_async_update_list_p->pending();
+#else
+    return false;
+#endif
+}
+
+bool
+sc_prim_channel_registry::async_suspend()
+{
+#ifndef SC_DISABLE_ASYNC_UPDATES
+    m_async_update_list_p->suspend();
+    return !pending_async_updates();
+#else
+    return true;
+#endif
+}
+----
+
+[[api::sc_prim_channel_registry::async_suspend]]
+primitive channel registry的async_suspend首先阻塞等待，直到有异步的request到来为止，之后
+调用pending_async_updates，即调用了<<data::async_update_list::pending, async_update_list的pending>>
+函数。
+显然此时还有等待处理的异步primitive channel的request，所以pending_async_updates返回true，进而
+async_suspend返回false。
+
+primitive channel registry的async_suspend在<<concept::timed_event, SystemC内核处理timed event>>
+的地方得到了调用。当达到仿真设定的时间时，立即退出仿真。如果没有达到仿真设定的时间，但是已经没有任何
+timed event的时候，需要调用async_suspend，判断是否还有可能的异步事件需要处理。
+如果有任何attached了的async suspending（即async_update_list的m_has_suspending_channels为true），
+那么sc_prim_channel_registry的async_suspend阻塞住，直到有至少一个async_request_update到来，然后
+就返回false，sc内核就无法退出，需要继续执行仿真。
+
+这样一来，达到的效果就是，如果有任何primitive channel调用
+async_attach_suspending，那么仿真内核永远不会退出，总要等到一个async_request_update才可以。这就有效
+防止有些primitive channel在等待异步更新的时候，因为Systemc内核无法感知异步更新，而
+提前结束仿真的场景。
+
+当async的primitive channel异步事件等到后，需要调用async_detach_suspending，将自己
+从异步primitive channel列表中挪去，防止仿真程序无法执行下去。
+
+NOTE: 这种semaphore的使用方式非常有趣，模式值得探究下
+
 === async_request_update
+[[api::primitive_channel::async_request_update]]
 
 .src/sysc/communication/sc_prim_channel.cpp
 [source,cpp]
@@ -970,6 +1273,7 @@ sc_prim_channel_registry::async_request_update( sc_prim_channel& prim_channel_ )
 ----
 
 registry的 `async_request_update` 调用了 `async_update_list::append` 函数：
+[[data::async_update_list::append]]
 
 .src/sysc/communication/sc_prim_channel.cpp
 [source,cpp]
@@ -988,7 +1292,7 @@ registry的 `async_request_update` 调用了 `async_update_list::append` 函数�
 
 由于来自 `sc_prim_channel::async_request_update` 的调度是异步的，因此这个 `append`
 函数发生的时机可以在任何阶段：EVALUATE, UPDATE, NOTIIFCATION，或者其他阶段。
-`simc`
+[[data::async_update_list::accept_updates]]
 
 .src/sysc/communication/sc_prim_channel.cpp
 [source,cpp]
@@ -1008,21 +1312,22 @@ registry的 `async_request_update` 调用了 `async_update_list::append` 函数�
 	{
 	    // we use request_update instead of perform_update
 	    // to skip duplicates
-	    (*it++)->request_update();
+	    (*it++)->request_update(); <2>
 	    int sem_trywait = m_suspend_semaphore.trywait(); // this must never block !
 	    sc_assert( sem_trywait == 0 );
 	}
 	m_pop_queue.clear();
     }
 ----
-<1> 在锁的保护下，取出push queue
+<1> 在锁的保护下，取出push queue，其本质是和另一个pop queue交换
+<2> 调用基类primitive channel的request_update，将自己放入本delta cycle中等待update的链表中
 
 只要发生在 `m_push_queue.swap(m_pop_queue)` 之前的 `async_request_update` 都会在
 随后被调度其 `request_update()` 成员函数，将之加入到registry的update链表中。而发生在这之后
 的 `async_request_update` 就只能等待下一个delta cycle了。
 
 
-=== 一个例子
+=== async event sample
 
 Async的primitive channel提供了一个框架，用以让非SystemC的线程将自己的行为
 注册到SystemC的不同stage。这种能力不局限于primitive channel才可以。例如，在
@@ -1130,7 +1435,39 @@ int sc_main(int argc, char *argv[])
 这么做的效果相当于把异步线程的动作强制同步到SystemC的UPDATE阶段，更准确地说，是UPDATE阶段最开始
 的地方。这样异步部分只需要在update函数中实现代码，即可保证这种同步效果。
 
+[NOTE]
+====
+异步的primitive channel工作原理在于，异步的primitive channel调用 `async_request_update`，如果
+发生在本次delta cycle的UPDATE阶段之前，那么就会被async_update_list放入本地的push queue中。
+在UPDATE PHASE执行的时候，primitive channel registry执行perform_update函数，首先调用
+async_update_list的accept_updates成员函数，这会将async_update_list的push queue和一个pop queue
+交换，来保证安全。只要发生在push queue和pop queue交换之前的async_request_update，都能够参与到本
+delta cycle中。之后，accept_updates调用pop queue内每个primitive channel对象的
+request_update成员函数，将这些primitive channel放入到本次执行UPDATE的链表中。对于同步的primitive channel,
+request_update成员函数一般是在EVALUATE PHASE执行的。但这里并没有什么问题，因为SystemC内核可以保证
+调度顺序：先执行为async primitive channel的accept_updates，然后再执行perform_update的其他部分。
+
+primitive channel registry调度async_update_list的accept_updates，执行push queue和pop queue
+的交换，这是async primitive channel的同步点。因此，在交换push queue和pop queue的时候，使用了
+和async_request_update时候同样的一把锁（因为两者都需要修改push queue），这就保证了数据的安全。
+
+如果async primitive channel错过了本delta cycle的update phase的perform_update中的同步点，那么就会
+放入到push queue，为下次delta cycle做准备了。
+
+如果async primitive channel在一个delta cycle内多次调用async_request_update，则会被合并为一次看待。
+====
+
 当然，除了这种使用方式以外，primitive channel还提供了其他的异步接口，以供其他方式的使用。
+
+=== 异步应用场景
+
+异步的primitive channel主要用于SystemC主线程和其他线程协同工作。例如，可以基于异步的primitive channel机制
+实现一个watch dog。当SystemC主线程阻塞超过一定时间，就认为超时，打印出超时信息。这种机制只能用异步来做，是因为
+如果用同步的SystemC自己的thread做定时器，其他SystemC线程的阻塞会导致这个同步的SystemC线程得不到执行，从而
+失去了我们希望的watch dog的能力。
+
+异步的另外一些应用场景是多线程运行，其他工作线程用来处理数据，然后将数据通过异步的primitive channel送到
+Systemc主线程中，作进一步的仿真处理。
 
 == 其他
 
@@ -1150,3 +1487,7 @@ typedef sc_module sc_behavior;
 
 hierarchical channel经常用于建模诸如 AMBA总线，PCI-X总线等具有复杂结构的总线结构，这些总线
 表现如同channel一样，可以传递数据，然而其本质则是和 sc_module 别无二致的设计。
+
+== References
+
+https://theses.hal.science/tel-01778172/document

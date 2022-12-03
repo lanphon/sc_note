@@ -3,12 +3,15 @@
 = SystemC Code Review
 XinzhaoZhu <xinzhao_zhu@163.com>
 v0.9, 2022-11-20
+:doctype: book
 
 :doc_root: .
 :imagesdir: {doc_root}
 
+
 :toc: left
 
+[preface]
 = Preface
 
 Here is a SystemC code review.
