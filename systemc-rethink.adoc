@@ -38,6 +38,7 @@ registry中。sc内核调度器是实现SystemC功能的基石，包括如下几
 的绑定情况，避免出现未绑定而导致仿真的过程中出现错误。
 
 在sc内核调度器中，一个<<concept::crunch, delta cycle>>的执行包括如下三个阶段：
+
 1. EVALUATE，执行method和thread等线程
 2. UPDATE，执行primitive channel的update
 3. NOTIFICATION，执行基于event的更新
@@ -86,7 +87,7 @@ event是不可获取的，然而primitive channel却可以有别的方法代替�
 相当于虚指针，而sc_port则是持有一个或者一组虚指针的包装类而已。sc_export则是只能持有
 一个虚指针的特殊的包装类。
 
-虽然sc_interface, sc_port和sc_export并不是SystemC核心中的一部分，但确实组织
+虽然sc_interface, sc_port和sc_export并不是SystemC核心中的一部分，却是组织
 TLM最重要的部分。所以我们在<<chap::interface_and_port_and_export, 再谈SystemC中的Interface, Port和Export>>
 中，对这部分的内容进行了更为细致的考察和审视。
 
@@ -167,7 +168,12 @@ SystemC中的时间，是配合着event使用的。没有event与之关联的时
 
 === Notification Phase Call back
 
-对于派生自sc_module, sc_port, sc_export和sc_primitive_channel的子类，可以实现以下几种
+对于派生自
+
+<<api::module::callback, sc_module>>, 
+<<api::port::callback, sc_port>>, 
+<<api::export::callback, sc_export<<和
+<<api::prim_channel::callback, sc_prim_channel>>的子类，可以实现以下几种
 callback函数，这样SC在仿真的相应阶段，会调用这些函数：
 
 * before_end_of_elaboration
