@@ -2405,6 +2405,47 @@ bool sc_allow_process_control_corners = false;
 // ......................................................................
 ----
 
+=== SystemC仿真流程
+[[concept::systemc_flow]]
+
+在<<data::sc_phase_callback_registry, sc_phase_callback_registry>>
+部分，我们介绍各种用于注册回调的地方，而在本部分，我们将梳理下SystemC仿真器的
+流程，并且在流程中显示各个回调函数所指代的位置。
+
+SystemC的仿真流程如下图所示：
+
+.SystemC仿真流程
+image::sc_invocation.png[]
+
+仿真过程以sc_start的调用开始，仿真器内核将接管整个流程。sc_start主要调用了
+simulate函数，而在simulate函数中，则首先调用了initialize函数，初始化
+整个仿真器。在initialize函数中，主要分为三部分：
+
+* 调用elaborate函数
+** elaborate内部，首先调用所有registry footnote:[其实就是port, export, module和prim channel，一共4个registry]的 _constrution_done_ ，结束之后，就是 *construction_done phase*
+** 然后调用所有registry的 _elaboration_done_ ，结束之后，就是 *elaboration_done phase*
+* 调用prepare_to_simulate函数
+** prepare_to_simulate首先调用4个registry的 _start_simulation_ ，这之后就是 *start_simulation phase*
+** 然后调用所有thread线程的<<use::process::control::prepare_to_simulate, prepare_to_simulate>>，准备协程栈
+** 执行prim channel registry的perform_update函数
+** 将所有normal状态，且没有标记dont_initialize的method线程放入runnable列表
+** 将所有normal状态，且没有标记dont_initialize的thread线程放入runnable列表
+** 执行delta event的notificaton
+** 完成之后，即 *initialization_done phase*
+* 调用一个init_crunch函数，这个函数在这里什么也不做
+
+initialize结束之后，返回simulate函数，继续执行。simulate函数后续主要执行基于crunch的delta cycle
+更新，以及基于timed event的timed notification。在一个crunch内，
+<<phase::update, UPDATE PHASE>>结束之后，就是 *update_done phase*。当所有的delta event处理完毕，crunch
+退出之后，需要执行timed event更新，在调用do_timestep后，进入do_timestep就是 *before_timestep phase*。
+
+如果在simulate函数调用过程中，某些SystemC线程显式调用sc_stop，那么就进入stop流程。do_stop_action调用
+end函数，在end内部，会调用4个registry的 _simulation_done_ ，这之后就是 *simulation_done phase* 。end返回给do_stop_action
+之后，do_stop_action处理完毕，最后就是 *simulation_stopped phase* 了。
+
+如果simulate函数调用没有收到sc_stop请求，而是等到设定的仿真时间到达，或者没有可用的事件后，则simulate执行结束，最后
+就是 *simulation_paused phase* 。
+
 === 总结
 
 本部分我们探索了SystemC的调度原理和具体的实现框架。总的来说, SystemC以Method线程和Thread线程

@@ -546,6 +546,9 @@ sc_phase_callback_registry定义了很多类型的callback回调函数：
     void simulation_done()     const;
 ----
 
+这些回调函数的在仿真流程中的具体位置，请参考
+<<concept::systemc_flow, SystemC仿真流程>>部分的介绍。
+
 这些函数本身的实现都是调用了另一个核心的do_callback函数：
 
 .src/sysc/kernel/sc_phase_callback_registry.h
@@ -906,7 +909,8 @@ sc_phase_callback_registry::before_timestep() const
 
 === CALLBACK
 
-==== sc_module的callback
+==== module的callback
+[[api::module::callback]]
 
 sc_module为派生类提供了四个虚函数，派生类实现这些函数后，可以在合适的
 时机做需要的事情：
@@ -916,7 +920,257 @@ sc_module为派生类提供了四个虚函数，派生类实现这些函数后�
 3. `void start_of_simulation(void)`
 4. `void end_of_simulation(void)`
 
-==== PHASE CALLBACK机制
+所有的sc_module都被注册到sc_module_registry中，而sc_module_registry则在
+<<concept::systemc_flow, 仿真流程>>中，会调用如下4个回调函数 footnote:[这四个回调函数不是虚函数，所以派生类无法通过重写的方式改变行为]
+
+1. construction_done
+2. elaboration_done
+3. start_simulation
+4. simulation_done
+
+这些sc_module_registry会调用所有sc_module的同名函数：
+
+.src/sysc/kernel/sc_module.cpp
+[source,cpp]
+----
+// We push the sc_module instance onto the stack of open objects so 
+// that any objects that are created in before_end_of_elaboration have
+// the proper parent. After the call we pop the hierarchy.
+void
+sc_module::construction_done()
+{
+    hierarchy_scope scope(this);
+    before_end_of_elaboration(); <1>
+}
+
+// We push the sc_module instance onto the stack of open objects so 
+// that any objects that are created in end_of_elaboration have
+// the proper parent. After the call we pop the hierarchy.
+void
+sc_module::elaboration_done( bool& error_ )
+{
+    if( ! m_end_module_called ) {
+        std::stringstream msg;
+        msg << "module '" << name() << "'";
+        SC_REPORT_WARNING( SC_ID_END_MODULE_NOT_CALLED_, msg.str().c_str() );
+        if( error_ ) {
+            SC_REPORT_WARNING( SC_ID_HIER_NAME_INCORRECT_, 0 );
+        }
+        error_ = true;
+    }
+    hierarchy_scope scope(this);
+    end_of_elaboration(); <2>
+}
+
+void
+sc_module::start_simulation()
+{
+    hierarchy_scope scope(this);
+    start_of_simulation(); <3>
+}
+
+void
+sc_module::simulation_done()
+{
+    hierarchy_scope scope(this);
+    end_of_simulation(); <4>
+}
+----
+<1> before_end_of_elaboration会在construction_done快要结束的时候调用
+<2> end_of_simulation会在elaboration_done最后调用
+<3> start_of_simulation会在start_simulation最后调用
+<4> end_of_simulation会在end_of_simulation最后调用
+
+==== port的callback
+[[api::port::callback]]
+
+与sc_module一样，所有的sc_port的基类sc_port_base也提供了四个虚函数，可以用来
+在特定的阶段完成工作：
+
+1. `void before_end_of_elaboration(void)`
+2. `void end_of_elaboration(void)`
+3. `void start_of_simulation(void)`
+4. `void end_of_simulation(void)`
+
+这4个虚函数的实现机制和sc_module是一样的。所有的sc_port_base都被注册到sc_port_registry
+中，而sc_port_registry则会在合适的时机调用包括construction_done, elaboration_done, 
+start_simulation和simulation_done，进而调用所有的sc_port_base的同名函数。而sc_port_base
+的这四个同名函数（不是虚函数）的实现如下：
+
+.src/sysc/communication/sc_port.cpp
+[source,cpp]
+----
+void
+sc_port_base::construction_done()
+{
+    sc_module* parent = static_cast<sc_module*>( get_parent_object() );
+    sc_object::hierarchy_scope scope( parent );
+    before_end_of_elaboration(); <1>
+}
+
+void
+sc_port_base::elaboration_done()
+{
+    sc_assert( m_bind_info != 0 && m_bind_info->complete );
+    delete m_bind_info;
+    m_bind_info = 0;
+
+    sc_module* parent = static_cast<sc_module*>( get_parent_object() );
+    sc_object::hierarchy_scope scope( parent );
+    end_of_elaboration(); <2>
+}
+
+void
+sc_port_base::start_simulation()
+{
+    sc_module* parent = static_cast<sc_module*>( get_parent_object() );
+    sc_object::hierarchy_scope scope( parent );
+    start_of_simulation(); <3>
+}
+
+void
+sc_port_base::simulation_done()
+{
+    sc_module* parent = static_cast<sc_module*>( get_parent_object() );
+    sc_object::hierarchy_scope scope( parent );
+    end_of_simulation(); <4>
+}
+----
+<1> before_end_of_elaboration会在construction_done快要结束的时候调用
+<2> end_of_simulation会在elaboration_done最后调用
+<3> start_of_simulation会在start_simulation最后调用
+<4> end_of_simulation会在end_of_simulation最后调用
+
+==== export的callback
+[[api::export::callback]]
+
+sc_export_base提供了4个虚函数，提供相应的定制能力：
+
+1. `void before_end_of_elaboration(void)`
+2. `void end_of_elaboration(void)`
+3. `void start_of_simulation(void)`
+4. `void end_of_simulation(void)`
+
+这4个虚函数的实现机制和sc_module是一样的。所有的sc_export_base都被注册到sc_export_registry
+中，而sc_export_registry则会在合适的时机调用包括construction_done, elaboration_done, 
+start_simulation和simulation_done，进而调用所有的sc_export_base的同名函数。而sc_export_base
+的这四个同名函数（不是虚函数）的实现如下：
+
+.src/sysc/communication/sc_port.cpp
+[source,cpp]
+----
+// called when construction is done
+
+void
+sc_export_base::construction_done()
+{
+    sc_module* parent = static_cast<sc_module*>( get_parent_object() );
+    sc_object::hierarchy_scope scope( parent );
+    before_end_of_elaboration(); <1>
+}
+
+// called when elaboration is done
+
+void
+sc_export_base::elaboration_done()
+{
+    if ( get_interface() == 0 )
+    {
+        report_error( SC_ID_COMPLETE_BINDING_, "export not bound" );
+        // may continue, if suppressed
+    }
+
+    sc_module* parent = static_cast<sc_module*>( get_parent_object() );
+    sc_object::hierarchy_scope scope( parent );
+    end_of_elaboration(); <2>
+}
+
+// called before simulation starts
+
+void
+sc_export_base::start_simulation()
+{
+    sc_module* parent = static_cast<sc_module*>( get_parent_object() );
+    sc_object::hierarchy_scope scope( parent );
+    start_of_simulation(); <3>
+}
+
+// called after simulation ends
+
+void
+sc_export_base::simulation_done()
+{
+    sc_module* parent = static_cast<sc_module*>( get_parent_object() );
+    sc_object::hierarchy_scope scope( parent );
+    end_of_simulation(); <4>
+}
+----
+<1> before_end_of_elaboration会在construction_done快要结束的时候调用
+<2> end_of_simulation会在elaboration_done最后调用
+<3> start_of_simulation会在start_simulation最后调用
+<4> end_of_simulation会在end_of_simulation最后调用
+
+==== primitive channel的callback
+[[api::prim_channel::callback]]
+
+sc_prim_channel提供了4个虚函数，供派生类重写以实现特定阶段的定制行为：
+
+1. `void before_end_of_elaboration(void)`
+2. `void end_of_elaboration(void)`
+3. `void start_of_simulation(void)`
+4. `void end_of_simulation(void)`
+
+这4个虚函数的实现机制和sc_module是一样的。所有的sc_prim_channel都被注册到sc_prim_channel_registry
+中，而sc_prim_channel_registry则会在合适的时机调用包括construction_done, elaboration_done, 
+start_simulation和simulation_done，进而调用所有的sc_prim_channel的同名函数。而sc_export_base
+的这四个同名函数（不是虚函数）的实现如下：
+
+.src/sysc/communication/sc_prim_channel.cpp
+[source,cpp]
+----
+// called when construction is done
+
+void
+sc_prim_channel::construction_done()
+{
+    sc_object::hierarchy_scope scope( get_parent_object() );
+    before_end_of_elaboration(); <1>
+}
+
+// called when elaboration is done
+
+void
+sc_prim_channel::elaboration_done()
+{
+    sc_object::hierarchy_scope scope( get_parent_object() );
+    end_of_elaboration(); <2>
+}
+
+// called before simulation begins
+
+void
+sc_prim_channel::start_simulation()
+{
+    sc_object::hierarchy_scope scope( get_parent_object() );
+    start_of_simulation(); <3>
+}
+
+// called after simulation ends
+
+void
+sc_prim_channel::simulation_done()
+{
+    sc_object::hierarchy_scope scope( get_parent_object() );
+    end_of_simulation(); <4>
+}
+----
+<1> before_end_of_elaboration会在construction_done快要结束的时候调用
+<2> end_of_simulation会在elaboration_done最后调用
+<3> start_of_simulation会在start_simulation最后调用
+<4> end_of_simulation会在end_of_simulation最后调用
+
+
+==== Simulation Kernel PHASE CALLBACK机制
 [[macro::SC_DO_PHASE_CALLBACK_]]
 
 Phase Callback机制是SystemC在2.3.3开始，实验性质的一种特性。Phase Callback
