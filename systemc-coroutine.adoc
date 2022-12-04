@@ -77,6 +77,7 @@ void sc_thread_process::prepare_for_simulation()
 }
 ----
 
+(((sc_thread_cor_fn)))
 这里设置的协程入口函数是 `sc_thread_cor_fn` ，传入一个 `this` 指针。协程管理器创建的协程对象
 就是这里的 `m_cor_p` 。
 

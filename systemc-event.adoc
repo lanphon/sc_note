@@ -480,15 +480,17 @@ sc_event::register_event( const char* leaf_name, bool is_kernel_event /* = false
     {
 	object_manager->insert_event(m_name, this);
 	if ( m_parent_p )
-	    m_parent_p->add_child_event( this );
+	    m_parent_p->add_child_event( this ); <4>
 	else
-	    m_simc->add_child_event( this );
+	    m_simc->add_child_event( this ); <5>
     }
 }
 ----
 <1> 如果给定的名字为空，那么SystemC会自己创建一个名字
 <2> 对于kernel event，名字的命名有着特殊的方法
 <3> 非kernel event才会加入object manager以及hierarchy结构中
+<4> 若父对象不为空，那么就将这个event作为父对象的event
+<5> 若父对象为空，则这个event由内核托管，参考<<api::sc_get_top_level_events, sc_get_top_level_events>>的实现
 
 
 拷贝构造函数和赋值构造函数被标记为PRIVATE，并且未实现，这意味着sc_event不允许拷贝
@@ -1030,7 +1032,7 @@ wait( sc_simcontext* simc )
 实际上调用的是proces的wait_cycles成员函数。
 
 不带任何参数的 `wait` 会阻塞当前线程的执行，直到所设置的静态敏感事件中的一个发生，才会重新调度
-执行当前线程。wait_cycles实际上并不是等待一个时钟周期，而是等待一个静态事件而已。
+执行当前线程。((wait_cycles))实际上并不是等待一个时钟周期，而是等待一个静态事件而已。
 [[api::sc_thread_process::wait_cycles]]
 
 对于Thread/Cthread而言，wait_cycles只是将所设定的数 `n` 减一之后赋给 `m_wait_cycle_n`

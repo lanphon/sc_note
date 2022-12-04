@@ -99,6 +99,10 @@ include::{doc_root}/systemc-tlm-2-other-sockets.adoc[]
 // misc部分未完待续
 include::{doc_root}/systemc-tlm-2-misc.adoc[]
 
+[appendix]
+== SystemC代码中的CPP特性
+include::{doc_root}/systemc-cpp-features.adoc[]
+
 
 [index]
 == Index

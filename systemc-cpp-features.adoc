@@ -5,7 +5,7 @@
 SystemC源代码中的CPP高级技巧
 [[chap::cpp_high_feature]]
 
-== 动态决议const static值
+=== 动态决议const static值
 
 TLM代码中， `tlm_extension<T>::ID` 成员变量居然是动态决定的，这大大出乎我的意料。
 
@@ -28,7 +28,7 @@ const unsigned int tlm_extension<T>::ID
 ----
 <1> 这个ID值居然是通过一个 `non constexpr/consteval` 的函数返回值来决定的
 
-== 派生类改变接口函数返回值类型
+=== 派生类改变接口函数返回值类型
 
 在<<api::tlm_base_initiator_socket_b, tlm_base_initiator_socket_b>>的定义中，接口函数的
 返回值类型发生变化。

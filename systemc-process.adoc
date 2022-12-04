@@ -3136,13 +3136,15 @@ suspend-resume的逻辑，需要标记其为ready to run，这样在resume的时
 === Dynamic Process
 
 动态的process，指的是在仿真开始之后（simulation阶段）创建出来的线程，这些线程一般使用
-sc_
+sc_spawn来实现。sc_spawn也可以用来为那些不符合
+<<api::SC_METHOD, SC_METHOD>>和<<api::SC_THREAD, SC_THREAD>>要求的
+函数原型的成员函数创建method/thread类型的线程。
 
 ==== sc_spawn
 
 
 [[func::sc_spawn]]
-sc_spawn用以从给定的参数中生成一个SystemC级别的线程（可以是Method，也可以是Thread，但不会是
+((sc_spawn))用以从给定的参数中生成一个SystemC级别的线程（可以是Method，也可以是Thread，但不会是
 CThread）。以下是sc_spawn的实现代码：
 
 .src/sysc/kernel/sc_spawn.h
@@ -3310,7 +3312,7 @@ sc_process_b::~sc_process_b()
 的实现。
 
 [[usage::sc_spawn::sc_clock]]
-举个sc_spawn使用的例子。在sc_clock的before_end_of_elaboration中，
+举个sc_spawn使用的例子。在((sc_clock))的before_end_of_elaboration中，
 sc_clock就是用sc_spawn，创造出两个
 METHOD，分别用来实现上升沿事件和下降沿事件：
 
@@ -3446,16 +3448,16 @@ sc_clock虽然只是一个sc_signal，但是借助sc_spawn，获得了类似于s
 这样的能够创建单独线程的能力，这就实现了sc_clock的自激励特性。
 
 ==== sc_bind, sc_ref和sc_cref
-[[func::sc-bind]]
-[[func::sc_ref]]
-[[func::sc_cref]]
+[[func::sc_bind]]
 
-为支持动态process功能，SystemC内置了如下3个辅助函数：
+为支持动态process功能，SystemC内置了如下3个辅助函数 footnote:[根据SystemC的开发记录，这些应当是从Boost中借鉴过来的]：
+[[func::sc_cref]]
 
 * sc_bind
 * sc_ref
 * sc_cref
 
+[[func::sc_ref]]
 .src/sysc/kernel/sc_dynamic_processes.h
 [source,cpp]
 ----

@@ -1319,7 +1319,7 @@ Method和Thread线程都可以用 `sensitive` `sensitive_pos` `sensitive_neg` �
 
 在之前的介绍中，我们已经可以看到event是如何与Method/Thread线程交互，静态或者动态地设置
 这些线程的调度条件的。在这些描述中，我们用了一个模糊的词，“满足条件” 时候被调度，而现在
-则是时机来解释所谓的条件应当如何被满足了。
+则是时候来解释所谓的条件应当如何被满足了。
 
 在一次delta cycle中，EVALUATE PHASE和UPDATE PHASE会注册那些已经ready状态的delta event到
 `simc` 的 `m_delta_events` 列表中，而<<phase::notification, NOTIFICATION PHASE>>
@@ -1355,6 +1355,7 @@ EVENT可选的类型有3种：
 有时候我么提到TIMED event，指代的是由SystemC内部创建并销毁的组合体对象，有时候则指代都是
 这个组合体对象内部持有的trigger类型为TIMED的event本身，具体的含义根据上下文来理解。
 
+(((sc_event, notify)))
 对于用户而言，当调用 `sc_event::notify()` 并提供一个不是 `SC_ZERO_TIME` 的延时时间参数时，SystemC
 就会创建一个timed event，将此event的指针赋给timed event，并标记好这个事件发生的时间信息（当前的时间加上提供的延时时间）。
 
@@ -1666,6 +1667,736 @@ delta event事件列表为空，不会再产生新的runnable调度单元为止�
 * 用户显式要求退出（调用 `sc_stop` )
 * 仿真时间达到
 * 没有多余的事件，仿真器进入STARVATION状态
+
+=== SystemC内核API函数
+
+本部分我们汇总下，SystemC的内核提供的API接口函数有哪些，并且是如何
+实现的。注意，这些API函数都是自由函数，而不是sc_simcontext的成员函数。
+这些API接口函数都可以直接使用。
+
+==== sc_set_stop_mode and sc_get_stop_mode
+[[api::sc_set_stop_mode]]
+
+((sc_set_stop_mode)) 和 ((sc_get_stop_mode))是用来设置
+和获取停止模式的：
+
+.src/sysc/kernel/sc_simcontext.cpp
+[source,cpp]
+----
+sc_stop_mode stop_mode = SC_STOP_FINISH_DELTA;
+
+//------------------------------------------------------------------------------
+//"sc_set_stop_mode"
+//
+// This function sets the mode of operation when sc_stop() is called.
+//     mode = SC_STOP_IMMEDIATE or SC_STOP_FINISH_DELTA.
+//------------------------------------------------------------------------------
+SC_API void sc_set_stop_mode(sc_stop_mode mode)
+{
+    if ( sc_is_running() )
+    {
+        SC_REPORT_ERROR(SC_ID_STOP_MODE_AFTER_START_,"");
+        return;
+    }
+
+    switch( mode )
+    {
+      case SC_STOP_IMMEDIATE:
+      case SC_STOP_FINISH_DELTA:
+          stop_mode = mode;
+          break;
+      default:
+          break;
+    }
+}
+
+SC_API sc_stop_mode
+sc_get_stop_mode()
+{
+    return stop_mode;
+}
+----
+
+所设置的stop_mode决定了当<<api::sc_stop, sc_stop>>调用的时候，何时停止。如果设置为
+`SC_STOP_IMMEDIATE`，则会立即终止当前的执行。如果设置为 `SC_STOP_FINISH_DELTA` ，则会等待
+当前的delta cycle都处理完毕，才终止仿真器的执行，这也默认的行为。
+
+==== sc_start
+[[api::sc_start]]
+
+((sc_start))可以开始仿真阶段，根据需求不同，sc_start有不同的重载形式：
+
+.src/sysc/kernel/sc_simcontext.h
+[source,cpp]
+----
+enum sc_starvation_policy 
+{
+    SC_EXIT_ON_STARVATION,
+    SC_RUN_TO_TIME
+};
+extern SC_API void sc_start();
+extern SC_API void sc_start( const sc_time& duration, 
+                      sc_starvation_policy p=SC_RUN_TO_TIME );
+inline void sc_start( int duration, sc_time_unit unit, 
+                      sc_starvation_policy p=SC_RUN_TO_TIME )
+{
+    sc_start( sc_time((double)duration,unit), p );
+}
+
+inline void sc_start( double duration, sc_time_unit unit, 
+                      sc_starvation_policy p=SC_RUN_TO_TIME )
+{
+    sc_start( sc_time(duration,unit), p );
+}
+----
+
+==== sc_stop
+[[api::sc_stop]]
+
+((sc_stop))用以显式终止仿真器的运行：
+
+.src/sysc/kernel/sc_simcontext.cpp
+[source,cpp]
+----
+SC_API void
+sc_stop()
+{
+    sc_get_curr_simcontext()->stop();
+}
+----
+
+sc_stop其实调用的是sc_simcontext的stop成员函数，来终止仿真器的。
+
+==== sc_delta_count
+[[api::sc_delta_count]]
+
+((sc_delta_count))用来返回当前的delta count时间戳：
+
+.src/sysc/kernel/sc_simcontext.h
+[source,cpp]
+----
+inline
+sc_dt::uint64 sc_delta_count()
+{
+    return sc_get_curr_simcontext()->m_delta_count;
+}
+----
+
+注意，这里返回的delta count时间戳是从仿真开始不断累加的。
+
+==== sc_delta_count_at_current_time
+[[api::sc_delta_count_at_current_time]]
+
+((sc_delta_count_at_current_time))作用和sc_delta_count类似，也是返回一个
+delta count的时间戳，所不同的是，这个返回的delta count是以本时钟周期起点计算的：
+
+.src/sysc/kernel/sc_simcontext.h
+[source,cpp]
+----
+inline
+sc_dt::uint64 sc_delta_count_at_current_time()
+{
+    return sc_get_curr_simcontext()->delta_count_at_current_time();
+}
+
+inline sc_dt::uint64
+sc_simcontext::delta_count_at_current_time() const
+{
+    return m_delta_count - m_initial_delta_count_at_current_time;
+}
+----
+
+SystemC的内核为每个时钟周期的开始都记录一个delta count起始值 `m_initial_delta_count_at_current_time`，需要
+获取相对当前时间的delta count时，就用m_delta_count减去这个值。
+
+==== sc_get_top_level_events
+[[api::sc_get_top_level_events]]
+
+((sc_get_top_level_events))返回当前由仿真器内核所拥有的的所有event:
+
+.src/sysc/kernel/sc_simcontext.h
+[source,cpp]
+----
+inline
+const std::vector<sc_event*>& sc_get_top_level_events(
+    const sc_simcontext* simc_p = sc_get_curr_simcontext() )
+{
+    return simc_p->m_child_events;
+}
+----
+
+如果一个event由所属的对象，那么在event创建的时候，调用
+<<api::sc_event::register_event, register_event>>的最后，会将这个event插入作为
+父对象的child event，而不是内核的event。
+
+==== sc_get_top_level_objects
+[[api::sc_get_top_level_objects]]
+
+((sc_get_top_level_objects)) 返回当前由仿真器内核所拥有的所有objects:
+
+.src/sysc/kernel/sc_simcontext.h
+[source,cpp]
+----
+inline
+const std::vector<sc_object*>& sc_get_top_level_objects(
+    const sc_simcontext* simc_p = sc_get_curr_simcontext() )
+{
+    return simc_p->m_child_objects;
+}
+----
+
+==== sc_is_running
+[[api::sc_is_running]]
+
+((sc_is_running))用来返回当前是否正在运行仿真阶段：
+
+.src/sysc/kernel/sc_simcontext.h
+[source,cpp]
+----
+inline 
+bool sc_is_running( const sc_simcontext* simc_p = sc_get_curr_simcontext() )
+{
+    return simc_p->m_ready_to_simulate;
+}
+----
+
+==== sc_pause
+[[api::sc_pause]]
+
+((sc_pause))可以用来暂停仿真器的运行：
+
+.src/sysc/kernel/sc_simcontext.h
+[source,cpp]
+----
+inline void sc_pause()
+{
+    sc_get_curr_simcontext()->m_paused = true;
+}
+----
+
+仿真器被暂停之后，可以通过调用sc_start，调用到sc_simcontext的simulate函数，重置
+m_paused为false。
+
+==== sc_end_of_simulation_invoked
+[[api::sc_end_of_simulation_invoked]]
+
+((sc_end_of_simulation_invoked))返回仿真是否结束：
+
+.src/sysc/kernel/sc_simcontext.h
+[source,cpp]
+----
+inline
+bool
+sc_end_of_simulation_invoked()
+{
+    return sc_get_curr_simcontext()->m_end_of_simulation_called;
+}
+----
+
+==== sc_start_of_simulation_invoked
+[[api::sc_start_of_simulation_invoked]]
+
+((sc_start_of_simulation_invoked))返回仿真是否开始：
+
+.src/sysc/kernel/sc_simcontext.h
+[source,cpp]
+----
+inline
+bool
+sc_start_of_simulation_invoked()
+{
+    return sc_get_curr_simcontext()->m_start_of_simulation_called;
+}
+----
+
+sc_simcontext的 `m_start_of_simulation_called` 在prepare_to_simulate的时候
+被设置为true。
+
+==== sc_set_time_resolution
+[[api::sc_set_time_resolution]]
+
+((sc_set_time_resolution))用来设置仿真的时间分辨率：
+
+.src/sysc/kernel/sc_simcontext.h
+[source,cpp]
+----
+SC_API void    sc_set_time_resolution( double, sc_time_unit );
+----
+
+sc_set_time_resolution的具体实现后续在介绍。
+
+==== sc_get_time_resolution
+[[api::sc_get_time_resolution]]
+
+((sc_get_time_resolution))是用来获取所设置的时间分辨率的：
+
+.src/sysc/kernel/sc_time.cpp
+[source,cpp]
+----
+sc_time
+sc_get_time_resolution()
+{
+    return sc_time::from_value( sc_dt::UINT64_ONE );
+}
+----
+
+==== sc_set_default_time_unit
+[[api::sc_set_default_time_unit]]
+
+((sc_set_default_time_unit))已经被废弃了，需要用sc_set_time_resolution代替：
+
+.src/sysc/kernel/sc_simcontext.h
+[source,cpp]
+----
+SC_API void    sc_set_default_time_unit( double, sc_time_unit );
+----
+
+==== sc_get_default_time_unit
+[[api::sc_get_default_time_unit]]
+
+((sc_get_default_time_unit))也已经被废弃了，需要用sc_get_time_resolution代替：
+
+.src/sysc/kernel/sc_simcontext.h
+[source,cpp]
+----
+SC_API sc_time sc_get_default_time_unit();
+----
+
+==== sc_pending_activity_at_current_time
+[[api::sc_pending_activity_at_current_time]]
+
+((sc_pending_activity_at_current_time))可以用来返回在本delta cycle内，是否
+还有process需要处理：
+
+.src/sysc/kernel/sc_simcontext.h
+[source,cpp]
+----
+// Return indication if there are more processes to execute in this delta phase
+
+inline bool sc_pending_activity_at_current_time
+  ( const sc_simcontext* simc_p = sc_get_curr_simcontext() )
+{
+  return simc_p->pending_activity_at_current_time();
+}
+----
+
+sc_simcontext的 `pending_activity_at_current_time` 则实现如下：
+
+.src/sysc/kernel/sc_simcontext.cpp
+[source,cpp]
+----
+// Return indication if there are more processes to execute in this delta phase
+
+bool
+sc_simcontext::pending_activity_at_current_time() const
+{
+    return ( m_delta_events.size() != 0) ||
+           ( m_runnable->is_initialized() && !m_runnable->is_empty() ) ||
+           m_prim_channel_registry->pending_updates();
+}
+----
+
+从代码中可以看出，在以下几种情况下的时候，这个会返回true:
+
+* delta event不为空
+* 正在运行的process列表不为空
+* primitive channel registry返回还有需要等待更新的primitive channel
+
+==== sc_pending_activity_at_future_time
+[[api::sc_pending_activity_at_future_time]]
+
+((sc_pending_activity_at_future_time))返回是否还有下一个定时的事件：
+
+.src/sysc/kernel/sc_simcontext.h
+[source,cpp]
+----
+// Return indication if there are timed notifications in the future
+
+inline bool sc_pending_activity_at_future_time
+  ( const sc_simcontext* simc_p = sc_get_curr_simcontext() )
+{
+  sc_time ignored;
+  return simc_p->next_time( ignored );
+}
+----
+
+实现中，主要借助了sc_simcontext的next_time，获取下一个定时事件信息。如果没有定时事件，就
+返回false。
+
+==== sc_gen_unique_name
+[[api::sc_gen_unique_name]]
+
+((sc_gen_unique_name))可以用来产生唯一的名字：
+
+.src/sysc/kernel/sc_simcontext.cpp
+[source,cpp]
+----
+SC_API const char*
+sc_gen_unique_name( const char* basename_, bool preserve_first )
+{
+    sc_simcontext* simc = sc_get_curr_simcontext();
+    sc_module* curr_module = simc->hierarchy_curr();
+    if( curr_module != 0 ) {
+	return curr_module->gen_unique_name( basename_, preserve_first );
+    } else {
+        sc_process_b* curr_proc_p = sc_get_current_process_b();
+	if ( curr_proc_p )
+	{
+	    return curr_proc_p->gen_unique_name( basename_, preserve_first );
+	}
+	else
+	{
+	    return simc->gen_unique_name( basename_, preserve_first );
+	}
+    }
+}
+----
+
+其中参数 `preserve_first` 默认值为 false。
+
+
+==== sc_get_current_process_handle
+[[api::sc_get_current_process_handle]]
+
+((sc_get_current_process_handle))可以用来返回一个process的handle，具体实现如下：
+
+.src/sysc/kernel/sc_simcontext.cpp
+[source,cpp]
+----
+// Get a handle for the current process
+//
+// Note that this method should not be called if the current process is
+// in the act of being deleted, it will mess up the reference count management
+// of sc_process_b instance the handle represents. Instead, use the a
+// pointer to the raw sc_process_b instance, which may be acquired via
+// sc_get_current_process_b().
+
+SC_API sc_process_handle
+sc_get_current_process_handle()
+{
+    return ( sc_is_running() ) ?
+	sc_process_handle(sc_get_current_process_b()) :
+	sc_get_last_created_process_handle();
+}
+----
+
+从代码实现可以看出，调用sc_get_current_process_handle区分为两种情况。如果是SystemC仿真器
+已经开始仿真阶段，那么这个API函数返回的是当前所在位置所属的process handle。如果仿真器
+还没有开始仿真，还处于elaboration阶段，那么就返回最后一个创建的process handle。
+
+==== sc_get_curr_process_handle
+[[api::sc_get_curr_process_handle]]
+
+((sc_get_curr_process_handle))已经被标记为废弃了：
+
+.src/sysc/kernel/sc_simcontext.cpp
+[source,cpp]
+----
+// THE FOLLOWING FUNCTION IS DEPRECATED IN 2.1
+SC_API sc_process_b*
+sc_get_curr_process_handle()
+{
+    static bool warn=true;
+    if ( warn )
+    {
+        warn = false;
+        SC_REPORT_INFO(SC_ID_IEEE_1666_DEPRECATION_,
+       "sc_get_curr_process_handle deprecated use sc_get_current_process_handle"
+       );
+    }
+
+    return sc_get_curr_simcontext()->get_curr_proc_info()->process_handle;
+}
+----
+
+==== sc_set_random_seed
+[[api::sc_set_random_seed]]
+
+((sc_set_random_seed))是用来设置随机种子的，目前的SystemC版本并未实现这个特性，应当是
+为后续版本准备的:
+
+.src/sysc/kernel/sc_simcontext.cpp
+[source,cpp]
+----
+// Set the random seed for controlled randomization -- not yet implemented
+
+SC_API void
+sc_set_random_seed( unsigned int )
+{
+    SC_REPORT_WARNING( SC_ID_NOT_IMPLEMENTED_,
+		       "void sc_set_random_seed( unsigned int )" );
+}
+----
+
+==== sc_initialize
+[[api::sc_initialize]]
+
+((sc_initialize))已经被标记为废弃的API，使用 `sc_start(SC_ZERO_TIME)`
+可以实现相同的功能：
+
+.src/sysc/kernel/sc_simcontext.cpp
+[source,cpp]
+----
+// The following function is deprecated in favor of sc_start(SC_ZERO_TIME):
+
+SC_API void
+sc_initialize()
+{
+    static bool warning_initialize = true;
+
+    if ( warning_initialize )
+    {
+        warning_initialize = false;
+        SC_REPORT_INFO(SC_ID_IEEE_1666_DEPRECATION_,
+	    "sc_initialize() is deprecated: use sc_start(SC_ZERO_TIME)" );
+    }
+    sc_get_curr_simcontext()->initialize();
+}
+----
+
+==== sc_max_time
+[[api::sc_max_time]]
+
+((sc_max_time))用来返回SystemC内核的最大仿真时间：
+
+.src/sysc/kernel/sc_simcontext.cpp
+[source,cpp]
+----
+SC_API const sc_time&
+sc_max_time()
+{
+    return sc_get_curr_simcontext()->max_time();
+}
+----
+
+这个其实返回的是一个固定值，即当前SystemC仿真器内核能够支持的最大的仿真时间。sc_simcontext
+的max_time实现如下：
+
+.src/sysc/kernel/sc_simcontext.h
+[source,cpp]
+----
+inline
+const sc_time&
+sc_simcontext::max_time() const
+{
+    if ( m_max_time == SC_ZERO_TIME )
+    {
+        m_max_time = sc_time::from_value( ~sc_dt::UINT64_ZERO );
+    }
+    return m_max_time;
+}
+----
+
+==== sc_time_stamp
+[[api::sc_time_stamp]]
+
+((sc_time_stamp))返回当前的仿真时间：
+
+.src/sysc/kernel/sc_simcontext.cpp
+[source,cpp]
+----
+SC_API const sc_time&
+sc_time_stamp()
+{
+    return sc_get_curr_simcontext()->time_stamp();
+}
+----
+
+==== sc_simulation_time
+[[api::sc_simulation_time]]
+
+((sc_simulation_time))是一个废弃的API函数，应当使用 `sc_time_stamp`
+来代替：
+
+.src/sysc/kernel/sc_simcontext.cpp
+[source,cpp]
+----
+SC_API double
+sc_simulation_time()
+{
+    static bool warn_simulation_time=true;
+    if ( warn_simulation_time )
+    {
+        warn_simulation_time=false;
+        SC_REPORT_INFO(SC_ID_IEEE_1666_DEPRECATION_,
+	    "sc_simulation_time() is deprecated use sc_time_stamp()" );
+    }
+    return sc_get_curr_simcontext()->time_stamp().to_default_time_units();
+}
+----
+
+==== sc_defunct_process_function
+[[api::sc_defunct_process_function]]
+
+sc_defunct_process_function是一个占位函数，主要是为了防止被错误调用，所以实现里直接
+就是断言错误：
+
+.src/sysc/kernel/sc_simcontext.cpp
+[source,cpp]
+----
+SC_API void
+sc_defunct_process_function( sc_module* )
+{
+    // This function is pointed to by defunct sc_thread_process'es and
+    // sc_cthread_process'es. In a correctly constructed world, this
+    // function should never be called; hence the assert.
+    assert( false );
+    sc_assert( false );
+}
+----
+
+==== sc_find_event
+[[api::sc_find_event]]
+
+((sc_find_event))可以用来根据一个event的名字，从SystemC内核托管的所有event中找到
+这个event，并返回一个 `sc_object` 指针：
+
+.src/sysc/kernel/sc_simcontext.cpp
+[source,cpp]
+----
+SC_API sc_event* sc_find_event( const char* name )
+{
+    return sc_get_curr_simcontext()->get_object_manager()->find_event( name );
+}
+----
+
+SystemC中所有的event对象都由内核进行托管的，所以只要名字正确，必然能找到event对象。
+
+==== sc_find_object
+[[api::sc_find_object]]
+
+((sc_find_object)) 用来根据名字，从SystemC托管的对象列表中找到这个对象，并返回
+一个 `sc_object` 的指针：
+
+.src/sysc/kernel/sc_simcontext.cpp
+[source,cpp]
+----
+SC_API sc_object* sc_find_object( const char* name )
+{
+    return sc_get_curr_simcontext()->get_object_manager()->find_object( name );
+}
+----
+
+==== sc_is_unwinding
+[[api::sc_is_unwinding]]
+
+((sc_is_unwinding))用来表明当前的线程是否正在解调用栈过程中：
+
+.src/sysc/kernel/sc_simcontext.cpp
+[source,cpp]
+----
+SC_API bool sc_is_unwinding()
+{
+    return sc_get_current_process_handle().is_unwinding();
+}
+----
+
+==== sc_time_to_pending_activity
+[[api::sc_time_to_pending_activity]]
+
+((sc_time_to_pending_activity)) API函数实现有问题，目前的代码中没有返回
+任何时间信息：
+
+.src/sysc/kernel/sc_simcontext.h
+[source,cpp]
+----
+C_API sc_time
+sc_time_to_pending_activity
+  ( const sc_simcontext* simc_p = sc_get_curr_simcontext() );
+
+----
+
+==== sc_allow_process_control_corners
+[[api::sc_allow_process_control_corners]]
+
+((sc_allow_process_control_corners))是一个可以被设置的布尔值：
+
+.src/sysc/kernel/sc_simcontext.h
+[source,cpp]
+----
+// The following variable controls whether process control corners should
+// be considered errors or not. See sc_simcontext.cpp for details on what
+// happens if this value is set to true.
+
+extern SC_API bool sc_allow_process_control_corners;
+----
+
+根据代码里的注释，这个变量主要用来控制未定义行为时的sysc仿真器内核的行为：
+
+.src/sysc/kernel/sc_simcontext.cpp
+[source,cpp]
+----
+// The IEEE 1666 Standard for 2011 designates that the treatment of
+// certain process control interactions as being "implementation dependent".
+// These interactions are:
+//   (1) What happens when a resume() call is performed on a disabled,
+//       suspended process.
+//   (2) What happens when sync_reset_on() or sync_reset_off() is called
+//       on a suspended process.
+//   (3) What happens when the value specified in a reset_signal_is()
+//       call changes value while a process is suspended.
+//
+// By default this Proof of Concept implementation reports an error
+// for these interactions. However, the implementation also provides
+// a non-error treatment. The non-error treatment for the interactions is:
+//   (1) A resume() call performed on a disabled, suspended process will
+//       mark the process as no longer suspended, and if it is capable
+//       of execution (not waiting on any events) it will be placed on
+//       the queue of runnable processes. See the state diagram below.
+//   (2) A call to sync_reset_on() or sync_reset_off() will set or clear
+//       the synchronous reset flag. Whether the process is in reset or
+//       not will be determined when the process actually executes by
+//       looking at the flag's value at that time.
+//   (3) If a suspended process has a reset_signal_is() specification
+//       the value of the reset variable at the time of its next execution
+//       will determine whether it is in reset or not.
+//
+// TO GET THE NON-ERROR BEHAVIOR SET THE VARIABLE BELOW TO TRUE.
+//
+// This can be done in this source before you build the library, or you
+// can use an assignment as the first statement in your sc_main() function:
+//    sc_core::sc_allow_process_control_corners = true;
+
+bool sc_allow_process_control_corners = false;
+
+// The state transition diagram for the interaction of disable and suspend
+// when sc_allow_process_control_corners is true is shown below:
+//
+// ......................................................................
+// .         ENABLED                    .           DISABLED            .
+// .                                    .                               .
+// .                 +----------+    disable      +----------+          .
+// .   +------------>|          |-------.-------->|          |          .
+// .   |             | runnable |       .         | runnable |          .
+// .   |     +-------|          |<------.---------|          |------+   .
+// .   |     |       +----------+     enable      +----------+      |   .
+// .   |     |          |    ^          .            |    ^         |   .
+// .   |     |  suspend |    | resume   .    suspend |    | resume  |   .
+// .   |     |          V    |          .            V    |         |   .
+// .   |     |       +----------+    disable      +----------+      |   .
+// .   |     |       | suspend  |-------.-------->| suspend  |      |   .
+// . t |   r |       |          |       .         |          |      | r .
+// . r |   u |       |  ready   |<------.---------|  ready   |      | u .
+// . i |   n |       +----------+     enable      +----------+      | n .
+// . g |   / |         ^                .                           | / .
+// . g |   w |  trigger|                .                           | w .
+// . e |   a |         |                .                           | a .
+// . r |   i |       +----------+    disable      +----------+      | i .
+// .   |   t |       | suspend  |-------.-------->| suspend  |      | t .
+// .   |     |       |          |       .         |          |      |   .
+// .   |     |       | waiting  |<------.---------| waiting  |      |   .
+// .   |     |       +----------+     enable      +----------+      |   .
+// .   |     |          |    ^          .            |    ^         |   .
+// .   |     |  suspend |    | resume   .    suspend |    | resume  |   .
+// .   |     |          V    |          .            V    |         |   .
+// .   |     |       +----------+    disable      +----------+      |   .
+// .   |     +------>|          |-------.-------->|          |      |   .
+// .   |             | waiting  |       .         | waiting  |      |   .
+// .   +-------------|          |<------.---------|          |<-----+   .
+// .                 +----------+     enable      +----------+          .
+// .                                    .                               .
+// ......................................................................
+----
 
 === 总结
 
