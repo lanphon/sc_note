@@ -15,7 +15,7 @@ SystemC作为 {CPP} 语言写成的库，可以像其他HDL语言一样，描述
 
 我们这里以SystemC 2.3.3为例，尝试探索SystemC的内部细节。这应当可以覆盖之前SystemC版本的内容，并且原理和未来版本应该是相通的。
 
-==== 术语
+==== terminology
 
 对于SystemC而言， `sc_simcontext`
 数据结构实现了仿真器，我们一般提到simcontext的时候，指的都是实例化simcontext的唯一的一个全局仿真器实例，有时候我们也会用
@@ -34,10 +34,13 @@ typedef class sc_thread_process*  sc_thread_handle;
 
 ----
 
+sc_method_process和sc_thread_process统称为SystemC中的线程。如果需要区分，sc_method_process是method类型的线程，而
+sc_thread_process则是thread类型的线程。如果没有特殊说明，其他场合下所说的线程指的是操作系统级别的线程。sc_cthread_process
+属于sc_thread_process的派生类，不做单独区分。
 
 === 线程的类型
 
-SystemC中的线程概念，并不同于操作系统中的进程/线程概念。对于SystemC而言，所谓的线程，更多的类似于HDL语言中的一个`always@`模块。从概念上来讲，所有的线程都是并行运行的。而SystemC仿真器则使用了一系列包括Delta原理在内的技术，使用串行执行的{CPP}语言，来模拟这种并行行为。SystemC的线程之于SystemC的内核，恰恰等同于操作系统概念上的线程之于操作系统，这也是为何我们在SystemC中将这些并行运行的调度模块称之为线程的一个非常重要的原因。
+SystemC中的线程概念，并不同于操作系统中的进程/线程概念。对于SystemC而言，所谓的线程，更多的类似于HDL语言中的一个`always@`模块。从概念上来讲，所有的线程都是并行运行的。而SystemC仿真器则使用了一系列包括deltay cycle在内的技术，使用串行执行的{CPP}语言，来模拟这种并行行为。SystemC的线程之于SystemC的内核，恰恰等同于操作系统概念上的线程之于操作系统，这也是为何我们在SystemC中将这些并行运行的调度模块称之为线程的一个非常重要的原因。
 
 SystemC中一般分为三种线程（有时候也翻译为三种进程/process）：
 
@@ -68,6 +71,7 @@ Thread线程在SystemC中一般用来建模时序逻辑。相比于Method线程�
 
 仿真器使用一种协作式线程，即协程的方式，来调度所有注册的Thread线程（包括CThread线程）。在Thread线程实现内部，可以直接或者间接
 调用<<api::wait, wait>> 来让出执行权footnote:[实际上调用了<<api::suspend_me, suspend_me>>函数]，以使得其他Thread线程获得执行权。
+如果一个Thread线程没有让渡出执行权，而是始终执行自己本身的 `while(true){}` 循环，则仿真器卡死。
 
 CThread是Thread的一种特殊形式。在之后讨论中，如非必要，我们不会特意区分Thread或者Thread。当提及Thread的时候，除非特殊强调，否则这些讨论同样适用于CThread.
 
@@ -75,7 +79,7 @@ CThread是Thread的一种特殊形式。在之后讨论中，如非必要，我�
 
 在一个继承自 `sc_module` 的class实现中，我们需要在构造函数中使用 `SC_METHOD` 创建method
 线程，使用 `SC_THREAD` 创建thread线程，使用 `SC_CTHREAD` 创建cthread线程。这三个类似于
-函数的东西，其实是Systemc定义的宏。
+函数的东西，其实是SystemC定义的宏。
 
 ==== 创建METHOD线程
 [[api::SC_METHOD]]
@@ -112,21 +116,20 @@ CThread是Thread的一种特殊形式。在之后讨论中，如非必要，我�
 2. `#func` 扩展开来的一个字符串，例如 `AMethodTest` 生成一个 `"AMethodTest"` 的字符串
 3. `SC_CURRENT_USER_MODULE`  是在 `SC_HAS_PROCESS` 或者 `SC_CTOR`  中的一个 `typedef` ，为当前类的名字
 取的一个别名
-4. `func` 则是成员函数
+4. `func` 则是成员函数指针
 
 在 `declare_method_process` 里，首先调用 `simcontext` 的成员函数 `create_method_process` ，将参数都传递进去。注意这里有一个
-新的宏 `SC_MAKE_FUNC_PTR`  来包装成员函数到成员函数指针的cast过程：
-
-以下是成员函数形式的 `SC_MAKE_FUNC_PTR` 的定义：
+新的宏 `SC_MAKE_FUNC_PTR`  来包装成员函数到成员函数指针的cast过程。以下是成员函数形式的 `SC_MAKE_FUNC_PTR` 的定义：
 
 .src/sysc/kernel/sc_process.h
 [source,cpp]
 ----
-    typedef void (sc_process_host::*SC_ENTRY_FUNC)();
+    typedef void (sc_process_host::*SC_ENTRY_FUNC)(); <1>
 #   define SC_DECL_HELPER_STRUCT(callback_tag, func) /*EMPTY*/
 #   define SC_MAKE_FUNC_PTR(callback_tag, func) \
         static_cast<sc_core::SC_ENTRY_FUNC>(&callback_tag::func)
 ----
+<1> 这里cast能成功，是因为所有的sc_module都是sc_process_host的派生类
 
 如果编译器不支持成员函数形式，或者有其他理由无法使用，SystemC在 `sc_process.h` 里还提供了非成员函数形式的包装，这里我们就不再介绍了。
 
@@ -167,7 +170,8 @@ sc_sensitive::operator << ( sc_process_handle handle_ )
 `sensitive` 内的一个 `m_handle` 成员变量，同时设置了 `sensitive` 的模式，方便后续校验。从这种意义上来讲， `sensitive/sensitive_pos/sensitive_neg` 
 三个类似于一种语法糖设计。这也是为何一定要在 `SC_METHOD/SC_THREAD/SC_CTHREAD` 之后，立马就调用 `sensitive/sensitive_pos/sensitive_neg` 设置
 敏感信号的原因：如果这个时候不设置，之后的 `SC_METHOD/SC_THREAD/SC_CTHREAD` 会重置 `m_handle` ，而这里却没有返回 `process handle` 的地方可以
-重新设置回去（虽然的确可以用 `sc_get_current_process_handle` 保存下来刚刚创建的process handle后续使用）。
+重新设置回去（虽然的确可以用 
+<<api::sc_get_current_process_handle, `sc_get_current_process_handle`>> 保存下来刚刚创建的process handle后续使用）。
 
 
 那么，什么是 `sc_process_handle` 呢？这里我们摘录了 `sc_process_handle` 的部分代码：
@@ -211,6 +215,7 @@ class SC_API sc_process_handle {
 ===== 控制METHOD线程是否初始化
 [[api::dont_initialize]]
 
+(((dont_initialize)))
 默认情况下， `SC_METHOD`  所创建的METHOD线程会执行初始化，即在仿真器开始的零时刻，METHOD会被调度执行一次。为了控制是否执行
 初始化， `sc_module` 提供了成员函数 `dont_initialize()` 函数。
 
@@ -262,7 +267,7 @@ void sc_process_b::dont_initialize( bool dont )
 
 注意对于`sc_process_b`, `dont_initialize` 是一个虚函数。实际上无论是METHOD还是正常的THREAD线程而言，这个虚函数都没有被override。
 对于CTHREAD，这个虚函数被重写为一个WARNING了，这也就意味着， `dont_initialize` 只能应用于METHOD和正常的THREAD线程，而不能应用于
-CTHREAD现呈上，这也是这个 `dont_initialize` 函数被设计成为一个虚函数的原因所在了。
+CTHREAD线程上，这也是这个 `dont_initialize` 函数被设计成为一个虚函数的原因所在了。
 
 默认情况下， `SC_THREAD`  所创建的THREAD线程也会在仿真器开始的零时刻被调度（因此开始执行，从不返回）。我们这里同样可以使用
 `dont_initialize` 来控制是否执行初始化。
@@ -466,14 +471,14 @@ inline void sc_runnable::toggle_methods()
 某些事件，或者某些条件达成，需要调度新的线程，这些新加入的线程会被压入Push Queue中去，而不会
 影响本次delta cycle的执行。 这些新加入的线程会在下一个delta cycle开始的时候，被toggle_methods/toggle_threads函数从Push Queue挪到Pop Queue.
 
-==== Method的静态调度
+==== Method的静态敏感
 [[concept::method::static]]
 
-===== 设置Method线程的静态调度事件
+===== 设置Method线程的静态敏感事件
 
 使用 <<api::SC_METHOD, `SC_METHOD`>> 创建Method线程时，所创建线程的process handle会被<<function::sensitive_set_handle, 注册>>到sensitive中。之后
-我们可以使用 sensitive/sensitive_pos/sensitive_neg 来为Method线程设置调度事件。使用这种方式设置调度事件，称之为Method线程
-的**静态**调度。
+我们可以使用 sensitive/sensitive_pos/sensitive_neg 来为Method线程设置敏感事件。使用这种方式设置敏感事件，称之为Method线程
+的**静态**敏感事件。
 
 `sensitive::operator <<()` 函数可以接受四种重载形式：
 
@@ -486,6 +491,7 @@ inline void sc_runnable::toggle_methods()
     sc_sensitive& operator << ( sc_event_finder& );
 ----
 
+关于sc_sensitive更多的介绍参考<<data::sc_sensitive, sc_sensitive>>部分。
 我们这里主要关注第一种重载形式，即使用一个 `sc_event` 来作为Method的静态调度事件:
 
 .src/sysc/kernel/sc_sensitive.cpp
@@ -685,7 +691,7 @@ Method线程，其成员变量 `m_static_events` 内可以保存多个静态事�
 如果多个事件同时发生，这些事件都会调用 `trigger()` 成员函数，从而多次调用同一个
 Method线程的 `trigger_static()` 成员函数。当某一个事件调用了 Method线程的 `trigger_static()` 成功
 将Method线程加入到<<concept::push_queue>> 中，这也会同时设置Method线程的 `m_runnable_p` 指针，指向
-Runnable Push Queue中的下一个节点。当其他时间满足条件，从而调用Method线程的时候， 
+Runnable Push Queue中的下一个节点。当其他事件满足条件，从而调用Method线程的时候， 
 <<api::sc_method_process::trigger_static, `trigger_static()`>> 函数
 入口的 `is_runnable()` 则返回true，以防止同一个Method线程被多次加入到Runnable Push Queue中。
 
@@ -696,6 +702,7 @@ Runnable Push Queue中的下一个节点。当其他时间满足条件，从而�
 ==== Method的动态调度
 [[api::next_trigger]]
 
+(((next_trigger)))
 在Method内部，可以使用 `next_trigger` 注册下一次这个Method线程的调度时机。这种调度方式即为Method线程
 的**动态**调度。
 

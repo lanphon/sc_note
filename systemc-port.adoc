@@ -1437,7 +1437,7 @@ typedef sc_out<bool>   sc_out_clk;
 === event_finder
 [[api::sc_event_finder]]
 
-sc_event_finder数据结构的主要作用，就是为sc_port作为static sensitive源的时候，解决
+((sc_event_finder))数据结构的主要作用，就是为sc_port作为static sensitive源的时候，解决
 此时sc_port没有绑定具体的interface，因此无法指定sc_event的问题。sc_event_finder
 主要作用是提供一个占位符，能够在sc_port作为static sensitive的时候，设置一个未来要绑定
 的interface的成员函数，这个成员函数应当返回一个sc_event的指针。

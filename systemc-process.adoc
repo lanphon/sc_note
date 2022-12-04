@@ -484,7 +484,7 @@ static process列表中移除。最后将 `m_static_events` 清零。
 ===== remove_dynamic_events
 
 [[api::sc_process_b::remove_dynamic_events]]
-在process生命周期显式杯结束的时候，还需要清除动态敏感事件，因此有一个 `remove_dynamic_events`
+在process生命周期显式被结束的时候，还需要清除动态敏感事件，因此有一个 `remove_dynamic_events`
 的成员函数：
 
 .src/sysc/kernel/sc_process.cpp

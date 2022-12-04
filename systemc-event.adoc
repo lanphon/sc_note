@@ -347,7 +347,9 @@ wait/next_trigger调用时候参数类型是sc_event_and_list还是sc_event_or_l
 我们会深入系统地汇总下sc_event相关的内容。
 
 sc_event是个基础类，没有继承自其它类。这也就意味着sc_event并没有继承自sc_object，没有
-诸如hierarchy结构、框架回调函数等特性。
+诸如hierarchy结构、框架回调函数等特性。这也是为何，在
+API中，已经有了<<api::sc_find_object, sc_find_object>>的前提下，还需要
+单独提供<<api::sc_find_event, sc_find_event>>的原因了。
 
 ==== 成员变量
 
@@ -372,7 +374,7 @@ sc_event是个基础类，没有继承自其它类。这也就意味着sc_event�
     mutable std::vector<sc_thread_handle> m_threads_dynamic;
 ----
 
-对于一个sc_event而言，最为核心的是与之关联的process handle。这些process handle分为四类：
+对于一个sc_event而言，最为核心部分是与之关联的process handle。这些process handle分为四类：
 [[data::sc_event::process_handle]]
 
 1. 静态设置本事件为sensitive的method，存储在成员变量 `m_methods_static` 中
@@ -406,7 +408,8 @@ sc_event也可以是TIMED EVENT，即 `m_notify_type` 为 `TIMED` 。 TIMED EVEN
 ==== 构造和析构函数
 
 sc_event可以是空构造，也可以给定本事件的名字。对于sc_event而言，名字并非必须，
-可以为空。
+可以为空。如果构造的时候，没有给event名字，那么SystemC内核会自动给这个event
+起一个名字。
 
 除了普通构造和给定名字构造以外，sc_event还有一个PRIVATE的构造函数：
 [[concept::event::kernel_event]]
@@ -428,7 +431,8 @@ kernel event，这局限了这种构造函数的使用场景。对于kernel even
 在构造函数中，sc_event会调用成员函数 `register_event` 将自己注册到
 SystemC的内核中。这个注册动作主要是做一些hierarchy管理行为，例如将sc_event
 名字加入到名称管理系统中，将sc_event本身加入所属的父模块的child event列表中等动作。
-对于kernel event则不做这些，可以认为kernel event游离于SystemC管理普通
+对于kernel event则不做这些， footnote:[kernel event可以认为是由SystemC内核托管的]
+可以认为kernel event游离于SystemC管理普通
 sc_event的体系之外，这也是称之为kernel event的原因。
 [[api::sc_event::register_event]]
 
@@ -570,6 +574,7 @@ handle的成员变量一共有四个，所以每一组对应的成员函数也�
 ===== notify
 [[api::sc_event::notify]]
 
+(((sc_event, notify)))
 首先是notify。sc_event提供了多种notify方式，以满足不同的需求。
 
 第一种notify是不带任何参数的notify。这种notify的语义定义是，事件立刻发生。
@@ -772,6 +777,7 @@ sc_event::notify_next_delta()
 
 [[api::sc_event::trigger]]
 
+(((sc_event, trigger)))
 sc_event的trigger函数一般在<<phase::notification, NOTIFICATION>>阶段被调用，或者
 在一个crunch结束之后，下一个crunch开始之前被调用。
 
@@ -888,6 +894,7 @@ process加入到runnable列表中（thread/cthread可能设置多个cycle之后�
 ==== cancel and reset
 [[api::sc_event::cancel]]
 
+(((sc_event, cancel)))
 sc_event还提供了一个cancel的成员函数，这个成员函数可以在一个delta事件发生的之后，被调用
 trigger起作用之前，或者timed事件到达设定时间之前，将sc_event clear掉状态。
 

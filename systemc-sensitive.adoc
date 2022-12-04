@@ -71,6 +71,7 @@ SC_CHTERAD是一个clock驱动的THREAD，edge信息在创建的时候就已经�
 在取得process handle之后，sensitive主要的目标和用途就是如何获取与之关联的sc_event对象了。
 
 === sc_sensitive
+[[data::sc_sensitive]]
 
 sc_sensitive是个独立设计的类，没有继承自其他类。
 
@@ -127,7 +128,8 @@ sc_sensitive::operator << ( const sc_event& event_ )
 
 从中我们也可以看出，对于SC_METHOD和SC_THREAD而言，主要调用的就是process handle
 的add_static_event成员函数，而对于SC_CTHREAD而言，m_mode等同于SC_THREAD，因此
-被当做SC_THREAD来处理。
+被当做SC_THREAD来处理。具体的分析参考<<concept::method::static, Method的静态敏感>>
+部分的介绍。
 
 ==== sc_interface作为敏感源设置
 
@@ -166,6 +168,9 @@ sc_sensitive::operator << ( const sc_interface& interface_ )
 sc_signal，sc_fifo，sc_buffer, sc_clock等是sc_interface派生类，这些都可以借助这个函数，将
 default_event作为静态敏感源设置进来。
 
+如果需要自定义其他interface派生类，也应当实现default_event接口函数，方便将Interface派生类
+设置为SystemC线程的静态敏感事件。
+
 ==== sc_port_base作为敏感源设置
 
 如果将一个sc_port_base派生类作为敏感源设置进来，那么调用的则是这个函数：
@@ -201,7 +206,8 @@ sc_sensitive::operator << ( const sc_port_base& port_ )
 ----
 
 这里调用了sc_port_base的make_sensitive成员函数，将process handle，连同一个空的event_finder
-设置到port中。这个port在elaboration done阶段，被调用的complete_binding函数里：
+设置到port中。这个port在elaboration done阶段，被调用的
+<<api::sc_port_base::complete_binding, complete_binding>>函数里：
 [[usage::sc_port_base::complete_binding]]
 
 .src/sysc/communication/sc_port.cpp
@@ -228,15 +234,20 @@ sc_sensitive::operator << ( const sc_port_base& port_ )
 ----
 
 在这种情况下，这里的 `p->event_finder` 都为空。所以，实际上效果等同于设置这个
-sc_port_base未来所绑定的**所有**的sc_interface的default_event()返回的事件对象，
-作为静态敏感对象。
+sc_port_base未来所绑定的 **所有** 的sc_interface的 `default_event() `返回的事件对象，
+作为静态敏感对象。这些 `default_event()` 彼此之间是 *或* 的关系。
 
 sc_in, sc_out, sc_fifo_in, sc_fifo_out等都是sc_port_base的派生类，这些都可以借助
 这个函数，设置静态敏感源。
 
+之所以需要如此绕一圈来实现，是由于在module中使用某个port作为SystemC线程的静态敏感事件的时候，
+可能这个port还没有完成绑定，无法获取绑定后的interface相关联的事件对象。因此，SystemC设计了
+这种延迟绑定的方法，直到仿真开始钱的elaboration done阶段，确定port绑定了interface之后，才
+将与之关联的事件取出，用来为SystemC线程设置静态敏感源。
+
 ==== sc_event_finder作为敏感源设置
 
-如果将一个sc_event_finder派生类作为敏感源设置进来，那么调用的则是这个函数：
+如果将一个<<api::sc_event_finder, sc_event_finder>>派生类作为敏感源设置进来，那么调用的则是这个函数：
 
 .src/sysc/kernel/sc_sensitive.cpp
 [source,cpp]
