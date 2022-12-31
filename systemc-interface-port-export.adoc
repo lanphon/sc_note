@@ -9,7 +9,7 @@
 
 在<<chap::misc, SystemC中的其他组件和用例分析>>中，我们从源代码层次介绍了
 <<data::sc_interface, sc_core::sc_interface>>，并且在
-<<chap::port_and_export, SystemC中的Port和Export>>部分花了一章从
+<<chap::port_and_export, SystemC中的Port和Export>>部分用了一章从
 源代码层次介绍<<data::sc_port, sc_core::sc_port>>和
 <<data::sc_export, sc_core::sc_export>>。这些部分的介绍，主要集中在具体的实现细节上，而缺少
 对背后的SystemC的设计思想的思考，在本章，我们将尝试从设计意图等方面，重新审视一下SystemC下的
@@ -99,7 +99,7 @@ class sc_fifo
 ==== interface的使用
 
 对于广泛意义上的interface，在SystemC中一般需要配合primitive channel来使用，这是因为
-primitive channel提供了primitive通信的能力，同时需要使用interface讲这种通信的能力
+primitive channel提供了primitive通信的能力，同时需要使用interface将这种通信的能力
 抽象出来（例如FIFO的blocking/non-blocking访问，就是同一个FIFO实现的不同interface能力）。
 
 在SystemC建模的过程中，线程之间的通信最好使用primitive channel，避免使用原生的C++数据结构（例如

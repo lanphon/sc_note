@@ -462,6 +462,178 @@ sc_cor_pkg_qt::get_main()
 为全零的数据（不初始化也行），然后在第一次，主线程作为一个协程将控制权交给另一个协程的时候，main_cor中就会被qt的
 协程切换部分填入主协程（就是主线程）恢复执行时候的信息了。
 
+==== 调用栈的创建和销毁
+
+在基于Quickthreads的SystemC实现中，创建一个协程context的方式如下：
+
+.src/sysc/kernel/sc_cor_qt.cpp
+[source,cpp]
+----
+sc_cor*
+sc_cor_pkg_qt::create( std::size_t stack_size, sc_cor_fn* fn, void* arg )
+{
+    sc_cor_qt* cor = new sc_cor_qt();
+    cor->m_pkg = this;
+    cor->m_stack_size = stack_size;
+
+    void* aligned_sp = stack_alloc( &cor->m_stack, &cor->m_stack_size ); <1>
+    if( aligned_sp == NULL )
+    {
+        SC_REPORT_ERROR( SC_ID_STACK_SETUP_FAILED_
+                       , "failed to allocate stack memory" );
+        sc_abort();
+    }
+    cor->m_sp = QUICKTHREADS_SP( aligned_sp, cor->m_stack_size ); <2>
+    cor->m_sp = QUICKTHREADS_ARGS( cor->m_sp, arg, cor, (qt_userf_t*) fn,
+                                   sc_cor_qt_wrapper ); <2>
+    return cor;
+}
+----
+<1> 调用stack_alloc，分配协程运行所需要的栈
+<2> 将所需要运行的函数设置到协程栈内
+
+其中，这里使用了stack_alloc函数，用来分配协程所需要的调用栈。stack_alloc的实现如下：
+
+.src/sysc/kernel/sc_cor_qt.cpp
+[source,cpp]
+----
+// allocate aligned stack memory
+static inline void*
+stack_alloc( void** buf, std::size_t* stack_size )
+{
+    const std::size_t alignment     = sc_pagesize();
+    const std::size_t round_up_mask = alignment - 1;
+    sc_assert( 0 == ( alignment & round_up_mask ) ); // power of 2
+    sc_assert( buf );
+
+    // round up to multiple of alignment
+    *stack_size = (*stack_size + round_up_mask) & ~round_up_mask;
+
+#ifdef SC_HAVE_POSIX_MEMALIGN
+    if( 0 != posix_memalign( buf, alignment, *stack_size ) ) {
+        *buf = NULL; // allocation failed
+    }
+    return *buf;
+#else
+    *buf = std::malloc( *stack_size );
+    std::size_t sp_addr = reinterpret_cast<std::size_t>( *buf );
+    if( sp_addr & round_up_mask ) // misaligned allocation
+    {
+        sc_assert( *stack_size > (alignment * 2) );
+        sp_addr = (sp_addr + round_up_mask) & ~round_up_mask;
+        *stack_size -= alignment;
+    }
+    return reinterpret_cast<void*>( sp_addr );
+#endif
+}
+----
+
+从stack_alloc时限可以看出，这个函数主要用来分配协程的调用栈空间，并且需要保持一定的对齐条件。对齐约束
+可以使用 `posix_memalign` 直接分配获得，或者使用先分配大的内存空间，然后手动对齐的方式获取。如果支持
+最新的C++17特性，可以使用std::aligned_alloc来达到相同的目的，参考https://en.cppreference.com/w/cpp/memory/c/aligned_alloc
+部分的介绍。
+
+---
+
+SystemC的协程栈有一定的深度，为了在栈爆掉的时候，显式抛出错误，而不是默默跑飞，Quickthreads的协程
+方案提供了一个栈保护的功能：
+
+.src/sysc/kernel/sc_cor_qt.cpp
+[source,cpp]
+----
+// switch stack protection on/off
+
+void
+sc_cor_qt::stack_protect( bool enable )
+{
+    // Code needs to be tested on HP-UX and disabled if it doesn't work there
+    // Code still needs to be ported to WIN32
+
+    const std::size_t pagesize = sc_pagesize();
+    sc_assert( m_stack_size > ( 2 * pagesize ) );
+
+    std::size_t sp_addr = reinterpret_cast<std::size_t>(m_stack);
+#ifndef SC_HAVE_POSIX_MEMALIGN
+    const std::size_t round_up_mask = pagesize - 1;
+    if( sp_addr & round_up_mask ) { // misaligned allocation
+        sp_addr = (sp_addr + round_up_mask) & ~round_up_mask;
+    }
+#endif // SC_HAVE_POSIX_MEMALIGN
+
+#ifdef QUICKTHREADS_GROW_DOWN
+    // Stacks grow from high address down to low address
+    caddr_t redzone = caddr_t( sp_addr );
+#else
+    // Stacks grow from low address up to high address
+    caddr_t redzone = caddr_t( sp_addr + m_stack_size - pagesize );
+#endif
+
+    int ret;
+
+    // Enable the red zone at the end of the stack so that references within
+    // it will cause an interrupt.
+
+    if( enable ) {
+        ret = mprotect( redzone, pagesize - 1, PROT_NONE ); <1>
+    }
+
+    // Revert the red zone to normal memory usage.
+
+    else {
+        ret = mprotect( redzone, pagesize - 1, PROT_READ | PROT_WRITE );
+    }
+
+    if( ret != 0 ) // ignore mprotect error with warning
+    {
+        static bool mprotect_fail_warned_once = false;
+        if( mprotect_fail_warned_once == false )
+        {
+            mprotect_fail_warned_once = true;
+
+            int mprotect_errno = errno;
+            std::stringstream sstr;
+            sstr << "unsuccessful stack protection ignored: "
+                 << std::strerror(mprotect_errno)
+                 << ", address=0x" << std::hex << redzone
+                 << ", enable=" << std::boolalpha << enable;
+
+            SC_REPORT_WARNING( SC_ID_STACK_SETUP_FAILED_
+                             , sstr.str().c_str() );
+        }
+    }
+}
+----
+<1> 将redzone设置为不允许读写
+
+栈保护功能通过((stack_protect))函数实现。主要思想是，将栈最后一部分空间设置为特定的属性，这样
+当用户栈爆掉，踩到这部分保护的空间时，就可以由系统抛出中断，从而提示用户栈空间爆掉了。
+
+---
+
+当协程不再使用的时候，析构函数中，使用 `std::free` 释放了分配出来的协程调用栈空间：
+
+.src/sysc/kernel/sc_cor_qt.cpp
+[source,cpp]
+----
+sc_cor_qt::~sc_cor_qt()
+{
+    std::free( m_stack );
+}
+----
+
+此时没有做任何的栈unwinding操作。
+
+注意，SystemC中，调用栈的创建和销毁都是由SystemC内部，通过申请 *堆* 上内存的方式完成的。这意味着，如果在SystemC
+thread线程内部，栈上分配的临时变量只会释放占用的空间，而不会触发任何副作用。例如，如果有一个shared_ptr变量，
+那么在SystemC退出的时候，这个shared_ptr指向的对象的引用并不会自动减一，因为无法做到自动的释放。这样一来，
+SystemC配合智能指针使用的时候，基本上必然伴随着内存泄漏。这些内存泄漏普遍发生在SystemC执行完毕退出的时候，从
+这层来看，也是可以忍受的。
+
+[NOTE]
+====
+在最新的SystemC 2.3.4版本中，SystemC优先使用mmap函数来分配quickthread所需要的栈空间。
+====
+
 === 总结 
 
 本片文章主要分析了SystemC所使用的一种协程库quickthread的设计，基于x86_64平台分析了具体的实现，

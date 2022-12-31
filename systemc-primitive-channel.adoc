@@ -1038,7 +1038,8 @@ post操作是一个非阻塞的操作，获得锁之后，将value值加一，�
 
 SystemC的primitive channel框架不仅仅有同步部分，还存在异步部分。所谓的同步，指的是
 所有的事件或对象等都在Systemc内部发生。而异步，就意味着可能有来自于SystemC托管
-之外的事件发生，来和SystemC内部的对象事件等进行交互。
+之外的事件发生，来和SystemC内部的对象事件等进行交互。SystemC从版本2.3.2开始，正式
+支持异步框架。2.3.2版本以前的SystemC，异步框架只是实验性质，并不成熟。
 
 我们在
 <<api::sc_prim_channel_registry::perform_update, `sc_prim_channel_registry::perform_update()`>>
@@ -1050,12 +1051,17 @@ SystemC的primitive channel框架不仅仅有同步部分，还存在异步部�
 
 * `async_request_update`, public成员函数，这是异步API最核心的一个，相当于同步版本的 `request_update`
 只不过调用来源来自异步的OS线程，因此不能保证在EVALUATE PHASE调用
-* `async_attach_suspending`
-* `async_detach_suspending`
+* `async_attach_suspending`，用来将一个primitive channel继承类附加到SystemC仿真内核上，这样即使SystemC
+内部没有timed event，或者starve的时候，也不会退出，因为async的primitive channel可能会有数据到来
+* `async_detach_suspending`，作用和async_attach_suspending相反，将一个primitive channel继承类从SystemC
+仿真内核上移除，这样SystemC就不再对这个primitive channel特殊处理
+
+CAUTION: 即使是一个被detach suspending的async primitive channel，SystemC内核也能正常处理这个数据的请求，只不过
+在SystemC进入starve状态的时候，不再考虑这些detach suspending的async primitive channel而已。
 
 这三个API都是通过调度registry的同名API来完成的。第一个API是最为广泛使用的，我们这了
 主要讨论这个API。 `async_attach_suspending` 和 `async_detach_suspending`
-主要和异步阻塞有关，后续我们有空再讨论。
+主要和异步阻塞，防止SystemC内核提前结束仿真有关，我们后续会详细介绍具体的工作机制。
 
 ==== async_update_list
 [[data::async_update_list]]
