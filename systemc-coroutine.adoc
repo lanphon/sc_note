@@ -378,4 +378,4 @@ sc_simcontext::next_cor()
 * 其他类型的异常，结束此协程
 * semantic自己返回，结束此协程
 
-在仿真结束时，所有分配出来的资源都会释放掉。
+在仿真结束时，所有分配出来的资源都会释放掉。systemc-quickthread.adoc

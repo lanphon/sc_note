@@ -76,7 +76,7 @@ sc_port_registry和sc_port的关系，就像sc_prim_channel_registry和sc_prim_c
 [[api::sc_port_base]]
 [[data::sc_port_base]]
 
-sc_port_base是一个继承自sc_object的接口类，并且不是一个模板类，所以sc_port_base是不包括
+sc_port_base是一个继承自<<data::sc_object, sc_object>>的接口类，并且不是一个模板类，所以sc_port_base是不包括
 任何模板信息的。这么设计的原因，是为了保证在一些需要使用sc_port的场合，可以直接将参数设置为
 `sc_port_base*` ，这样就可以使用接口类定义的接口函数，而无需提供模板参数了。
 

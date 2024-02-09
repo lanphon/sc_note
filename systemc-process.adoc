@@ -35,7 +35,7 @@ sc_process_b 作为一个接口类，不只是简单定义了接口函数，而�
 
 ==== 成员变量
 
-sc_process_b 继承自 `sc_object` ，除了继承得到的成员变量以外，sc_process_b还
+sc_process_b 继承自 <<data::sc_object, sc_object>> ，除了继承得到的成员变量以外，sc_process_b还
 增加了非常丰富的成员变量，以支持process这一概念：
 
 .src/sysc/kernel/sc_process.h
@@ -1469,7 +1469,7 @@ Process中有一套非常复杂的reset机制，来仿真模拟实际的RTL rese
 ==== reset设置流程
 
 [[api::sc_module::async_reset_signal_is]]
-sc_module提供了如下几组API，用来实现process的reset逻辑指定：
+<<data::sc_module, sc_module>>提供了如下几组API，用来实现process的reset逻辑指定：
 
 [[api::sc_module::reset_signal_is]]
 .src/sysc/kernel/sc_module.h
@@ -3444,7 +3444,8 @@ m_next_posedge_event和m_next_negedge_event谁先发生，取决于sc_clock初�
     }
 ----
 
-sc_clock虽然只是一个sc_signal，但是借助sc_spawn，获得了类似于sc_module
+sc_clock虽然只是一个sc_signal，但是借助sc_spawn，获得了类似于
+<<data::sc_module, sc_module>>
 这样的能够创建单独线程的能力，这就实现了sc_clock的自激励特性。
 
 ==== sc_bind, sc_ref和sc_cref

@@ -775,7 +775,8 @@ sc_phase_callback_registry::register_callback( cb_type& cb, mask_type m )
 
 ---
 
-sc_phase_callback_registry的register_callback只在sc_object的register_simulation_phase_callback
+sc_phase_callback_registry的register_callback只在sc_object的
+<<api::sc_object::register_simulation_phase_callback, register_simulation_phase_callback>>
 中得到调用：
 
 .src/sysc/kernel/sc_object.cpp
@@ -794,7 +795,7 @@ sc_object::register_simulation_phase_callback( phase_cb_mask mask )
 特定阶段的回调函数了。
 
 ==== unregister_callback
-[[data::sc_phase_callback_registry::unregister_callback]]
+[[api::sc_phase_callback_registry::unregister_callback]]
 
 与register_callback相对应，sc_phase_callback_registry也提供了一个
 unregister_callback的实现：
@@ -839,7 +840,9 @@ sc_phase_callback_registry::unregister_callback( cb_type& cb, mask_type m )
 }
 ----
 
-unregister_callback的实现与register_callback基本一致。
+unregister_callback的实现与register_callback基本一致，同样
+也只在<<api::sc_object::unregister_simulation_phase_callback, unregister_simulation_phase_callback>>
+中使用。
 
 ==== update_done
 [[data::sc_phase_callback_registry::update_done]]

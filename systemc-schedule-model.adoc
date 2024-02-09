@@ -77,7 +77,7 @@ CThread是Thread的一种特殊形式。在之后讨论中，如非必要，我�
 
 === 线程的创建
 
-在一个继承自 `sc_module` 的class实现中，我们需要在构造函数中使用 `SC_METHOD` 创建method
+在一个继承自 <<data::sc_module, sc_module>> 的class实现中，我们需要在构造函数中使用 `SC_METHOD` 创建method
 线程，使用 `SC_THREAD` 创建thread线程，使用 `SC_CTHREAD` 创建cthread线程。这三个类似于
 函数的东西，其实是SystemC定义的宏。
 
@@ -129,7 +129,7 @@ CThread是Thread的一种特殊形式。在之后讨论中，如非必要，我�
 #   define SC_MAKE_FUNC_PTR(callback_tag, func) \
         static_cast<sc_core::SC_ENTRY_FUNC>(&callback_tag::func)
 ----
-<1> 这里cast能成功，是因为所有的sc_module都是sc_process_host的派生类
+<1> 这里cast能成功，是因为所有的sc_module都是<<data::sc_process_host, sc_process_host>>的派生类
 
 如果编译器不支持成员函数形式，或者有其他理由无法使用，SystemC在 `sc_process.h` 里还提供了非成员函数形式的包装，这里我们就不再介绍了。
 
@@ -217,7 +217,7 @@ class SC_API sc_process_handle {
 
 (((dont_initialize)))
 默认情况下， `SC_METHOD`  所创建的METHOD线程会执行初始化，即在仿真器开始的零时刻，METHOD会被调度执行一次。为了控制是否执行
-初始化， `sc_module` 提供了成员函数 `dont_initialize()` 函数。
+初始化， <<data::sc_module, sc_module>> 提供了成员函数 `dont_initialize()` 函数。
 
 .src/sysc/kernel/sc_module.cpp
 [source,cpp]
@@ -2061,6 +2061,10 @@ sc_gen_unique_name( const char* basename_, bool preserve_first )
 
 其中参数 `preserve_first` 默认值为 false。
 
+首先获取当前模块的指针，如果对象位于模块内，那么这个指针应该有效。
+如果当前模块指针为空，那么尝试获取当前process的指针，如果对象位于process下，那么这个process指针应该有效。
+如果所创建的对象既不在module下，也不再process下，那么就直接在
+仿真器内核下调用simc的gen_unique_name。
 
 ==== sc_get_current_process_handle
 [[api::sc_get_current_process_handle]]

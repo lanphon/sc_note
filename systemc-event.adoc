@@ -346,7 +346,7 @@ wait/next_trigger调用时候参数类型是sc_event_and_list还是sc_event_or_l
 在<<chap::schedule_model, 调度模型>>一章，我们已经看到了((sc_event))数据结构所扮演的重要角色。本部分
 我们会深入系统地汇总下sc_event相关的内容。
 
-sc_event是个基础类，没有继承自其它类。这也就意味着sc_event并没有继承自sc_object，没有
+sc_event是个基础类，没有继承自其它类。这也就意味着sc_event并没有继承自<<data::sc_object, sc_object>>，没有
 诸如hierarchy结构、框架回调函数等特性。这也是为何，在
 API中，已经有了<<api::sc_find_object, sc_find_object>>的前提下，还需要
 单独提供<<api::sc_find_event, sc_find_event>>的原因了。
@@ -425,14 +425,18 @@ private:
 这个构造函数主要用来创建SystemC仿真器内部的事件，以及一些数据结构的内置事件对象。例如
 sc_fifo中的write event和read event都属于使用这种方式创建的kernel event。
 这个构造函数被标记为PRIVATE，因此只有sc_event的友元类才可以访问这个函数，创建
-kernel event，这局限了这种构造函数的使用场景。对于kernel event，我们只需要
-了解即可。
+((kernel event))，这局限了这种构造函数的使用场景。对于kernel event，我们只需要
+了解即可。这里的((kernel_tag))是一个用来表示区分普通event和kernel event的类型标记，因此
+只需要类型信息，而无需更加详细的类型定义。
+
+''''
 
 在构造函数中，sc_event会调用成员函数 `register_event` 将自己注册到
 SystemC的内核中。这个注册动作主要是做一些hierarchy管理行为，例如将sc_event
-名字加入到名称管理系统中，将sc_event本身加入所属的父模块的child event列表中等动作。
+名字加入到名称管理系统中，将sc_event本身加入所属的父对象的
+<<api::sc_object::add_child_event, child event>>列表中等动作。
 对于kernel event则不做这些， footnote:[kernel event可以认为是由SystemC内核托管的]
-可以认为kernel event游离于SystemC管理普通
+kernel event游离于SystemC管理普通
 sc_event的体系之外，这也是称之为kernel event的原因。
 [[api::sc_event::register_event]]
 

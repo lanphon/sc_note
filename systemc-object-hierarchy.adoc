@@ -1,0 +1,909 @@
+:source-highlighter: coderay
+
+:toc: left
+
+SystemC中的对象模型体系
+[[chap::object_hierarchy]]
+
+=== sc_object
+[[data::sc_object]]
+
+((sc_object))，是systemc中绝大多数对象的基类。对于经常使用的sc_module, sc_fifo等，都是派生自sc_object的。比较特殊的是
+<<data::sc_event, sc_event>>，并不属于sc_object的派生对象。
+以下是几种非常常见的sc_object的派生类：
+
+* <<data::sc_module, sc_module>>
+* <<data::sc_prim_channel, sc_prim_channel>>
+* <<data::sc_process_b, sc_process_b>>
+* <<api::sc_port_base, sc_port_base>>
+* <<data::sc_semaphore, sc_semaphore>>
+* <<data::sc_vector_base, sc_vector_base>>
+
+.src/sysc/kernel/sc_object.h
+[source,cpp]
+----
+class SC_API sc_object 
+{
+    friend class sc_event;
+    friend class sc_module;
+    friend struct sc_invoke_method;
+    friend class sc_module_dynalloc_list;
+    friend class sc_object_manager;
+    friend class sc_phase_callback_registry;
+    friend class sc_process_b;
+    friend class sc_runnable;
+    friend class sc_simcontext;
+    friend class sc_trace_file_base;
+    // blablabla
+};
+----
+
+sc_object并不派生自任何其他类，如上所示。此外，sc_object还定义了一堆友元类，这意味着这些友元类可以直接访问sc_object的受保护
+的成员函数或者变量。
+
+sc_object的成员变量包括以下几个：
+
+.src/sysc/kernel/sc_object.h
+[source,cpp]
+----
+    /* Each simulation object is associated with a simulation context */ 
+    mutable sc_attr_cltn*   m_attr_cltn_p;   // attributes for this object.
+    std::vector<sc_event*>  m_child_events;  // list of child events.
+    std::vector<sc_object*> m_child_objects; // list of child objects.
+    std::string             m_name;          // name of this object.
+    sc_object*              m_parent;        // parent for this object.
+    sc_simcontext*          m_simc;          // simcontext ptr / empty indicator
+----
+
+一个是`sc_attr_cltn`类型的成员变量m_attr_cltn_p，注意这个成员变量是mutable的，其作用是用来保存对象本身的属性信息，这个我们会在
+<<data::sc_attr_cltn, object的attribute>>部分作进一步的探索。目前唯一值得注意的是，这是每个对象（而非每种对象）都拥有一个的。
+
+然后是两个数组，分别保存了子事件和子对象。如前所述，sc_event并不属于sc_object的派生类，所以无法和其他子对象一起保存在sc_object*数组中，
+而是需要一个单独的数组m_child_events来保存。对象的名字保存在字符串类型的m_name里，而本对象的父对象则保存作为m_parent。最后，仿真器的
+指针同样保存到m_simc中。
+
+==== sc_object的构造函数
+
+对于一个sc_object而言，其拥有指向父对象的指针m_parent，以及其所有可能的子对象的指针m_child_objects。这样一来，systemc中所有的对象就构成
+了一种树状结构。关于树状结构的维护，主要由sc_object的构造函数完成：
+
+.src/sysc/kernel/sc_object.cpp
+[source,cpp]
+----
+sc_object::sc_object() : 
+    m_attr_cltn_p(0), m_child_events(), m_child_objects(), m_name(),
+    m_parent(0), m_simc(0)
+{
+    sc_object_init( sc_gen_unique_name("object") );
+}
+
+sc_object::sc_object( const sc_object& that ) : 
+    m_attr_cltn_p(0), m_child_events(), m_child_objects(), m_name(),
+    m_parent(0), m_simc(0)
+{
+    sc_object_init( sc_gen_unique_name( that.basename() ) );
+}
+----
+
+空构造或者拷贝构造的sc_object，其需要调用sc_object_init，并且提供一个由<<api::sc_gen_unique_name, sc_gen_unique name>>
+所生成的对象名称。以下是sc_object_init的实现：
+[[api::sc_object::sc_object_init]]
+
+.src/sysc/kernel/sc_object.cpp
+[source,cpp]
+----
+void 
+sc_object::sc_object_init(const char* nm) 
+{ 
+    // SET UP POINTERS TO OBJECT MANAGER, PARENT, AND SIMULATION CONTEXT: 
+    //
+    // Make the current simcontext the simcontext for this object 
+
+    m_simc = sc_get_curr_simcontext(); 
+    m_attr_cltn_p = 0; 
+    sc_object_manager* object_manager = m_simc->get_object_manager(); <1>
+    m_parent = m_simc->active_object(); <2>
+
+    // CONSTRUCT PATHNAME TO OBJECT BEING CREATED: 
+
+    sc_assert( nm );
+    m_name = object_manager->create_name(nm); <3>
+
+
+    // PLACE THE OBJECT INTO THE HIERARCHY
+
+    object_manager->insert_object(m_name, this);
+    if ( m_parent )
+        m_parent->add_child_object( this );
+    else
+        m_simc->add_child_object( this ); <4>
+} 
+----
+<1> 主要实现功能是systemc内核所维护的一个object manager对象
+<2> 父对象就是systemc内核所维护的active object
+<3> 真正的名字需要由object manager通过create_name提供
+<4> 如果不存在父对象，说明这个对象是仿真器第一个创建的对象，那么就将其作为仿真器的子对象插入进去
+
+从上述代码可以看出，当一个sc_object本身被创建出来的时候，构造函数就为其设定好了内核仿真器的指针m_simc，
+设定m_attr_cltn_p为空指针，以及设定了其父对象指针m_parent，并且将本对象调用父对象的
+add_child_object方法，加入到父对象的子对象列表中。对象的名字也由object manager提供出来，注意
+sc_object_init成员函数的入参只是子节点的名称，完整名称需要调用Object mananger的<<api::sc_object_manager::create_name, create_name>>
+来获取。
+
+如果sc_object构造的时候提供了自己的名字，那么相应的构造函数就需要对这个名字做校验：
+
+.src/sysc/kernel/sc_object.cpp
+[source,cpp]
+----
+sc_object::sc_object(const char* nm) : 
+    m_attr_cltn_p(0), m_child_events(), m_child_objects(), m_name(),
+    m_parent(0), m_simc(0)
+{
+    int namebuf_alloc = 0;
+    char* namebuf = 0;
+    const char* p;
+
+    // null name or "" uses machine generated name.
+    
+    if ( !nm || !*nm )
+        nm = sc_gen_unique_name("object");
+    p = nm;
+
+    if (nm && sc_enable_name_checking) {
+        namebuf_alloc = 1 + std::strlen(nm);
+        namebuf = (char*) sc_mempool::allocate(namebuf_alloc);
+        char* q = namebuf;
+        const char* r = nm;
+        bool has_illegal_char = false;
+        while (*r) {
+            if (object_name_illegal_char(*r)) {
+                has_illegal_char = true;
+                *q = '_';
+            } else {
+                *q = *r;
+            }
+            r++;
+            q++;
+        }
+        *q = '\0';
+        p = namebuf;
+        if (has_illegal_char)
+	{
+	    std::string message = nm;
+	    message += " substituted by ";
+	    message += namebuf;
+            SC_REPORT_WARNING( SC_ID_ILLEGAL_CHARACTERS_, message.c_str());
+	}
+    }
+    sc_object_init(p);
+    sc_mempool::release( namebuf, namebuf_alloc );
+}
+
+static bool
+object_name_illegal_char(char ch)
+{
+    return (ch == SC_HIERARCHY_CHAR) || std::isspace(ch); <1>
+}
+----
+<1> 名字中的非法字符包括对象分隔符"."以及空白字符，这些都不能作为对象名字的一部分
+
+如果所传递的名字是空指针，或者不是空指针但是长度为零，那么同样用sc_gen_unique_name产生一个名字。之后，对于用户自定义的
+名字，挨个检查每个字符，对于非法的字符，将其替换为下划线，然后用这个生成的名字调用sc_object_init来创建对象。
+
+==== sc_object attributes
+
+sc_object实现了一个属性管理机制，主要由add_attribute, get_attribute, remove_attribute等接口函数组成。
+
+add_attribute如下：
+[[api::sc_object::add_attribute]]
+
+.src/sysc/kernel/sc_object.cpp
+[source,cpp]
+----
+bool
+sc_object::add_attribute( sc_attr_base& attribute_ )
+{
+    if ( !m_attr_cltn_p ) m_attr_cltn_p = new sc_attr_cltn;
+    return ( m_attr_cltn_p->push_back( &attribute_ ) );
+}
+----
+
+add_attribute只能接受一个<<data::sc_attr_base, sc_attr_base>>类型的引用
+作为输入。如果对象本身的m_attr_cltn_p为空，即没有属性管理对象，那么就新建一个属性管理对象。这是因为对于
+绝大多数的sc_object，并不需要有属性信息，因而也就不用为每个sc_object创建属性管理对象，否则这会带来
+很大的空间浪费。接下来，调用属性管理对象的push_back，将属性的引用放入。
+
+get_attribute则提供了两个版本的重载形式，分别对应于non-const和const类型的sc_object:
+[[api::sc_object::get_attribute]]
+
+.src/sysc/kernel/sc_object.cpp
+[source,cpp]
+----
+sc_attr_base*
+sc_object::get_attribute( const std::string& name_ )
+{
+    if ( !m_attr_cltn_p ) m_attr_cltn_p = new sc_attr_cltn;
+    return ( (*m_attr_cltn_p)[name_] );
+}
+
+const sc_attr_base*
+sc_object::get_attribute( const std::string& name_ ) const
+{
+    if ( !m_attr_cltn_p ) m_attr_cltn_p = new sc_attr_cltn;
+    return ( (*m_attr_cltn_p)[name_] );
+}
+----
+
+注意，get_attribute的参数不再是sc_attr_base类型，而是一个字符串类型了。这个函数返回的是一个sc_attr_base指针，其主要
+调用了属性管理成员m_attr_cln_p的`operator []`而已。
+
+remove_attribute则用来从可能的属性中移除一个特定的属性：
+[[api::sc_object::remove_attribute]]
+
+.src/sysc/kernel/sc_object.cpp
+[source,cpp]
+----
+sc_attr_base*
+sc_object::remove_attribute( const std::string& name_ )
+{
+    if ( m_attr_cltn_p )
+	return ( m_attr_cltn_p->remove( name_ ) );
+    else
+	return 0;
+}
+----
+
+其参数也是字符串类型，并且返回一个sc_attr_base对象。
+
+除了上述三个用来作为属性插入、查询和删除的操作意外，sc_object还定义了如下几个属性相关的接口函数：
+
+* [[api::sc_object::remove_all_attributes]]remove_all_attributes移除所有可能的属性
+* [[api::sc_object::num_attributes]]num_attributes返回属性的个数
+* [[api::sc_object::attr_cltn]]attr_cltn返回属性控制成员变量
+
+这三个函数的定义实现都非常简单，参考下属代码：
+
+.src/sysc/kernel/sc_object.cpp
+[source,cpp]
+----
+void
+sc_object::remove_all_attributes()
+{
+    if ( m_attr_cltn_p )
+	m_attr_cltn_p->remove_all();
+}
+
+
+// get the number of attributes
+
+int
+sc_object::num_attributes() const
+{
+    if ( m_attr_cltn_p )
+	return ( m_attr_cltn_p->size() );
+    else
+	return 0;
+}
+
+
+// get the attribute collection
+
+sc_attr_cltn&
+sc_object::attr_cltn()
+{
+    if ( !m_attr_cltn_p ) m_attr_cltn_p = new sc_attr_cltn;
+    return *m_attr_cltn_p;
+}
+
+const sc_attr_cltn&
+sc_object::attr_cltn() const
+{
+    if ( !m_attr_cltn_p ) m_attr_cltn_p = new sc_attr_cltn;
+    return *m_attr_cltn_p;
+}
+----
+
+==== sc_object的子对象和子事件管理
+
+sc_object提供了一系列的接口函数，用来管理一个sc对象内部的子对象或者子事件。子对象指的是直接创建在
+本对象内部的对象，例如一个module内部的fifo, process属于这个module的子对象，而一个process内部
+使用的fifo等属于process的子对象（而不是module的子对象）.
+
+.src/sysc/kernel/sc_object.h
+[source,cpp]
+----
+    virtual const std::vector<sc_event*>& get_child_events() const
+        { return m_child_events; }
+
+    virtual const std::vector<sc_object*>& get_child_objects() const
+        { return m_child_objects; }
+
+    sc_object* get_parent() const;
+    sc_object* get_parent_object() const { return m_parent; }
+----
+
+[[api::sc_object::get_child_events]]get_child_event和[[api::sc_object::get_child_objects]]get_child_objects
+可以用来返回子事件和子对象列表。这两个接口函数是public的。
+[[api::sc_object::get_parent]]get_parent则是一个废弃的api，被[[api::sc_object::get_parent_object]]get_parent_object
+代替，用来返回本对象的父对象。
+
+[[api::sc_object::add_child_object]]add_child_object, [[api::sc_object::add_child_event]]add_child_event可以用来
+将一个对象或者事件的指针加入到子事件或子对象列表中，而
+[[api::sc_object::remove_child_object]]remove_child_object, [[api::sc_object::remove_child_event]]remove_child_event
+则是从子对象或者子事件列表中移除一个特定的对象或者事件：
+
+.src/sysc/kernel/sc_object.h
+[source,cpp]
+----
+    virtual void add_child_event( sc_event* event_p );
+    virtual void add_child_object( sc_object* object_p );
+    virtual bool remove_child_event( sc_event* event_p );
+    virtual bool remove_child_object( sc_object* object_p );
+----
+
+例如，在<<api::sc_event::register_event, sc_event的register_event>>中，就调用了
+add_child_event，将一个的event加入进来。
+这四个api函数都是protected的，这意味着只有派生类才能够使用这些函数。这四个api的实现相对简单很多，这里就不再列出了。
+
+除此之外，还有两个特殊的api函数，orphan_child_events和orphan_child_objects, 这两个都是privated的，这意味着
+sc_object的派生类也无法使用这两个函数:
+
+.src/sysc/kernel/sc_object.h
+[source,cpp]
+----
+    virtual void orphan_child_events();
+    virtual void orphan_child_objects();
+----
+
+首先是orphan_child_events的实现：
+
+.src/sysc/kernel/sc_object.cpp
+[source,cpp]
+----
+void sc_object::orphan_child_events()
+{
+    std::vector< sc_event* > const & events = get_child_events();
+
+    std::vector< sc_event* >::const_iterator
+            it  = events.begin(), end = events.end();
+
+    for( ; it != end; ++it  )
+    {
+        (*it)->m_parent_p = NULL;
+        simcontext()->add_child_event(*it);
+    }
+}
+----
+
+从上述代码可以看出，((orhpan_child_events))的作用是遍历当前对象的所有子事件，将
+这些子事件的m_parent_p指针设置为空，然后讲这些子事件加入到内核仿真器的子事件中。这样一来，
+当前对象的子事件就全部被内核仿真器回收了。
+
+((orphan_child_objects))的实现类似，也是将当前对象的所有子对象都回收到内核
+仿真器中：
+
+.src/sysc/kernel/sc_object.cpp
+[source,cpp]
+----
+void sc_object::orphan_child_objects()
+{
+    std::vector< sc_object* > const & children = get_child_objects();
+
+    std::vector< sc_object* >::const_iterator
+            it  = children.begin(), end = children.end();
+
+    for( ; it != end; ++it  )
+    {
+        (*it)->m_parent = NULL;
+        simcontext()->add_child_object(*it);
+    }
+}
+----
+
+==== sc_object的phase callback
+
+sc_object定义了两个protected的接口函数，
+[[api::sc_object::register_simulation_phase_callback]]register_simulation_phase_callback
+和[[api::sc_object::unregister_simulation_phase_callback]]unregister_simulation_phase_callback:
+
+.src/sysc/kernel/sc_object.cpp
+[source,cpp]
+----
+sc_object::phase_cb_mask
+sc_object::register_simulation_phase_callback( phase_cb_mask mask )
+{
+    mask = simcontext()->m_phase_cb_registry
+                       ->register_callback(*this, mask);
+    return mask;
+}
+
+
+sc_object::phase_cb_mask
+sc_object::unregister_simulation_phase_callback( phase_cb_mask mask )
+{
+    mask = simcontext()->m_phase_cb_registry
+                       ->unregister_callback(*this, mask);
+    return mask;
+}
+----
+
+这两个sc_object的成员函数主要调用了仿真器内核的
+<<api::sc_phase_callback_registry::register_callback, register_callback>>
+和<<api::sc_phase_callback_registry::unregister_callback, unregister_callback>>
+函数，将本对象的引用以及一个掩码传入，并返回相应的掩码。
+
+[[api::sc_object::do_simulation_phase_callback]]do_simulation_phase_callback是
+sc_object的private函数，起作用是调用一个虚函数接口simulation_phase_callback:
+
+.src/sysc/kernel/sc_object_int.h
+[source,cpp]
+----
+inline void
+sc_object::do_simulation_phase_callback()
+{
+    simulation_phase_callback();
+}
+----
+
+而虚函数simulation_phase_callback则需要各个object实现自己的函数。如果没有实现，那么sc_object的
+simulation_phase_callback则会报错：
+
+
+.src/sysc/kernel/sc_object.cpp
+[source,cpp]
+----
+void
+sc_object::simulation_phase_callback()
+{
+    SC_REPORT_WARNING( SC_ID_PHASE_CALLBACK_NOT_IMPLEMENTED_, name() ); <1>
+} 
+----
+<1> 如果sc_object的子类没有实现simulation_phase_callback，那么将会调用sc_object的
+simulation_phase_callback, 这将会报错
+
+==== sc_object其他成员函数
+
+[[api::sc_object::name]]sc_object的name成员函数，可以返回对象的名称（hierarchy名称）：
+
+.src/sysc/kernel/sc_object.h
+[source,cpp]
+----
+    const char* name() const
+        { return m_name.c_str(); }
+----
+
+[[api::sc_object::basename]]basename成员函数则使用来返回leaf名字（即不包括其parent的名字）的：
+
+.src/sysc/kernel/sc_object.cpp
+[source,cpp]
+----
+const char*
+sc_object::basename() const
+{
+    std::size_t pos; // position of last SC_HIERARCHY_CHAR.
+    pos = m_name.rfind( (char)SC_HIERARCHY_CHAR );
+    return ( pos == m_name.npos ) ? m_name.c_str() : &(m_name.c_str()[pos+1]);
+} 
+----
+
+[[api::sc_object::print]]print和[[api::sc_object::dump]]dump成员函数则用来打印名称：
+
+
+.src/sysc/kernel/sc_object.cpp
+[source,cpp]
+----
+void
+sc_object::print(::std::ostream& os) const
+{
+    os << name();
+}
+
+void
+sc_object::dump(::std::ostream& os) const
+{
+    os << "name = " << name() << "\n";
+    os << "kind = " << kind() << "\n";
+}
+----
+
+两者的区别在于，print仅打印完整名称，dump则同时打印名称和具体的类型，后者提供的信息更多一些。
+
+[[api::sc_object::kind]]kind是用来返回object派生类类型的，这是一个虚函数，所有的object的派生类需要重写这个函数，
+给定自己的类型字符串信息。[[api::sc_object::simcontext]]simcontext函数则返回了对象创建时候的
+仿真器内核指针。此外，[[api::sc_object::trace]]是用来做波形dump使用的。
+
+.src/sysc/kernel/sc_object.cpp
+[source,cpp]
+----
+    virtual void trace( sc_trace_file* tf ) const;
+
+    virtual const char* kind() const { return "sc_object"; }
+
+    sc_simcontext* simcontext() const
+        { return m_simc; }
+----
+
+[[api::sc_object::detach]]detach是sc_object的private函数，用来将本对象从仿真系统中移除。
+移除一个sc_object，主要包括两步，一步是从仿真器的object manager中移除此对象，另一个，则是从
+本对象的父对象中移除本对象，所以实现方法如下所示：
+
+.src/sysc/kernel/sc_object.cpp
+[source,cpp]
+----
+void sc_object::detach()
+{
+    if (m_simc) {
+
+        // REMOVE OBJECT FROM THE OBJECT MANAGER:
+
+        sc_object_manager* object_manager = m_simc->get_object_manager();
+        object_manager->remove_object(m_name);
+
+		// REMOVE OBJECT FROM PARENT'S LIST OF OBJECTS:
+
+        if ( m_parent )
+	    m_parent->remove_child_object( this );
+	else
+	    m_simc->remove_child_object( this );
+
+        // ORPHAN THIS OBJECT'S CHILDREN:
+
+#if 0 // ####
+	    ::std::<sc_object*> children_p = &get_child_objects();
+		int                 child_n = children_p->size();
+		sc_object*          parent_p;
+
+		for ( int child_i = 0; child_i < child_n; child_i++ )
+		{
+			(*children_p)[child_i]->m_parent = 0;
+		}
+#endif
+
+    }
+}
+----
+
+现有代码中关于收容待移除对象的子对象部分的代码被注释掉了，暂时不知道这么做的含义是为何。
+
+=== systemc attribute
+
+systemc attribute，指的是为每个systemc的object（但不包括event，因为event不继承自sc_object）
+可以设定的一个属性。注意能设定的属性只能是单个字符串，并且无法设定属性的值。换言之，只能为systemc重的
+object设定某个特定的属性存在与否。
+
+systemc attribute的实现由sc_attr_base, sc_attr_cltn和sc_attribute<T>三个组成，其中最后一个
+是模板类，可以为属性携带更多的信息。
+
+==== sc_attr_base
+((sc_attr_base))是sc_object的<<api::sc_object::add_attribute, sc_object的add_attribute>>成员函数所使用的
+参数类型：
+[[data::sc_attr_base]]
+
+.src/sysc/kernel/sc_attribute.h
+[source,cpp]
+----
+class SC_API sc_attr_base
+{
+public:
+
+    // constructors
+    sc_attr_base( const std::string& name_ ); <1>
+    sc_attr_base( const sc_attr_base& );
+
+    // destructor (does nothing)
+    virtual ~sc_attr_base();
+
+    // get the name
+    const std::string& name() const;
+
+private:
+
+    std::string m_name;
+
+private:
+
+    // disabled
+    sc_attr_base();
+    sc_attr_base& operator = ( const sc_attr_base& );
+};
+----
+<1> 单参数构造函数，意味着sc_attr_base可以从string隐式构造
+
+sc_attr_base只有一个`std::string`类型的成员变量m_name，并且可以从`std::string`隐式构造。这意味着
+sc_attr_base更多的是`std::string`的一个包装类而已。
+
+sc_attr_base的构造函数如下所示：
+.src/sysc/kernel/sc_attribute.cpp
+[source,cpp]
+----
+sc_attr_base::sc_attr_base( const std::string& name_ )
+: m_name( name_ )
+{}
+
+sc_attr_base::sc_attr_base( const sc_attr_base& a )
+: m_name( a.m_name )
+{}
+----
+
+sc_attr_base的构造（包括拷贝构造），其本质就是为成员变量m_name赋值。对于这个m_name，可以使用
+成员函数name获取其值：
+
+.src/sysc/kernel/sc_attribute.cpp
+[source,cpp]
+----
+// get the name
+const std::string&
+sc_attr_base::name() const
+{
+    return m_name;
+}
+----
+
+从所有的定义来看，sc_attr_base确凿无疑是`std::string`的一个包装类而已。
+
+==== sc_attr_cltn
+[[data::sc_attr_cltn]]
+
+((sc_attr_cltn))是每个<<data::sc_object, sc_object>>内管理属性的成员变量。sc_attr_cltn
+并不继承自任何其他类：
+
+.src/sysc/kernel/sc_attribute.h
+[source,cpp]
+----
+class SC_API sc_attr_cltn
+{
+public:
+// blabla
+};
+----
+
+sc_attr_cltn唯一一个成员变量，就是一个<<data::sc_attr_base, sc_attr_base>>指针数组：
+
+.src/sysc/kernel/sc_attribute.h
+[source,cpp]
+----
+    std::vector<sc_attr_base*> m_cltn;
+----
+
+而sc_attr_cltn所有的操作都围绕着这个指针数组而来。
+
+加入一个属性的方式是调用push_back成员函数：
+
+.src/sysc/kernel/sc_attribute.cpp
+[source,cpp]
+----
+bool
+sc_attr_cltn::push_back( sc_attr_base* attribute_ )
+{
+    if( attribute_ == 0 ) {
+	return false;
+    }
+    for( int i = m_cltn.size() - 1; i >= 0; -- i ) {
+	if( attribute_->name() == m_cltn[i]->name() ) {
+	    return false;
+	}
+    }
+    m_cltn.push_back( attribute_ );
+    return true;
+}
+----
+
+如果加入的sc_attr_base指针为空，则返回false。如果检查发现需要加入的属性已经存在（字符串相同即认为存在），那么
+同样返回false。只有当加入的sc_attr_base有效且不存在的时候，才会将其加入，并返回true表明加入成功。
+
+删除一个sc_attr_base的方法是调用remove:
+.src/sysc/kernel/sc_attribute.cpp
+[source,cpp]
+----
+sc_attr_base*
+sc_attr_cltn::remove( const std::string& name_ )
+{
+    for( int i = m_cltn.size() - 1; i >= 0; -- i ) {
+	if( name_ == m_cltn[i]->name() ) {
+	    sc_attr_base* attribute = m_cltn[i];
+	    std::swap( m_cltn[i], m_cltn.back() );
+	    m_cltn.pop_back();
+	    return attribute;
+	}
+    }
+    return 0;
+}
+----
+
+remove接受一个字符串作为参数，并从已有的sc_attr_base指针数组中寻找一个拥有和给定的参数同样名字的sc_attr_base
+指针。如果找到，从指针数组中删除这个sc_attr_base指针，并将其返回，否则，返回空指针。
+
+也可以使用remove_all删除所有的sc_attr_base指针：
+.src/sysc/kernel/sc_attribute.cpp
+[source,cpp]
+----
+void
+sc_attr_cltn::remove_all()
+{
+    m_cltn.clear();
+}
+----
+
+查询sc_attr_base则使用了 `operator []`，这个operator拥有const和non-const两种版本，其实现
+一致，我们这里只列出了non-const版本：
+
+.src/sysc/kernel/sc_attribute.cpp
+[source,cpp]
+----
+sc_attr_base*
+sc_attr_cltn::operator [] ( const std::string& name_ )
+{
+    for( int i = m_cltn.size() - 1; i >= 0; -- i ) {
+	if( name_ == m_cltn[i]->name() ) {
+	    return m_cltn[i];
+	}
+    }
+    return 0;
+}
+----
+
+查找也只是寻找sc_attr_base数组中是否存在和给定的字符串相同的sc_attr_base指针，如果找到就返回指针，没找到
+就返回空指针。
+
+==== sc_attribute
+[[data::sc_attribute]]
+
+sc_attr_base只是`std::string`的包装类，如果需要表达更多的信息，就可以使用模板类
+((sc_attribute))。
+
+sc_attribute直接继承自<<data::sc_attr_base, sc_attr_base>>，主要在基类的基础上，增加了一个
+模板类型T的public成员变量value，如下所示：
+
+.src/sysc/kernel/sc_attribute.h
+[source,cpp]
+----
+template <class T>
+class sc_attribute
+: public sc_attr_base
+{
+public:
+
+    // constructors
+
+    sc_attribute( const std::string& name_ )
+        : sc_attr_base( name_ ), value()
+        {}
+
+    sc_attribute( const std::string& name_, const T& value_ )
+        : sc_attr_base( name_ ), value( value_ )
+        {}
+
+    sc_attribute( const sc_attribute<T>& a )
+        : sc_attr_base( a.name() ), value( a.value )
+        {}
+
+
+    // destructor (does nothing)
+
+    virtual ~sc_attribute()
+        {}
+
+public:
+
+    // public data member; for easy access
+    T value;
+
+private:
+
+    // disabled
+    sc_attribute();
+    sc_attribute<T>& operator = ( const sc_attribute<T>& );
+};
+----
+
+`sc_attribute<T>`是sc_attr_base的基类，因此也可以将其作为属性加入到
+<<data::sc_attr_cltn, sc_attr_cltn>>中，并将其做合适的cast，就可以获取类型T的值value了。
+
+需要注意的是，在<<data::sc_attr_cltn, sc_attr_cltn>>中，只判断string存在与否，因此如果有
+一个`sc_attribute<T>`有着相同的名字，那么就会作为同一个attribute来管理，而无论其value是否相同。
+
+=== sc内核中的object manager
+[[data::sc_object_manager]]
+
+((sc_object_manager))是systemc kernel中，用来维护systemc对象体系的主要实现。
+
+==== create_name
+[[api::sc_object_manager::create_name]]
+
+=== sc_module
+[[data::sc_module]]
+
+((sc_module))是systemc中建模意见模块的数据结构，对应于verilog HDL里的module原语。sc_module同时
+也是承载fifo, event, process的平台，为这三种重要的数据结构提供一个统一的存放之地。需要注意的是，
+sc_module并不参与到实际的仿真运行过程中，在仿真开始之后，就只有process/event/primitive channel三元素
+参与仿真，而sc_module和port/export一样，已经结束其构建仿真系统的作用了。
+
+sc_module继承自<<data::sc_object, sc_object>>和((sc_process_host)):
+
+.src/sysc/kernel/sc_module.h
+[source,cpp]
+----
+class SC_API sc_module
+: public sc_object, public sc_process_host
+{
+    friend class sc_module_name;
+    friend class sc_module_registry;
+    friend class sc_object;
+    friend class sc_port_registry;
+	friend class sc_process_b;
+    friend class sc_simcontext;
+    // blabla
+};
+----
+
+(((sc_process_host)))
+其中，[[data::sc_process_host]]sc_process_host的定义如下：
+
+.src/sysc/kernel/sc_process.h
+[source,cpp]
+----
+class SC_API sc_process_host
+{
+  public:
+    sc_process_host() {}
+    virtual ~sc_process_host() { } // Needed for cast check for sc_module.
+    void defunct() {}
+};
+----
+
+sc_process_host的作用只是为了那么需要调用process的类提供一个基类而已。例如，sc_module继承自
+sc_process_host，那么定义在sc_module下的process在被调用的时候，就可以将对象指针cast
+到`sc_process_host *`，这就提供了一个统一的指针类型。在<<api::SC_METHOD, SC_METHOD>>部分
+就使用了这个设计准则。
+
+==== 成员变量
+
+((sensitive))
+sc_module的成员变量分为两类，一类是protected的<<chap::sensitive, sensitive>>，
+包括<<data::sc_sensitive, sc_sensitive>>, <<data::sc_sensitive_pos, sc_sensitive_pos>>
+和<<data::sc_sensitive_neg, sc_sensitive_neg>>，这是用来为module内的process设置静态
+敏感信号使用的，定义为protected，这样一来派生类就可以使用，但是外部不能使用：
+
+.src/sysc/kernel/sc_module.h
+[source,cpp]
+----
+protected:
+    // These are protected so that user derived classes can refer to them.
+    sc_sensitive     sensitive;
+    sc_sensitive_pos sensitive_pos; <1>
+    sc_sensitive_neg sensitive_neg; <1>
+private:
+    bool                        m_end_module_called;
+    std::vector<sc_port_base*>* m_port_vec;
+    int                         m_port_index;
+    sc_name_gen*                m_name_gen;
+    sc_module_name*             m_module_name_p;
+----
+<1> sensitive_pos和sensitive_neg已经被废弃掉了，这两个成员变量应当不再使用
+
+另一类则是private的成员变量。
+
+==== sc_module的callback, wait和next_trigger
+
+<<api::module::callback, module的callback>>部分介绍了sc_module所定义的4个callback函数，每个sc_module的
+派生类可以通过重写以下四个callback函数的方式，定义其在<<concept::systemc_flow, SystemC仿真流程>>中的相应
+阶段的行为：
+
+1. `void before_end_of_elaboration(void)`, 定义construction_done之后的行为
+2. `void end_of_elaboration(void)`，定义elaboration_done之后的行为
+3. `void start_of_simulation(void)`，定义start_simulation之后的行为
+4. `void end_of_simulation(void)`，定义simulation_done之后的行为
+
+<<concept::wait, wait>>部分则介绍了sc_module的wait函数具体的实现。实际上sc_module的wait成员函数
+都是调用了`::sc_core::wait`来实现的。这么设计的好处是，作为在sc_module及其派生类中最常用的api可以被直接
+使用，而不必去关心实际的wait究竟应该最终由哪个process实现。<<concept::next_trigger, next_trigger>>
+的设计也同理。
+
+=== object小结
+
+每个sc_object都可以使用add_attribute/remove_attribute/get_attribute，来为其维护属性信息。属性信息
+本质上是一个std::string类型而已，而非传统意义上是一个map。这意味着，一个特定的属性只能有用”有“或者”没有“
+两种状态，而无法表达更多的信息。对于目前的设计而言，这已经足够了。属性可以使用`sc_attribute<T>`来携带一个
+额外的信息，但所携带的额外信息并不是属性本身，在做属性检查的时候，额外信息将被忽略掉。
+
+sc_object的属性属于每个对象自己，而非全体的同一种对象。

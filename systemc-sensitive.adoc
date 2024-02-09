@@ -486,9 +486,12 @@ SC_CTHRAD的静态敏感事件，被设置进去。这也就意味着无法使�
 下降沿作为静态敏感事件。
 
 === sc_sensitive_pos和sc_sensitive_neg
+[[data::sc_sensitive_pos]]
 
 ((sc_sensitive_pos))和((sc_sensitive_neg))都被废弃掉了，因为这两个类的功能都可以被sc_sensitive
 覆盖。
+[[data::sc_sensitive_neg]]
+
 
 个人猜测应该是在没有引入sc_event_finder的时候，需要使用sc_sensitive_pos和sc_sensitive_neg
 为上升沿和下降沿设置相应的静态敏感列表。现在有了sc_event_finder，根据相关sc_port的

@@ -2,7 +2,7 @@
 
 # CJK Support
 
-当到处本文档为pdf的时候，可能出现乱码。参考 https://github.com/epsilonant/asciidoctor-pdf-for-chinese
+当导出本文档为pdf的时候，可能出现乱码。参考 https://github.com/epsilonant/asciidoctor-pdf-for-chinese
 部分的解决方案，使用如下命令来编译pdf:
 
     asciidoctor-pdf \

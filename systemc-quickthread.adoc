@@ -528,7 +528,7 @@ stack_alloc( void** buf, std::size_t* stack_size )
 }
 ----
 
-从stack_alloc时限可以看出，这个函数主要用来分配协程的调用栈空间，并且需要保持一定的对齐条件。对齐约束
+从stack_alloc实现可以看出，这个函数主要用来分配协程的调用栈空间，并且需要保持一定的对齐条件。对齐约束
 可以使用 `posix_memalign` 直接分配获得，或者使用先分配大的内存空间，然后手动对齐的方式获取。如果支持
 最新的C++17特性，可以使用std::aligned_alloc来达到相同的目的，参考https://en.cppreference.com/w/cpp/memory/c/aligned_alloc
 部分的介绍。

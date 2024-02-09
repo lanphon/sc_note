@@ -93,7 +93,7 @@ sc_prim_channel_registry::perform_update()
 [[data::sc_prim_channel]]
 
 (((sc_prim_channel)))
-`sc_prim_channel` 是所有channel的基类。
+`sc_prim_channel` 是所有channel的基类，继承自<<data::sc_object, sc_object>>。
 
 ===== request_update
 [[api::sc_prim_channel::request_update]]
@@ -766,6 +766,7 @@ sc_signal<bool,POL>::do_update()
 的时候（从0到1，或者从1到0），阻塞的事件会在下一个delta cycle的EVALUATE PHASE恢复调度执行。
 
 ==== `sc_buffer`
+[[data::sc_buffer]]
 
 ((sc_buffer))继承自sc_signal:
 
@@ -928,6 +929,8 @@ sc_signal_resolved::update()
 class SC_API sc_clock
   : public sc_signal<bool,SC_ONE_WRITER>
 ----
+
+sc_clock特化了sc_signal模板，数据类型为布尔型，并且策略只允许`SC_ONE_WRITER`.
 
 ===== `update` 的实现
 
@@ -1558,7 +1561,7 @@ Systemc主线程中，作进一步的仿真处理。
 === 其他
 
 在SystemC中，除了primitive channel，还有一种hierarchical channel, `sc_channel` 。然而
-这种类型不过是一个 `sc_module` 而已：
+这种类型不过是一个<<data::sc_module, sc_module>> 而已：
 
 .src/sysc/kernel/sc_module.h
 [source,cpp]
