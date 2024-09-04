@@ -937,10 +937,141 @@ sc_clock特化了sc_signal模板，数据类型为布尔型，并且策略只允
 sc_clock的update函数没有实现额外的功能，与<<api::sc_signal_bool::update, 特化版本的sc_signal的update函数实现>>
 保持一致。
 
-== sc_host_semaphore
-[[data::sc_host_semaphore]]]
+== sc_semaphore
+[[data::sc_semaphore]]
 
-((sc_host_semaphore))是一个用来在多个thread之间做同步的信号量。sc_host_semaphore的实现
+((sc_semaphore))是一个用来在多个thread之间做同步的信号量。sc_semaphore只考虑在systemc线程之间做同步，如果需要同步的
+一方不是systemc线程，那么就需要考虑其他诸如<<data::sc_host_semaphore, sc_host_semaphore>>之类的方法了。
+
+.src/sysc/communication/sc_semaphore.h
+[source,cpp]
+----
+class SC_API sc_semaphore
+: public sc_semaphore_if,
+  public sc_object
+{
+public:
+
+    // constructors
+
+    explicit sc_semaphore( int init_value_ ); <1>
+    sc_semaphore( const char* name_, int init_value_ ); <1>
+
+
+    // interface methods
+
+    // lock (take) the semaphore, block if not available
+    virtual int wait();
+
+    // lock (take) the semaphore, return -1 if not available
+    virtual int trywait();
+
+    // unlock (give) the semaphore
+    virtual int post();
+
+    // get the value of the semaphore
+    virtual int get_value() const
+	{ return m_value; }
+
+    virtual const char* kind() const
+        { return "sc_semaphore"; }
+
+protected:
+
+    // support methods
+
+    bool in_use() const
+	{ return ( m_value <= 0 ); } <2>
+
+protected:
+
+    sc_event m_free;        // event to block on when m_value is negative <3>
+    int      m_value;       // current value of the semaphore
+};
+----
+<1> sc_semaphore的构造函数可以提供一个初始值，表明这个semaphore的并发量
+<2> in_use函数表明当前的semaphore是否不可用
+<3> 内部实际上使用了一个<<data::sc_event, sc_event>>类型的m_free来控制
+
+sc_semaphore继承自sc_semaphore_if，主要实现了包括wait, trywait和post语义的接口。
+
+=== wait
+[[api::sc_semaphore::wait]]
+
+wait是一个阻塞的接口。如果当前semaphore不可用，那么调用方将被阻塞住，直到semaphore
+变得可用为止。wait的实现非常简单：
+
+.src/sysc/communication/sc_semaphore.cpp
+[source,cpp]
+----
+int
+sc_semaphore::wait()
+{
+    while( in_use() ) {
+	sc_core::wait( m_free, sc_get_curr_simcontext() );
+    }
+    -- m_value;
+    return 0;
+}
+----
+
+实际上wait就是检查当前semaphore的in_use状态。如果sc_semaphore不可用，那么wait将阻塞
+住，并等待`m_free`事件的触发。由于sc_semphore可以被多次锁定，因此即使m_free事件触发，我们
+仍然需要继续检查in_use状态。
+
+当semaphore处于可用状态后，wait将内部计数器m_value减一，然后返回0. wait的返回值是没有
+意义的，所以可以忽略wait的返回值。
+
+
+=== trywait
+[[api::sc_semaphore::trywait]]
+
+与wait相比，trywait是一个非阻塞的调用。调用方将收到一个返回值，表明是否成功获取了
+semaphore:
+
+.src/sysc/communication/sc_semaphore.cpp
+[source,cpp]
+----
+int
+sc_semaphore::trywait()
+{
+    if( in_use() ) {
+	return -1;
+    }
+    -- m_value;
+    return 0;
+}
+----
+
+这里trywait只是简单检查in_use状态。如果semaphore不可用，那么就返回负一。如果semaphore
+处于可用状态，那么就将内部计数器减去一，然后返回零。trywait的返回值是有意义的，调用方必须
+检测返回值，来确认自己是否获取了semaphore。
+
+=== post
+[[api::sc_semaphore::post]]
+
+post是个释放操作：
+
+.src/sysc/communication/sc_semaphore.cpp
+[source,cpp]
+----
+int
+sc_semaphore::post()
+{
+    ++m_value;
+    m_free.notify();
+    return 0;
+}
+----
+
+post简单将内部计数器加一，然后触发事件m_free，来唤醒可能阻塞在m_free上的任何wait操作，之后返回零。
+
+== sc_host_semaphore
+[[data::sc_host_semaphore]]
+
+((sc_host_semaphore))是一个用来在多个thread之间做同步的信号量。与<<data::sc_semaphore, sc_semaphore>>相比，
+sc_host_semaphore主要突出了host的特点，即可以在systemc的线程和非systemc的host线程之间做同步的能力。
+sc_host_semaphore的实现
 有几种形式，我们这里只考虑基于C++11的标准实现方法。
 
 .src/sysc/communication/sc_host_semaphore.h
