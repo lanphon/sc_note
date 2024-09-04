@@ -1,11 +1,11 @@
 :source-highlighter: coderay
 
+
+= SystemC: 重新审视
+[[chap::rethink]]
 :toc: left
 
-SystemC: 重新审视
-[[chap::rethink]]
-
-=== 引言
+== 引言
 
 在开始TLM的代码学习之前，这里我们对Systemc再次审视一遍，汇总下SystemC其内在的设计组件
 是如何组织，以及如何构成整个仿真体系的。
@@ -51,7 +51,7 @@ SystemC内核仿真最为重要的三个元素，分别对应了仿真时候的�
 ====
 
 SystemC仿真三要素，就是这里的线程，primitive channel和event。这三要素中，线程和
-event是不可获取的，然而primitive channel却可以有别的方法代替。
+event是不可或缺的，然而primitive channel却可以有别的方法代替。
 
 在SC仿真三要素中，primitive channel起到的主要作用是隔离线程对数据的访问，使得本delta cycle
 内，对一些数据的修改，直到下一个delta cycle才可以被其他线程观察到。这样一来，无论修改线程
@@ -107,7 +107,7 @@ SystemC中的method和thread类型的线程，是SystemC中运行的基本组成
 只有那些在上一个delta cycle的NOTIFICATION阶段，被放入到待执行列表中的thread，才会在本delta cycle的
 EVALUATE阶段得到执行。在sc内核执行所有的thread类型的时候，sc内核只调用第一个thread类型，将执行权限
 交给这个thread线程，这个thread线程执行到wait的时候，交给下一个，直到最后一个thread线程执行完毕，将
-执行权交还给sc内核为止。所以，与method线程不同，thread现成在sc内核中的执行只会执行第一个thread线程，
+执行权交还给sc内核为止。所以，与method线程不同，thread线程在sc内核中的执行只会执行第一个thread线程，
 然后等待其返回即可（如果不是很理解协程的概念，这一点可能难以理解）。
 
 ---
@@ -120,7 +120,7 @@ EVALUATE阶段得到执行。在sc内核执行所有的thread类型的时候，s
 
 从本质上来讲，sc_event对象只是一个记录与之关联的method/thread线程指针的对象而已。当sc_event被触发
 起来，这个sc_event就被sc内核收集起来，并在NOTIFICATION阶段，调用sc_event对象所提供的接口函数，通知
-所有与之相关联的method/thread线程，检测是否满足现成设置的触发条件（在and list条件下，需要多个
+所有与之相关联的method/thread线程，检测是否满足线程设置的触发条件（在and list条件下，需要多个
 event同时满足才能触发），如果满足那就将这些线程函数放入待执行队列，以在下一个delta cycle的EVALUATE阶段
 执行这些线程。
 
@@ -147,14 +147,14 @@ primitive channel的这种更新机制设计的目的，是为了解决在仿真
 在建模的过程中，是在写线程之前还是之后执行了。
 
 primitive channel的隔绝，主要是在一个delta cycle内，对所有的线程（无论是读还是写），都呈现一致的状态。这些
-现成对primitive channel的更新，primitive channel内部会记录下来，但并不会反映到当前delta cycle内的线程
+线程对primitive channel的更新，primitive channel内部会记录下来，但并不会反映到当前delta cycle内的线程
 执行过程，而是直到delta时的UPDATE阶段，才更新所有注册了的primitive channel的状态，将本delta cycle的EVALUATE
 阶段对这些primitive channel的更新全部应用进去。这些primitive channel
 的更新可能导致事件的触发，进而导致下一个delta cycle的可执行线程变化，这正是我们所想要的。
 
 在不同线程之间传递信息，最好总是使用primitive channel，这样可以避免因为调度顺序而带来的潜在bug。
 
-=== SystemC中的时间
+== SystemC中的时间
 
 这里我们考察下SystemC中的时间、时钟，以及由此引发开来的不同的编程模型的区别。
 
@@ -166,13 +166,13 @@ primitive channel的隔绝，主要是在一个delta cycle内，对所有的线�
 
 SystemC中的时间，是配合着event使用的。没有event与之关联的时间，是无法SystemC中使用的。
 
-=== Notification Phase Call back
+== Notification Phase Call back
 
 对于派生自
 
 <<api::module::callback, sc_module>>, 
 <<api::port::callback, sc_port>>, 
-<<api::export::callback, sc_export<<和
+<<api::export::callback, sc_export>>和
 <<api::prim_channel::callback, sc_prim_channel>>的子类，可以实现以下几种
 callback函数，这样SC在仿真的相应阶段，会调用这些函数：
 

@@ -4,7 +4,7 @@
 XinzhaoZhu <xinzhao_zhu@163.com>
 v0.9, 2022-11-20
 :doctype: book
-:toc:
+:toc2:
 :toclevels: 4
 
 :doc_root: .
@@ -24,88 +24,89 @@ Systemc库。
 全书按照如下的方式组织。首先，我们介绍了协程的概念，以及SystemC中所使用的QuickThread
 库的实现，这是了解后续SystemC线程调度原理的基础。接下来，我们介绍SystemC的内核调度
 模型，包括EVALUTE, UPDATE和NOTIFICATION三阶段组成的delta cycle的概念。对内核调度
-有一个大概印象之后，我们接下来用三章，分别介绍了事件，SystemC现成以及Primitive Channel
+有一个大概印象之后，我们接下来用三章，分别介绍了事件，SystemC线程以及Primitive Channel
 的概念，这三个概念是需要参与到内核调度的三个主要组成部分。之后，我们介绍了SystemC
 层次化组织必须的组件，Port，并专门介绍了如何设置敏感源。这之后是关于SystemC杂项
-的章节，介绍了Systemc中一些无法归入到前边部分的一些小组件。然后，我们讨论了的Trace，以及
+的章节，介绍了Systemc中一些无法归入到前边部分的一些小组件。然后，我们讨论了Trace，以及
 可综合部分。至此，SystemC的介绍基本结束，我们专门花了一个章节，用来重新思考SystemC
 的设计哲学，尝试去汇总其中的设计理念。由于后续要开始关于TLM的介绍，而TLM大部分都是关于interface, 
 port和export，因此，在正式开始TLM之前，我们又回顾了下SystemC中的interface, port
 和export，理解其中的设计思想。之后，本书的第二部分是
 关于TLM的介绍。首先是TLM 1.0的介绍，TLM 1.0部分比较简单，一章就足以介绍了。之后，关于TLM 2.0
-氛围了入门、simple socket和其他socket，最后同样以一个TLM杂项部分结尾。
+分为了入门、simple socket和其他socket，最后同样以一个TLM杂项部分结尾。
 
+:leveloffset: +1
 
-== SystemC quick thread
 include::{doc_root}/systemc-quickthread.adoc[]
 
-== SystemC Object Hierarchy
 include::{doc_root}/systemc-object-hierarchy.adoc[]
 
-== SystemC Schedule Model
+//== SystemC Schedule Model
 include::{doc_root}/systemc-schedule-model.adoc[]
 
-== Coroutine in SystemC
+//== Coroutine in SystemC
 include::{doc_root}/systemc-coroutine.adoc[]
 
-== Event
+//== Event
 include::{doc_root}/systemc-event.adoc[]
 
-== Process
+//== Process
 include::{doc_root}/systemc-process.adoc[]
 
-== Primitive Channel
+//== Primitive Channel
 include::{doc_root}/systemc-primitive-channel.adoc[]
 
-== Port
+//== Port
 include::{doc_root}/systemc-port.adoc[]
 
-== Sensitive
+//== Sensitive
 include::{doc_root}/systemc-sensitive.adoc[]
 
 
-== SystemC Misc Part
+//== SystemC Misc Part
 include::{doc_root}/systemc-misc.adoc[]
 
-== SystemC Trace
+//== SystemC Trace
 // trace部分未完待续
 include::{doc_root}/systemc-trace.adoc[]
 
-== SystemC Synthesis Part
+//== SystemC Synthesis Part
 // synthesis部分未完待续，这部分后续挪一下位置，放到最后，TLM之后，不知道TLM中是否有可综合部分
 include::{doc_root}/systemc-synthesis.adoc[]
 
-== SystemC Data type
+//== SystemC Data type
 // datatype部分需要review，这部分内容较多，后续考虑分成三到四章
 include::{doc_root}/systemc-datatype.adoc[]
 
-== Rethink of SystemC
+//== Rethink of SystemC
 include::{doc_root}/systemc-rethink.adoc[]
 
-== Interface, Port and Export
+//== Interface, Port and Export
 include::{doc_root}/systemc-interface-port-export.adoc[]
 
 
-== TLM 1.0
+//== TLM 1.0
 include::{doc_root}/systemc-tlm-1.adoc[]
 
-== TLM 2.0 Introduction
+//== TLM 2.0 Introduction
 include::{doc_root}/systemc-tlm-2-intro.adoc[]
 
-== TLM 2.0 Simple Sockets
+//== TLM 2.0 Simple Sockets
 include::{doc_root}/systemc-tlm-2-simple-socket.adoc[]
 
-== TLM 2.0 Other Sockets
+//== TLM 2.0 Other Sockets
 include::{doc_root}/systemc-tlm-2-other-sockets.adoc[]
 
-== TLM 2.0 Misc
+//== TLM 2.0 Misc
 // misc部分未完待续
 include::{doc_root}/systemc-tlm-2-misc.adoc[]
 
+//== SystemC代码中的CPP特性
 [appendix]
-== SystemC代码中的CPP特性
 include::{doc_root}/systemc-cpp-features.adoc[]
 
 
 [index]
 == Index
+
+:leveloffset: +1

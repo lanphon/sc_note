@@ -1,12 +1,12 @@
 :source-highlighter: coderay
 
+
+= SystemC中的数据类型
 :toc: left
 
-SystemC中的数据类型
+== 引言
 
-=== 引言
-
-=== sc_vector_base
+== sc_vector_base
 [[data::sc_vector_base]]
 
-=== 硬件数据类型
+== 硬件数据类型

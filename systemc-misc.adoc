@@ -1,11 +1,11 @@
 :source-highlighter: coderay
 
+
+= SystemC中的其他组件和用例分析
+[[chap::misc]]
 :toc: left
 
-SystemC中的其他组件和用例分析
-[[chap::misc]]
-
-=== sc_interface
+== sc_interface
 [[data::sc_interface]]
 
 ((sc_interface))是一个抽象基类，提供了带interface能力类的接口信息。
@@ -112,7 +112,7 @@ sc_port/sc_export中，也只保存指向这些sc_interface或者sc_interface子
 实现这些具体的接口函数。这样一来，从概念上，sc_port/sc_export就可以调用pirmitive channel的
 接口函数了。
 
-=== sc_clock是如何工作的
+== sc_clock是如何工作的
 
 ((sc_clock))是一个sc_signal<bool, SC_ONE_WRITER>的继承类，sc_signal<bool, SC_ONE_WRITER> 
 实现了sc_signal_in_if<bool>接口定义的功能，因此sc_clock可以被sc_in<bool> 绑定：
@@ -130,7 +130,7 @@ sc_clock的工作主要分为3个stage：
 2. 在hierarchy建立之后，仿真开始之前，如何resolve之前设置的静态敏感源，使之获取真正的event事件
 3. 在仿真过程中，sc_clock是如何调度相关的process handle的
 
-==== module构造时
+=== module构造时
 
 在sc_module的构造函数中，SC_CTHREAD/SC_THREAD可以将sc_in<bool>变量clk的pos()/neg()设置为静态
 敏感事件。然而，此时sc_in<bool> clk并没有绑定具体的sc_clock。所以，这里SystemC用一个
@@ -232,7 +232,7 @@ module构造的结果是，在 `sc_in<bool> clk` 中，保存了相应的event f
 只能暂时先保存一个sc_event_finder，等待绑定完成后，使用所绑定的interface提供的指针，结合
 保存的成员函数指针，调用得到真正的sc_event事件对象。
 
-==== elaboration done时
+=== elaboration done时
 
 在所有的hierarchy都初始化，并且port绑定到interface之后，sc_in<bool> clk即绑定到sc_clock
 上。在elaboration_done阶段，sc_port_registry调用所有port的complete_binding函数，
@@ -378,7 +378,7 @@ elaboration done阶段的结果则是，对于 `sc_clock clock`，其内部的 `
 保存了所有静态设置时对其sensitive的SC_THREAD/SC_CTHREAD的process handle，同时这些
 process handle内部也保存了 `*m_posedge_event_p` 的指针。
 
-==== 仿真过程中
+=== 仿真过程中
 
 在运行中，由于sc_clock的<<usage::sc_spawn::sc_clock, 自激励>>，在UPDATE PHASE，根据
 primitive channel的framework, `*m_posedge_event_p` 的成员函数 `update` 函数被调用：
@@ -445,7 +445,7 @@ simc delta event列表中的事件都会调度其trigger函数，从而调度pro
 
 至此，sc_clock的pos()完成了将所有对这个事件敏感的process handle的调度工作。
 
-=== sc_phase_callback_registry
+== sc_phase_callback_registry
 [[data::sc_phase_callback_registry]]
 
 ((sc_phase_callback_registry))是SystemC在仿真器内部使用的一个维护
@@ -523,7 +523,7 @@ private:
 即mask_type就是一个unsigned integer。entry类型就是保存了一对sc_object指针和unsigned integer
 的mask的类型。
 
-==== callbacks
+=== callbacks
 
 sc_phase_callback_registry定义了很多类型的callback回调函数：
 
@@ -652,7 +652,7 @@ enum sc_status
 并不是直接调用do_callback实现的，我们
 在后续介绍。
 
-==== do_callback
+=== do_callback
 [[data::sc_phase_callback_registry::do_callback]]
 
 do_callback是实现回调的核心部分：
@@ -714,7 +714,7 @@ API，来获取当前的仿真器状态，从而确定目前出于何种状态�
 目前的SystemC代码中，只有sc_trace_file_base override了simulation_phase_callback的
 实现。
 
-==== register_callback
+=== register_callback
 [[api::sc_phase_callback_registry::register_callback]]
 
 register_callback用来向sc_phase_callback_registry中注册一个回调：
@@ -794,7 +794,7 @@ sc_object::register_simulation_phase_callback( phase_cb_mask mask )
 目前的SystemC中，也只有sc_trace_file_base会调用基类sc_object的这个函数，注册
 特定阶段的回调函数了。
 
-==== unregister_callback
+=== unregister_callback
 [[api::sc_phase_callback_registry::unregister_callback]]
 
 与register_callback相对应，sc_phase_callback_registry也提供了一个
@@ -844,7 +844,7 @@ unregister_callback的实现与register_callback基本一致，同样
 也只在<<api::sc_object::unregister_simulation_phase_callback, unregister_simulation_phase_callback>>
 中使用。
 
-==== update_done
+=== update_done
 [[data::sc_phase_callback_registry::update_done]]
 
 在register_callback中，我们看到，如果注册了SC_UPDATE阶段回调，那么
@@ -875,7 +875,7 @@ sc_phase_callback_registry::update_done() const
 
 目前尚不清楚SystemC为何要单独处理update_done阶段，后续看到相关部分的文档再补充理由。
 
-==== before_timestep
+=== before_timestep
 [[data::sc_phase_callback_registry::before_timestep]]
 
 before_timestep的实现和update_done基本一样，也是需要特殊处理的：
@@ -904,15 +904,15 @@ sc_phase_callback_registry::before_timestep() const
 
 目前尚不清楚为何SystemC单独处理before_timestep，后续看到了设计缘由再补充。
 
-==== evaluation_done
+=== evaluation_done
 [[data::sc_phase_callback_registry::evaluation_done]]
 
 目前看到的代码中，evaluate_done的实现被注释掉了，很奇怪。sc_simcontext实现
 也将evaluate_done阶段的回调注释掉了。
 
-=== CALLBACK
+== CALLBACK
 
-==== module的callback
+=== module的callback
 [[api::module::callback]]
 
 sc_module为派生类提供了四个虚函数，派生类实现这些函数后，可以在合适的
@@ -984,7 +984,7 @@ sc_module::simulation_done()
 <3> start_of_simulation会在start_simulation最后调用
 <4> end_of_simulation会在end_of_simulation最后调用
 
-==== port的callback
+=== port的callback
 [[api::port::callback]]
 
 与sc_module一样，所有的sc_port的基类sc_port_base也提供了四个虚函数，可以用来
@@ -1044,7 +1044,7 @@ sc_port_base::simulation_done()
 <3> start_of_simulation会在start_simulation最后调用
 <4> end_of_simulation会在end_of_simulation最后调用
 
-==== export的callback
+=== export的callback
 [[api::export::callback]]
 
 sc_export_base提供了4个虚函数，提供相应的定制能力：
@@ -1113,7 +1113,7 @@ sc_export_base::simulation_done()
 <3> start_of_simulation会在start_simulation最后调用
 <4> end_of_simulation会在end_of_simulation最后调用
 
-==== primitive channel的callback
+=== primitive channel的callback
 [[api::prim_channel::callback]]
 
 sc_prim_channel提供了4个虚函数，供派生类重写以实现特定阶段的定制行为：
@@ -1173,7 +1173,7 @@ sc_prim_channel::simulation_done()
 <4> end_of_simulation会在end_of_simulation最后调用
 
 
-==== Simulation Kernel PHASE CALLBACK机制
+=== Simulation Kernel PHASE CALLBACK机制
 [[macro::SC_DO_PHASE_CALLBACK_]]
 
 Phase Callback机制是SystemC在2.3.3开始，实验性质的一种特性。Phase Callback

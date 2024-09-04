@@ -1,11 +1,11 @@
 :source-highlighter: coderay
 
+
+= Systemc中的QuickThread，协程原理与实现
+[[chap::quickthread]]
 :toc: left
 
-Systemc中的QuickThread，协程原理与实现
-[[chap::quickthread]]
-
-=== 引言
+== 引言
 
 在硬件设计中，systemC作为一个高层次的仿真，甚至综合的语言，一直有着广泛的应用。
 与verilog/vhdl/systemverilog不同，systemc并不是一门新的语言，而是依托于{CPP}语言的一个{CPP}库。
@@ -32,7 +32,7 @@ SC_CTHREAD普遍采用while(true)死循环的设计，却可以有多个线程�
 为不同的平台实现不同的协程切换代码，这部分是高度平台相关的，需要用汇编语言编写。
 为方便起见，我们将讨论的平台限定为x86_64平台(以下简称为x64平台)。
 
-=== QuickThread的设计
+== QuickThread的设计
 
 QuickThread是一种有栈协程设计，每一个协程都有自己的调用堆栈，这样设计使得协程
 之间的切换相对比较简单，不涉及到调用栈之间的保存，付出的代价则是占用的内存空间比较大，
@@ -104,7 +104,7 @@ qt_align:
 接下来我们结合具体的场景，分析每一部分代码的实现细节。在开始之前，
 我们需要一些背景知识的补充，特别是x64平台函数调用惯例。
 
-==== x64平台调用惯例
+=== x64平台调用惯例
 
 开始探索quickthread的功能之前，我们先简单回顾一下x64平台的调用惯例。
 
@@ -123,7 +123,7 @@ quickthread中不考虑浮点寄存器的保存和恢复。
 
 有了这些背景知识，就足够我们去探索quickthread中如何在x64平台上实现协程创建和切换了。
 
-==== 创建协程context
+=== 创建协程context
 
 创建协程运行的context代码大致如下
 (在GitHub - lanphon/quickthread: This is systemc's quickthread learning 中的samples/first/first.cpp里)：
@@ -201,7 +201,7 @@ cort_info_t *create_thread(std::size_t stack_size, cor_fn *fn, void *args)
 .新建协程的协程运行栈
 image::001.png[]
 
-==== 新建协程的协程运行栈
+=== 新建协程的协程运行栈
 
 对于 `QUICKTHREADS_ARGS(sp, pu, pt, userf, only)` 而言，调用的效果就相当于在栈空间内设置这些值，
 并且将sp的值减少了0x80字节。图中每一行是一个64bit，左边列是相对于rsp的偏移，以64bit为单位。
@@ -216,7 +216,7 @@ image::001.png[]
 
 到这一步，协程的运行栈初始状态就已经准备完毕了。 接下来，我们看一下如何启动一个新的协程。
 
-==== 启动新协程
+=== 启动新协程
 
 协程切换的示例代码如下：
 
@@ -385,7 +385,7 @@ cor_qt_wrapper( void* arg, void* cor, qt_userf_t* fn )
 也就是 `userf` ，是我们在 `QUICKTHREADS_ARGS` 时传入的 `fn` 函数指针。而 `cor_qt_wrapper` 
 函数只是简单地调用函数 `fn` 而已。这样一来，就能够切换执行我们在此协程创建时候给予的参数了。 
 
-==== 协程resume
+=== 协程resume
 
 resume一个协程，其实就是再次切换回到一个协程。唯一的区别是，此时的运行栈结构是之前
 协程挂起时候保存的，而不是协程初始化时候创建的。所以，此时的协程运行栈的状态如下：
@@ -398,7 +398,7 @@ image:005.png[]
 能够正确恢复挂起时候的运行状态的。并且，我们可以看到， 对于caller需要保存的值，
 除了rbp在 `leave` 指令执行的时候被正确恢复以外，rbx和r12-r15都在 `leave` 之前的出栈操作中恢复了。
 
-=== SystemC内部的封装
+== SystemC内部的封装
 
 SystemC封装了三种不同类型的携程实现方案。对于Windows平台，只能使用 `fiber` 。对于非Windows
 平台，则根据宏 `SC_USE_PTHREADS` 来决定是否使用 `pthread` 还是 `quickthread`
@@ -462,7 +462,7 @@ sc_cor_pkg_qt::get_main()
 为全零的数据（不初始化也行），然后在第一次，主线程作为一个协程将控制权交给另一个协程的时候，main_cor中就会被qt的
 协程切换部分填入主协程（就是主线程）恢复执行时候的信息了。
 
-==== 调用栈的创建和销毁
+=== 调用栈的创建和销毁
 
 在基于Quickthreads的SystemC实现中，创建一个协程context的方式如下：
 
@@ -634,7 +634,7 @@ SystemC配合智能指针使用的时候，基本上必然伴随着内存泄漏�
 在最新的SystemC 2.3.4版本中，SystemC优先使用mmap函数来分配quickthread所需要的栈空间。
 ====
 
-=== 总结 
+== 总结 
 
 本片文章主要分析了SystemC所使用的一种协程库quickthread的设计，基于x86_64平台分析了具体的实现，
 包括协程的切换与恢复等。quickthread是一个比较简洁且高效的设计，在忽略浮点寄存器等前提下，

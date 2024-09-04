@@ -1,16 +1,16 @@
 :source-highlighter: coderay
 
+
+= SystemC中的Event
+[[chap::event]]
 :toc: left
 
-SystemC中的Event
-[[chap::event]]
-
-=== 引言
+== 引言
 
 在之前的介绍中，我们已经看到了sc_event的重要作用。本部分我们对sc_event的设计和相关的API再做一次回顾，
 探究其中的设计模式和设计原理。本部分也一并回顾了SystemC的wait/next_trigger API，并进行深入挖掘。
 
-=== sc_event_list以及派生类
+== sc_event_list以及派生类
 
 多个sc_event可以组成and/or list，这些复杂的sc_event表达式的结果是保存在sc_event_list以及派生类
 中的。
@@ -19,7 +19,7 @@ IEEE的SystemC规范建议用户不要直接使用sc_event_list以及派生类�
 来使用。这些 sc_event_list/sc_event_and_list/sc_event_or_list应当是使用 `operator |`
 或者 `operator &` 时候，作为临时变量创建出来，并在使用后销毁的。
 
-==== sc_event_list
+=== sc_event_list
 [[data::sc_event_list]]
 
 sc_event_list是个基础类，没有继承自其他任何部分。对于一个sc_event_list而言，重要
@@ -182,7 +182,7 @@ sc_event_list，以及其派生类都没有实现 `add_static` 或者 `remove_st
 成员函数，这意味着sc_event_list以及派生类无法作为静态敏感源设置。
 ====
 
-==== sc_event_expr<T>
+=== sc_event_expr<T>
 
 在介绍sc_event_list的两个派生类，sc_event_and_list和sc_event_or_list之前，我们先
 学习下sc_event_expr<T>。sc_event_expr<T>并不继承自sc_event_list。
@@ -204,7 +204,7 @@ sc_event_expr<T> 内部保存一个指向类型T的指针，并且设计了一�
 sc_event_expr<T> 模板的功能表现的就如同其内部类型T一样。之所以这么设计一个这样的模板，是因为
 `&` 和 `|` 作为二元运算符，具有左结合的特点。具体的实现细节有待深究。
 
-==== sc_event_and_list
+=== sc_event_and_list
 [[data::sc_event_and_list]]
 
 sc_event_and_list直接继承自sc_event_list:
@@ -297,7 +297,7 @@ wait/next_trigger函数中时，其定义的 `operator T const &()` 可以自动
 了。这保证对于 `AND_LIST` 这种trigger type来讲，必须每个事件都发生一次，才可以最终trigger
 调度进程。
 
-==== sc_event_or_list
+=== sc_event_or_list
 [[data::sc_event_or_list]]
 
 和sc_event_and_list一样，sc_event_or_list继承自sc_event_list，并且没有
@@ -340,7 +340,7 @@ wait/next_trigger调用时候参数类型是sc_event_and_list还是sc_event_or_l
 类型的复杂list。现实设计中，混合and/or关系list的需求是非常非常罕见的。
 ====
 
-=== sc_event
+== sc_event
 [[data::sc_event]]
 
 在<<chap::schedule_model, 调度模型>>一章，我们已经看到了((sc_event))数据结构所扮演的重要角色。本部分
@@ -351,7 +351,7 @@ sc_event是个基础类，没有继承自其它类。这也就意味着sc_event�
 API中，已经有了<<api::sc_find_object, sc_find_object>>的前提下，还需要
 单独提供<<api::sc_find_event, sc_find_event>>的原因了。
 
-==== 成员变量
+=== 成员变量
 
 对于sc_event而言，成员变量包括：
 
@@ -405,7 +405,7 @@ sc_event也可以是TIMED EVENT，即 `m_notify_type` 为 `TIMED` 。 TIMED EVEN
 成员变量 `m_name`, `m_simc` 以及 `m_parent_p` 主要用以记录sc_event
 相关的场景信息，以提供DEBUG能力。
 
-==== 构造和析构函数
+=== 构造和析构函数
 
 sc_event可以是空构造，也可以给定本事件的名字。对于sc_event而言，名字并非必须，
 可以为空。如果构造的时候，没有给event名字，那么SystemC内核会自动给这个event
@@ -540,7 +540,7 @@ sc_event::~sc_event()
 析构函数主要完成了所分配资源的释放。此外，对于动态等待在本事件上的process handle而言，
 还需要把内部保存的事件指针 `m_event_p` 置为空。
 
-==== 与process handle交互的成员函数
+=== 与process handle交互的成员函数
 
 [[api::sc_event::add_static]]
 sc_event提供了8个成员函数，以用来与process handle做交互。这个8个成员函数分为两组，分别为
@@ -570,12 +570,12 @@ handle的成员变量一共有四个，所以每一组对应的成员函数也�
 这四个函数可以在elaboration阶段，或者simulation阶段被调用。
 
 
-==== notify, trigger和cancel
+=== notify, trigger和cancel
 
 一个sc_event，最为重要的就是状态的管理，包括notify（通知事件发生/延迟发生），trigger
 （触发事件发生时的作用）以及cancel（取消之前设定的事件发生/延迟发生）。
 
-===== notify
+==== notify
 [[api::sc_event::notify]]
 
 (((sc_event, notify)))
@@ -777,7 +777,7 @@ sc_event::notify_next_delta()
 `notify_internal` 和 `notify_next_delta` 是SystemC内部使用的，因此两个函数
 都被标记为PRIVATE，只有友元类才能够使用。
 
-==== trigger
+=== trigger
 
 [[api::sc_event::trigger]]
 
@@ -895,7 +895,7 @@ process加入到runnable列表中（thread/cthread可能设置多个cycle之后�
 一个process handle可以设置多个静态敏感事件。所以，静态敏感事件之间是**或**的关系。一个可能的
 想法是使用 `sc_event_and_list` 为process设置静态敏感事件，然而这种做法比较丑陋且不推荐。
 
-==== cancel and reset
+=== cancel and reset
 [[api::sc_event::cancel]]
 
 (((sc_event, cancel)))
@@ -953,7 +953,7 @@ sc_event::reset()
 注意reset()只清除动态敏感的method和thread process handle。静态敏感的process列表
 仍然保留。
 
-=== wait
+== wait
 [[concept::wait]]
 
 ((wait))是Thread/CThread线程用以同步的一个API调用。SystemC中定义了多种形式的wait。例如，sc_module
@@ -1015,7 +1015,7 @@ sc_event::reset()
 而自由函数wait，一般会最终调用到 `sc_thread_process` 的wait成员函数上去，有一些
 会调用到 `sc_thread_process` 的wait_cycles成员函数上。
 
-==== 静态的wait
+=== 静态的wait
 
 不带任何参数的wait，也就是 `wait()` 调用，调用的是如下自由函数：
 
@@ -1080,7 +1080,7 @@ sc_thread_process::wait_cycles( int n )
 就是0. 在下次<<api::sc_thread_process::trigger_static, thread process的trigger_static>>成员函数被调用的时候，m_wait_cycle_n的检查
 就会直接跳过。所以实际等待的clock cycle数目等于 `m_wait_cycle_n + 1` 。
 
-==== wait一个或者多个事件
+=== wait一个或者多个事件
 
 wait也可以带一个或者多个事件。例如，带一个事件时候，所调用的自由函数是：
 
@@ -1119,7 +1119,7 @@ wait( const sc_event& e, sc_simcontext* simc )
 的同名
 <<api::sc_thread_process::wait::sc_event, wait>>成员函数。
 
-==== wait一段特定时间
+=== wait一段特定时间
 
 根据延时时间设置的不同方式，这种wait也有不同的形式，其中都转发给了自由函数wait。一个
 例子是：
@@ -1181,7 +1181,7 @@ sc_thread_process::wait( const sc_time& t )
 一个 `wait(const sc_time&)` 来重新设置延时时间的。这样是为何这里
 可以用 `notify_internal` 的重要原因了。
 
-==== wait一个或者多个事件，带超时设定
+=== wait一个或者多个事件，带超时设定
 
 wait也可以等待一个或者多个事件，设定一个超时时间。如果所设定的超时时间到了，事件没有满足要求，
 wait仍然会返回。sc_module的wait是转发给自由函数wait的，例如：
@@ -1251,7 +1251,7 @@ sc_thread_process::wait( const sc_time& t, const sc_event_or_list& el )
 的时候，可以判断哪个事件首先发生。如果两个事件中的一个发生，则另一个被
 <<api::sc_event::cancel, cancel>>掉.
 
-==== CTHREAD特殊设计的wait
+=== CTHREAD特殊设计的wait
 
 对于CTHREAD而言，之前介绍的wait方式，只有不带任何参数的wait()才可以在CTHREAD中使用。
 为了扩展这项能力，sc_module的成员函数特意设计了一个 `wait(int)` ，可以指定
@@ -1294,7 +1294,7 @@ wait( int n, sc_simcontext* simc )
 
 可以看出实际上就是调用了process handle的<<api::sc_thread_process::wait_cycles, wait_cycles>>，给定了等待的clock cycle数目而已。
 
-==== 小结
+=== 小结
 
 一般在sc_module设计中所调用的wait，会调用自由函数wait，进而调用到thread process
 的wait成员函数。这样一种设计保证我们在sc_module中使用wait的时候无需指定process handle，
@@ -1303,7 +1303,7 @@ wait( int n, sc_simcontext* simc )
 无论哪种形式的wait，调用wait的thread/cthread process一定会被阻塞住，
 在本次delta cycle中不再执行，而是将执行权让渡出去。
 
-=== next_trigger
+== next_trigger
 [[concept::next_trigger]]
 类似于wait, ((next_trigger))也在多个地方有定义。sc_module中的next_trigger定义有：
 
@@ -1366,7 +1366,7 @@ wait( int n, sc_simcontext* simc )
 在<<api::next_trigger, schedule model的next_trigger>>部分，我们初步介绍了几种基础的
 next_trigger使用，主要是next_trigger无参数，或者参数为一个event时候的场景。
 
-==== next_trigger一段时间
+=== next_trigger一段时间
 
 对于设定了一段特定时间的next_trigger，自由函数next_trigger的实现则是：
 
@@ -1410,7 +1410,7 @@ sc_method_process::next_trigger( const sc_time& t )
 
 在method process中，多次调用next_trigger设定不同的trigger条件并不是一个良好的设计模式。
 
-==== next_trigger一个或几个事件，带超时设定
+=== next_trigger一个或几个事件，带超时设定
 
 对于设定了一个或几个事件的带超时的next_trigger，自由函数next_trigger的实现例子是：
 
@@ -1459,7 +1459,7 @@ sc_method_process::next_trigger( const sc_time& t, const sc_event_and_list& el )
 <<sc_process_b::trigger_dynamic, trigger_dynamic>>
 中判断事件的发生顺序，将另一个cancel和reset掉。
 
-==== clear_trigger
+=== clear_trigger
 
 clear_trigger用以在之前已经使用next_trigger设置过trigger条件的情况下，再次调用
 next_trigger时候的状态清除动作：
@@ -1548,7 +1548,7 @@ and_list需要每个事件发生才算完成。
 其他几种trigger type，例如 `EVENT_TIMEOUT`, `OR_LIST_TIMEOUT`, `AND_LIST_TIMEOUT` ，
 调用clear_trigger的时候所需的动作等于两种类型的组合，这里就不再分析了。
 
-==== 小结
+=== 小结
 
 next_trigger并不会阻塞method process的执行。如果在一次method process中，多次
 执行next_trigger，则以最后一次next_trigger调用为准。这意味着我们如果next_trigger

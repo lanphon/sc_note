@@ -1,11 +1,11 @@
 :source-highlighter: coderay
 
+
+= SystemC中的对象模型体系
+[[chap::object_hierarchy]]
 :toc: left
 
-SystemC中的对象模型体系
-[[chap::object_hierarchy]]
-
-=== sc_object
+== sc_object
 [[data::sc_object]]
 
 ((sc_object))，是systemc中绝大多数对象的基类。对于经常使用的sc_module, sc_fifo等，都是派生自sc_object的。比较特殊的是
@@ -62,7 +62,7 @@ sc_object的成员变量包括以下几个：
 而是需要一个单独的数组m_child_events来保存。对象的名字保存在字符串类型的m_name里，而本对象的父对象则保存作为m_parent。最后，仿真器的
 指针同样保存到m_simc中。
 
-==== sc_object的构造函数
+=== sc_object的构造函数
 
 对于一个sc_object而言，其拥有指向父对象的指针m_parent，以及其所有可能的子对象的指针m_child_objects。这样一来，systemc中所有的对象就构成
 了一种树状结构。关于树状结构的维护，主要由sc_object的构造函数完成：
@@ -190,7 +190,7 @@ object_name_illegal_char(char ch)
 如果所传递的名字是空指针，或者不是空指针但是长度为零，那么同样用sc_gen_unique_name产生一个名字。之后，对于用户自定义的
 名字，挨个检查每个字符，对于非法的字符，将其替换为下划线，然后用这个生成的名字调用sc_object_init来创建对象。
 
-==== sc_object attributes
+=== sc_object attributes
 
 sc_object实现了一个属性管理机制，主要由add_attribute, get_attribute, remove_attribute等接口函数组成。
 
@@ -303,7 +303,7 @@ sc_object::attr_cltn() const
 }
 ----
 
-==== sc_object的子对象和子事件管理
+=== sc_object的子对象和子事件管理
 
 sc_object提供了一系列的接口函数，用来管理一个sc对象内部的子对象或者子事件。子对象指的是直接创建在
 本对象内部的对象，例如一个module内部的fifo, process属于这个module的子对象，而一个process内部
@@ -400,7 +400,7 @@ void sc_object::orphan_child_objects()
 }
 ----
 
-==== sc_object的phase callback
+=== sc_object的phase callback
 
 sc_object定义了两个protected的接口函数，
 [[api::sc_object::register_simulation_phase_callback]]register_simulation_phase_callback
@@ -461,7 +461,7 @@ sc_object::simulation_phase_callback()
 <1> 如果sc_object的子类没有实现simulation_phase_callback，那么将会调用sc_object的
 simulation_phase_callback, 这将会报错
 
-==== sc_object其他成员函数
+=== sc_object其他成员函数
 
 [[api::sc_object::name]]sc_object的name成员函数，可以返回对象的名称（hierarchy名称）：
 
@@ -565,7 +565,7 @@ void sc_object::detach()
 
 现有代码中关于收容待移除对象的子对象部分的代码被注释掉了，暂时不知道这么做的含义是为何。
 
-=== systemc attribute
+== systemc attribute
 
 systemc attribute，指的是为每个systemc的object（但不包括event，因为event不继承自sc_object）
 可以设定的一个属性。注意能设定的属性只能是单个字符串，并且无法设定属性的值。换言之，只能为systemc重的
@@ -574,7 +574,7 @@ object设定某个特定的属性存在与否。
 systemc attribute的实现由sc_attr_base, sc_attr_cltn和sc_attribute<T>三个组成，其中最后一个
 是模板类，可以为属性携带更多的信息。
 
-==== sc_attr_base
+=== sc_attr_base
 ((sc_attr_base))是sc_object的<<api::sc_object::add_attribute, sc_object的add_attribute>>成员函数所使用的
 参数类型：
 [[data::sc_attr_base]]
@@ -641,7 +641,7 @@ sc_attr_base::name() const
 
 从所有的定义来看，sc_attr_base确凿无疑是`std::string`的一个包装类而已。
 
-==== sc_attr_cltn
+=== sc_attr_cltn
 [[data::sc_attr_cltn]]
 
 ((sc_attr_cltn))是每个<<data::sc_object, sc_object>>内管理属性的成员变量。sc_attr_cltn
@@ -745,7 +745,7 @@ sc_attr_cltn::operator [] ( const std::string& name_ )
 查找也只是寻找sc_attr_base数组中是否存在和给定的字符串相同的sc_attr_base指针，如果找到就返回指针，没找到
 就返回空指针。
 
-==== sc_attribute
+=== sc_attribute
 [[data::sc_attribute]]
 
 sc_attr_base只是`std::string`的包装类，如果需要表达更多的信息，就可以使用模板类
@@ -802,15 +802,15 @@ private:
 需要注意的是，在<<data::sc_attr_cltn, sc_attr_cltn>>中，只判断string存在与否，因此如果有
 一个`sc_attribute<T>`有着相同的名字，那么就会作为同一个attribute来管理，而无论其value是否相同。
 
-=== sc内核中的object manager
+== sc内核中的object manager
 [[data::sc_object_manager]]
 
 ((sc_object_manager))是systemc kernel中，用来维护systemc对象体系的主要实现。
 
-==== create_name
+=== create_name
 [[api::sc_object_manager::create_name]]
 
-=== sc_module
+== sc_module
 [[data::sc_module]]
 
 ((sc_module))是systemc中建模意见模块的数据结构，对应于verilog HDL里的module原语。sc_module同时
@@ -856,7 +856,7 @@ sc_process_host，那么定义在sc_module下的process在被调用的时候，�
 到`sc_process_host *`，这就提供了一个统一的指针类型。在<<api::SC_METHOD, SC_METHOD>>部分
 就使用了这个设计准则。
 
-==== 成员变量
+=== 成员变量
 
 ((sensitive))
 sc_module的成员变量分为两类，一类是protected的<<chap::sensitive, sensitive>>，
@@ -881,9 +881,9 @@ private:
 ----
 <1> sensitive_pos和sensitive_neg已经被废弃掉了，这两个成员变量应当不再使用
 
-另一类则是private的成员变量。
+另一类则是private的成员变量。这里比较重要的是sc_module_name类型的module名称
 
-==== sc_module的callback, wait和next_trigger
+=== sc_module的callback, wait和next_trigger
 
 <<api::module::callback, module的callback>>部分介绍了sc_module所定义的4个callback函数，每个sc_module的
 派生类可以通过重写以下四个callback函数的方式，定义其在<<concept::systemc_flow, SystemC仿真流程>>中的相应
@@ -899,7 +899,7 @@ private:
 使用，而不必去关心实际的wait究竟应该最终由哪个process实现。<<concept::next_trigger, next_trigger>>
 的设计也同理。
 
-=== object小结
+== object小结
 
 每个sc_object都可以使用add_attribute/remove_attribute/get_attribute，来为其维护属性信息。属性信息
 本质上是一个std::string类型而已，而非传统意义上是一个map。这意味着，一个特定的属性只能有用”有“或者”没有“

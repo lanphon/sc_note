@@ -1,11 +1,11 @@
 :source-highlighter: coderay
 
-:toc: left
 
-SystemC中的TLM 2.0 Simple Socket
+= SystemC中的TLM 2.0 Simple Socket
 [[chap::tlm_simple_socket]]
+:toc2:
 
-=== 引言
+== 引言
 
 在<<chap::tlm_intro, SystemC中的TLM 2.0介绍>>部分，我们简单介绍了TLM 2.0中常用的
 一些数据结构，包括initiator socket和target socket的定义，但这些仍然不足以支持
@@ -24,7 +24,7 @@ SystemC中的TLM 2.0 Simple Socket
 
 对于passthrough socket，以及multi socket，我们将在下一章讨论。
 
-=== convenience_socket_base
+== convenience_socket_base
 
 convenience_socket_base是一个纯虚的基类，用来实现一些辅助函数：
 [[data::convenience_socket_base]]
@@ -74,7 +74,7 @@ convenience_socket_base::display_error(const char* text) const
 的派生类只要实现了两个接口函数，就可以方便地调用display_warning和display_error，来打印
 warning和error信息了。这也是convenience_socket_base设计的初衷所在。
 
-====  convenience_socket_cb_holder
+===  convenience_socket_cb_holder
 
 convenience_socket_cb_holder是一个非常简单的用来持有convenience_socket_base指针
 的类，这也是为何名字叫call-back holder的原因了:
@@ -100,7 +100,7 @@ private:
 ----
 <1> 构造函数只接受一个convenience_socket_base指针，然后将指针保存下来
 
-=== simple socket
+== simple socket
 
 simple socket，是最简单类型的一种socket。simple socket包括initiator和target两种socket的
 实现。这里的实现意思是，相关的数据结构实现了相应的接口函数。然而，在TLM 2.0中，接口函数的实现
@@ -227,7 +227,7 @@ simple_initiator_socket调用这些FW_IF的接口函数，其表现就如同直�
 注册FW_IF类型回调函数的反而是simple_target_socket。
 
 
-=== simple_socket_base
+== simple_socket_base
 
 simple_socket_base直接继承自convenience_socket_base，且只实现了一个接口函数
 get_report_type，所以simple_socket_base还是一个抽象虚基类：
@@ -275,7 +275,7 @@ simple_socket_base::elaboration_check(const char* action) const
 在elaboration done之后调用，则没有其他作用。这个函数主要是为了确保一些执行过程需要在elaboration
 done之前发生。
 
-=== simple_initiator_socket
+== simple_initiator_socket
 
 ((simple_initiator_socket))包括一系列sockets定义，同样有着一套复杂的继承关系：
 
@@ -301,7 +301,7 @@ image::simple_initiator_socket.png[]
 我们将按照继承体系的顺序，逐步探索这些类的实现细节。
 
 
-==== simple_initiator_socket_b::process
+=== simple_initiator_socket_b::process
 
 simple_initiator_socket_b::process是定义在simple_initiator_socket_b模板类
 内部的一个辅助的模板类。process直接继承自<<api::tlm_bw_transport_if, tlm_bw_transport_if>>
@@ -406,7 +406,7 @@ MODULE的指针，以及两个成员函数指针均为空。这三个成员变�
 总结一下，simple_initiator_socket_b::process，就是一个使用回调函数机制，实现了
 <<api::tlm_bw_transport_if, tlm_bw_transport_if>>的模板类。
 
-==== simple_initiator_socket_b
+=== simple_initiator_socket_b
 [[data::simple_initiator_socket_b]]
 
 simple_initiator_socket_b是一个模板类，需要4个模板参数:
@@ -521,7 +521,7 @@ get_base_interface/get_base_export所返回的BW_IF指针或者sc_export<BW_IF>�
 函数实际保存在simple_initiator_socket_b唯一的成员变量m_process中，实际上是保存了
 一个对象（对象的类型就是simple_initiator_socket_b的第一个模板参数）的指针和两个成员函数指针。
 
-==== simple_initiator_socket
+=== simple_initiator_socket
 
 simple_initiator_socket的实现非常简单，直接继承自<<data::simple_initiator_socket_b, simple_initiator_socket_b>>。
 对于基类simple_initiator_socket_b，提供了可选的模板参数BUSWIDTH和TYPES，这样POL模板参数就使用了
@@ -544,7 +544,7 @@ public:
 };
 ----
 
-==== simple_initiator_socket_optional
+=== simple_initiator_socket_optional
 
 simple_initiator_socket_optional的实现和simple_initiator_socket一样，也非常简单，直接继承
 自simple_initiator_socket_b，提供了可选的模板参数BUSWIDTH和TYPES。而在基类继承的时候，为模板
@@ -567,7 +567,7 @@ public:
 };
 ----
 
-==== simple_initiator_socket_tagged_b::process
+=== simple_initiator_socket_tagged_b::process
 
 simple_initiator_socket_tagged_b内部有一个类process，实现了和
 <<data::simple_initiator_socket_b::process, simple_initiator_socket_b中的process类>>
@@ -681,7 +681,7 @@ process类同样继承自<<api::tlm_bw_transport_if, tlm_bw_transport_if>>和
 和
 <<data::simple_initiator_socket_tagged_b::register_invalidate_direct_mem_ptr, simple_initiator_socket_tagged_b的register_invalidate_direct_mem_ptr>>
 
-==== simple_initiator_socket_tagged_b
+=== simple_initiator_socket_tagged_b
 
 simple_initiator_socket_tagged_b，是实现带tagged功能的simple initiator socket的基础。
 这个所谓的tag，实际上就是在
@@ -769,7 +769,7 @@ simple_initiator_socket_tagged_b的构造非常简单：
 只是需要注意，register_nb_transport_bw和register_invalidate_direct_mem_ptr在调用的时候就需要
 提供一个 `int` 型的数据，来设置m_process中的相应的值。这个值就是所谓的tagged了。
 
-==== simple_initiator_socket_tagged
+=== simple_initiator_socket_tagged
 
 simple_initiator_socket_tagged和
 <<data::simple_initiator_socket_tagged_b, simple_initiator_socket_tagged_b>>的关系，就和
@@ -795,7 +795,7 @@ public:
 <1> 这里并没有指定POL，意味着使用<<data::simple_initiator_socket_tagged_b, simple_initiator_socket_tagged_b>>
 默认的POL模板参数值 `sc_core::SC_ONE_OR_MORE_BOUND`
 
-==== simple_initiator_socket_tagged_optional
+=== simple_initiator_socket_tagged_optional
 
 simple_initiator_socket_tagged_optional和
 <<data::simple_initiator_socket_tagged_b, simple_initiator_socket_tagged_b>>的关系，就和
@@ -819,7 +819,7 @@ public:
 };
 ----
 
-==== simple initiator socket summary
+=== simple initiator socket summary
 
 simple initiator socket，指包括
 <<data::simple_initiator_socket, simple_initiator_socket>>, 
@@ -850,7 +850,7 @@ simple_initiator_socket内部的sc_export<BW_IF>已经绑定到了具体的实�
 * tlm_initiator_socket可以绑定一个simple_initiator_socket，这意味着这个tlm_initiator_socket和simple_initiator_socket一起，构成了
 hierarchy binding的终点（对于BW_IF而言）
 
-=== simple_target_socket
+== simple_target_socket
 
 ((simple_target_socket))，类似于simple_initiator_socket，同样由多种类型的socket组成：
 
@@ -872,7 +872,7 @@ target socker而言，其内部需要实现BW_IF的功能。BW_IF有4个接口�
 如果无需实现nonblocking的接口函数和blocking的接口函数之间的相互实现，simple_target_socket就会变得简单很多。这样的target
 socket就是我们下一部分要介绍的<<data::passthrough_target_socket, passthrough_target_socket>>。
 
-==== simple_target_socket_b::bw_process
+=== simple_target_socket_b::bw_process
 
 bw_process是定义在模板类型simple_target_socket_b中的一个辅助类，用来处理后向通路的调用：
 
@@ -968,7 +968,7 @@ bw_process实现tlm_bw_transport_if的接口函数invalidate_direct_mem_ptr的
 <<data::fw_process::end_event, fw_process使用nonblocking实现blocking的事件等待部分>>的blocking请求就结束，然后将这个trans从
 `m_owner->m_pending_trans` 中移除。之后直接返回TLM_COMPLTED即可，不再需要返回一个TLM_UPDATED/TLM_ACCEPTED，继续END_RESP阶段。
 
-==== simple_target_socket_b::fw_process
+=== simple_target_socket_b::fw_process
 
 fw_process同样是定义在simple_target_socket_b内部的辅助类。fw_process直接继承自
 <<api::tlm_fw_transport_if, tlm_fw_transport_if>>，同时也继承自 <<api::tlm_mm_interface, tlm_mm_interface>>：
@@ -1132,7 +1132,7 @@ simple target socket就需要使用实现了的回调函数来实现相应的API
 * 注册了non-blocking的API，但没有注册blocking的API，那么就需要使用nb_transport_fw实现b_transport
 * 注册了blocking的API，但没有注册non-blocking的API，那么就需要使用b_transport时限nb_transport_fw
 
-===== nb_transport_fw实现b_transport
+==== nb_transport_fw实现b_transport
 [[impl::nb_transport_fw::b_transport]]
 
 在fw_process的实现b_transport的时候，如果发现b_transport的回调函数没有实现，但是实现了nb_transport_fw，那么就需要使用如下代码了：
@@ -1394,7 +1394,7 @@ PHASE是BEGIN_RESP，由<<bw_process::b2nb_thread::begin_resp, bw_process里的b
 这里同样按照流程，在 `m_owner->m_pending_trans` 中查找对象，notify对应的event，然后从中移除这个已经完成的
 trans对象。
 
-===== b_transport实现nb_transport_fw
+==== b_transport实现nb_transport_fw
 [[impl::b_transport::nb_transport_fw]]
 
 在fw_process的实现nb_transport_f的时候，如果发现nb_transport_f的回调函数没有实现，但是实现了b_transport，那么就需要使用如下代码了：
@@ -1526,7 +1526,7 @@ TODO: 这部分内容还需要在看几遍
         }
 ----
 
-==== simple_target_socket_b
+=== simple_target_socket_b
 
 simple_target_socket_b有两个基类，一个是<<api::tlm_target_socket, tlm_target_socket>>，
 另一个则是simple_socket_base，后者主要为了实现display_warning和display_error信息。
@@ -1690,7 +1690,7 @@ simple_target_socket_b自己作为一个tlm_target_socket，在构造函数中�
 没有被调用，那么就无需定义回调函数。对于nb_transport_fw和b_transport，则只需要实现其中一个，另一个
 simple_target_socket会自行实现（如果nb_transport_fw实现，那么所绑定的initiator socket侧必须同时实现nb_transport_bw）。
 
-==== simple_target_socket
+=== simple_target_socket
 
 如同<<data::simple_initiator_socket, simple_initiator_socket>>的实现一样，
 simple_target_socket直接继承自 <<data::simple_target_socket_b, simple_target_socket_b>>，主要
@@ -1714,7 +1714,7 @@ public:
 };
 ----
 
-==== simple_target_socket_optional
+=== simple_target_socket_optional
 
 与<<data::simple_initiator_socket_optional, simple_initiator_socket_optional>>一样，
 simple_target_socket_optional继承
@@ -1737,7 +1737,7 @@ public:
 };
 ----
 
-==== simple_target_socket_tagged_b
+=== simple_target_socket_tagged_b
 
 带tagged版本的simle_target_socket_tagged_b，其实现和
 <<data::simple_target_socket_b, simple_target_socket_b>>基本一样，唯一的区别在于，注册的回调函数
@@ -1813,7 +1813,7 @@ class simple_target_socket_tagged_b
 ----
 <1> 四个回调函数指针的原型，相比于FW_if，都增加了一个额外的整型参数，这就是所谓的tagged
 
-==== simple_target_socket_tagged
+=== simple_target_socket_tagged
 
 simple_target_socket_tagged与
 <<data::simple_target_socket_tagged_b, simple_target_socket_tagged_b>>
@@ -1838,7 +1838,7 @@ public:
 };
 ----
 
-===== simple_target_socket_tagged_optional
+==== simple_target_socket_tagged_optional
 
 simple_target_socket_tagged_optional与
 <<data::simple_target_socket_tagged_b, simple_target_socket_tagged_b>>
@@ -1864,14 +1864,14 @@ public:
 
 ----
 
-==== simple target socket summary
+=== simple target socket summary
 
 请参考TLM LRM 9.1.2.5部分，来了解更多simple target socket实现nonblocking/blocking
 API之间相互转换的细节。
 
-=== Misc Data Struction
+== Misc Data Struction
 
-==== peq_with_get
+=== peq_with_get
 [[data::peq_with_get]]
 
 peq_with_get，是payload event queue的get版本。
@@ -1902,7 +1902,7 @@ peq_with_get保存的是需要做blocking transport的trans对象，但这些
 trans对象带有延迟信息，所以在使用nb_transport的时候，不能立马调用他们，而是先放入
 一个队列中，按照所设置时间的远近，依次调用。
 
-===== notify
+==== notify
 [[data::peq_with_get::notify]]
 
 将一个需要传输的对象trans以及发生时间t放入peq_with_get，只能使用函数 `notify`:
@@ -1926,7 +1926,7 @@ trans对象带有延迟信息，所以在使用nb_transport的时候，不能立
 notify除了将trans以及发生的时间（等于当前的时间加上延时时间）放入 `m_cheduled_events`（这是一个multimap，支持
 多个key，同时可以对key排序）外，还出发了m_event。如果没有给trans的延时信息，那么默认是立即发生。
 
-===== get_next_transaction
+==== get_next_transaction
 [[data::peq_with_get::get_next_transaction]]
 
 peq_with_get的get_next_transaction在
@@ -1979,7 +1979,7 @@ API实现blocking语义的时候，在trans完成之前不会返回，因此往�
 中最多存在一个item。+++</del>+++
 simple_target_socket的使用过程中，b_transport可能被多次调用，因而这里的错误是可能发生的。我们需要根据具体情况来分析。
 
-===== Event Management
+==== Event Management
 [[data::peq_with_get::get_event]]
 
 peq_with_get提供了简单的函数，一个用来返回成员变量 `m_event` 的引用，另一个则
@@ -2000,7 +2000,7 @@ peq_with_get提供了简单的函数，一个用来返回成员变量 `m_event` 
   }
 ----
 
-==== process_handle_class and process_handle_list
+=== process_handle_class and process_handle_list
 process_handle_class和process_handle_list是在
 <<impl::b_transport::nb_transport_fw, 使用blocking的b_transport实现nonblocking API>>
 的时候，主要用来为处理每个nonblocking的trans的，这是因为b_transport本身就是个阻塞实现，而
@@ -2070,7 +2070,7 @@ process_handle_list的get_handle操作，会优先寻找那些已经suspend的th
 后，调用这里的 `put_handle` 函数，放入进去，这样就能在这个新建的process_handle_class完成工作，suspend
 自己之后，复用起来了。
 
-=== Nonblocking Transaction Framework
+== Nonblocking Transaction Framework
 
 对于<<api::tlm_blocking_transport_if, tlm_blocking_transport_if>，理解起来是比较简单的：发起端
 调用接口函数b_transport，将数据的引用，和一个延时时间的引用传入，等待b_transport返回之后，所需要
@@ -2287,4 +2287,4 @@ END_RESP阶段。
 如果前一个状态是BEGIN_RESP，则此时forward path只能发起END_RESP请求。在这种情况下，
 无论target socket返回TLM_ACCEPTED，还是TLM_COMPLETED，都表明transaction的结束。
 
-=== References
+== References

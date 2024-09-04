@@ -1,11 +1,11 @@
 :source-highlighter: coderay
 
+
+= SystemC中的process
+[[chap::process]]
 :toc: left
 
-SystemC中的process
-[[chap::process]]
-
-=== 引言
+== 引言
 
 在<<chap::schedule_model, SystemC调度模型>>
 一章中，我们已经可以了解SystemC是如何创建和使用Process的。
@@ -24,7 +24,7 @@ process的disable/enable，以及process的suspend/resume。
 * sc_cthread_handle是 `sc_cthread_process*` 的别名
 * sc_process_handle是基础类，不继承任何其他类，内部保存一个指向sc_process_b的指针，因此可以认为是一个包装类
 
-=== sc_process_b
+== sc_process_b
 [[data::sc_process_b]]
 
 sc_process_b 是所有三种process的基类，并且这是一个接口类，派生自sc_process_b
@@ -33,7 +33,7 @@ sc_process_b 是所有三种process的基类，并且这是一个接口类，派
 sc_process_b 作为一个接口类，不只是简单定义了接口函数，而是实现了非常丰富的
 成员变量，以及相应的成员函数，以供继承类使用。
 
-==== 成员变量
+=== 成员变量
 
 sc_process_b 继承自 <<data::sc_object, sc_object>> ，除了继承得到的成员变量以外，sc_process_b还
 增加了非常丰富的成员变量，以支持process这一概念：
@@ -276,7 +276,7 @@ protected:
 这个 `m_last_created_process_p` 是实现 `last_created_process_handle`
 的基石。
 
-===== 静态/动态事件
+==== 静态/动态事件
 
 Process的成员变量中，有多个与sc_event相关的部分，这些是process静态或者动态调度时所依赖
 的时间对象。Process使用哪些对象，要根据 `m_trigger_type` 判断：
@@ -292,11 +292,11 @@ Process的成员变量中，有多个与sc_event相关的部分，这些是proce
 
 一种特定trigger type下，不使用的动态部分需要清空。
 
-==== 重要成员函数
+=== 重要成员函数
 
 sc_process_b还实现了非常多的基础函数，以供派生类使用。
 
-===== semantics
+==== semantics
 [[api::sc_process_b::semantics]]
 
 sc_process_b的semantics函数会启动sc_process_b所保存的线程函数，这个我们在
@@ -372,7 +372,7 @@ void sc_process_b::trigger_reset_event()
 没有异步reset]。
 
 
-===== add_static_event
+==== add_static_event
 
 [[api::sc_process_b::add_static_event]]
 `add_static_event` 将一个事件加入到 `m_static_events` 列表中，同时也将
@@ -430,7 +430,7 @@ dynamic event则是在<<concept::wait, wait>>或者<<concept::next_trigger, next
 时候设置的。对于事件，将一个sc_process_b通过add_dynamic列入本事件所关联的动态
 事件，也是在wait/next_trigger中**动态**完成的。
 
-===== remove_static_events
+==== remove_static_events
 
 [[api::sc_process_b::remove_static_events]]
 与add_static_event功能相反的是remove_static_events:
@@ -481,7 +481,7 @@ static process列表中移除。最后将 `m_static_events` 清零。
 一般来说，很少需要将process的static events列表清除，因为在process的生命周期中，process
 都需要依赖这些静态事件的发生来被调度。只有当process的生命周期显式地被要求结束（在disconnect_process中），才需要调用remove_static_events。
 
-===== remove_dynamic_events
+==== remove_dynamic_events
 
 [[api::sc_process_b::remove_dynamic_events]]
 在process生命周期显式被结束的时候，还需要清除动态敏感事件，因此有一个 `remove_dynamic_events`
@@ -566,7 +566,7 @@ sc_process_b::remove_dynamic_events( bool skip_timeout )
 event以外所有的动态事件（其实只有单一事件和多个事件列表）。只有在trigger_dynamic的时候，
 process被disable，才会传入一个参数要求保留timeout event，但这么设计的原因目前未知。
 
-===== child object management
+==== child object management
 
 sc_process_b中有三个用于管理子对象的函数：
 
@@ -607,7 +607,7 @@ sc_process_b::get_child_objects() const
 }
 ----
 
-===== disconnect_process
+==== disconnect_process
 [[api::sc_process_b::disconnect_process]]
 
 disconnect_process 用以在kill_process中，从其他与之关联的数据结构，如monitor, event等，
@@ -685,7 +685,7 @@ disconnect process主要的动作有：
 调用了disconnect_process的process进入zombie状态，m_state被标记为ps_zombie
 bit位。对一个zombie的process调用disconnect_process会直接返回。
 
-===== delete_process
+==== delete_process
 [[api::sc_process_b::delete_process]]
 
 delete_process可以将本process所有分配的资源释放掉：
@@ -763,7 +763,7 @@ inline void sc_process_b::reference_decrement()
 
 所以这一次，sc_get_current_proc_b返回空指针，delete_process就可以正常 `delete this` 了。
 
-===== reset_process
+==== reset_process
 [[api::sc_process_b::reset_process]]
 
 不同于disconnect_process或者delete_process, reset_process的处理相对来说比较复杂，因为
@@ -773,7 +773,7 @@ Method执行的时候都是完整执行函数体的。但是对于Thread/CThread
 关于reset_process的内容，请参考<<concept::process::reset, reset机制>>的
 <<api::sc_process_b::reset_process::impl, reset执行流程>>部分。
 
-===== reset_event and terminated_event
+==== reset_event and terminated_event
 [[api::sc_process_b::reset_event]]
 
 sc_process_b的 `reset_event` 返回一个与本process相关联的reset event的引用。如果
@@ -811,7 +811,7 @@ void sc_process_b::trigger_reset_event()
 }
 ----
 
-===== last_created_process_handle
+==== last_created_process_handle
 
 last_created_process_handle是一个静态成员函数，用以返回最后一次创建的process
 的handle:
@@ -832,7 +832,7 @@ inline sc_process_handle sc_process_b::last_created_process_handle()
 
 这里面主要借助了 sc_process_b 静态成员变量 m_last_created_process_p 。
 
-===== start_unwinding, clear_unwinding and is_unwinding
+==== start_unwinding, clear_unwinding and is_unwinding
 
 start_unwinding, clear_unwinding, 以及 is_unwinding，这三个函数实际上
 只是操作 `m_unwinding` 这个状态变量：
@@ -923,10 +923,10 @@ inline bool sc_process_b::is_unwinding() const
 
 is_unwinding则返回m_unwinding的状态。
 
-=== sc_process_handle
+== sc_process_handle
 [[data::sc_process_handle]]
 
-==== 成员变量
+=== 成员变量
 
 sc_process_handle内部只保存了一个指向基类sc_process_b指针的成员变量 `m_target_p`:
 
@@ -945,7 +945,7 @@ sc_process_handle内部只保存了一个指向基类sc_process_b指针的成员
 另外三个静态成员变量，是为了在 `m_target_p` 为空的情况下，某些需要返回
 对象引用的成员函数能够正确返回引用而添加的。
 
-==== 成员函数
+=== 成员函数
 
 sc_process_handle的成员函数，绝大多数都是调用保存的 `m_target_p` 的相应同名或者
 近似名称的成员函数:
@@ -972,10 +972,10 @@ sc_process_handle的成员函数，绝大多数都是调用保存的 `m_target_p
 * `terminated` 调用了sc_process_b的terminated
 * `terminated_event` 调用了sc_process_b的<<api::sc_process_b::terminated_event, terminated_event>>
 
-=== sc_thread_process
+== sc_thread_process
 [[data::sc_thread_process]]
 
-==== 成员变量
+=== 成员变量
 
 除了基类 `sc_process_b` 的成员变量以外，((sc_thread_process))为支持协程
 能力，增加了如下几个成员变量：
@@ -1000,9 +1000,9 @@ sc_process_handle的成员函数，绝大多数都是调用保存的 `m_target_p
 <<api::sc_thread_process::wait_cycles, wait_cycles>>成员函数中，用以支持设定
 特定等待时钟周期的场景。
 
-==== 重要成员函数
+=== 重要成员函数
 
-===== throw_reset
+==== throw_reset
 [[api::sc_thread_process::throw_reset]]
 
 throw_reset是 <<api::sc_process_b::reset_changed, reset_changed>> 成员函数中最终调用的
@@ -1225,14 +1225,14 @@ notify以下 <<api::sc_process_b::reset_event, reset event>>之外，主要就�
 * 同步reset只会将需要reset的proces标记好，等到下一次这个需要reset的process执行的时候，才
 reset
 
-===== throw_user
+==== throw_user
 [[api::sc_thread_process::throw_user]]
 类似throw_reset, throw_user抛出一个用户自定义的异常。
 
-=== sc_method_process
+== sc_method_process
 [[data::sc_method_process]]
 
-==== 成员变量
+=== 成员变量
 
 ((sc_method_process))在基类 `sc_process_b` 的基础上增加了如下几个成员变量：
 
@@ -1246,9 +1246,9 @@ reset
 
 然而这三个成员变量在sc_method_process中并没有得到使用。
 
-==== 重要成员函数
+=== 重要成员函数
 
-===== throw_reset
+==== throw_reset
 [[api::sc_method_process::throw_reset]]
 
 对于method的throw_reset，其实现如下：
@@ -1341,7 +1341,7 @@ throw_reset抛出来的异常会在这里被catch住，然后整个method会再�
 
 对于method而言，同步的reset似乎不需要特殊处理。因为对于method而言，每一次执行都是重新开始执行。
 
-===== run_process
+==== run_process
 [[api::sc_method_process::run_process]]
 
 method的 `run_process` 函数是method的入口函数，例如，在simc的
@@ -1391,7 +1391,7 @@ Thread挂起/恢复机制。
 这里主要是处理调用method函数体(即semantics)过程中抛出的异常。除了reset会让函数体重新执行
 以外，其他的异常都会中断执行，并根据情况返回状态位。
 
-===== check_for_throws
+==== check_for_throws
 [[api::sc_method_process::check_for_throws]]
 
 method process的check_for_throws主要用在<<api::sc_simcontext::preempt_with, simc的preempt_with>>中。当一个Method正在运行时，如果被抢占执行，无论抢占执行的是另一个Method，还是
@@ -1435,7 +1435,7 @@ void sc_method_process::check_for_throws()
 check_for_throws的具体设计用途，以及为什么没有同步reset，目前还不是很清楚。从注释来看，似乎
 的确是考虑到被抢占时，抢占的thread可能对被抢占的method做出kill/reset等动作而导致的。
 
-=== sc_cthread_process
+== sc_cthread_process
 [[data::sc_cthread_process]]
 
 sc_cthread_process是一种特殊的thread_process。cthread中的c，意思是clock-drived。
@@ -1451,22 +1451,22 @@ sc_cthread_process概念的提出是在因为在SystemC早期版本中，sc_thre
 在目前最新的SystemC版本中，建议使用sc_thread_process代替sc_cthread_process。sc_cthread_process
 概念只作为兼容性部分，保留在最新的SystemC代码中。
 
-==== 成员变量
+=== 成员变量
 
 sc_cthread_process在基类 `sc_thread_process` 基础上，没有新增加其他的
 成员变量。
 
-==== 成员函数
+=== 成员函数
 
 sc_cthread_process并没有新增比较重要的成员函数。
 
-=== reset机制
+== reset机制
 [[concept::process::reset]]
 
 (((sc_thread_process, reset)))
 Process中有一套非常复杂的reset机制，来仿真模拟实际的RTL reset行为。
 
-==== reset设置流程
+=== reset设置流程
 
 [[api::sc_module::async_reset_signal_is]]
 <<data::sc_module, sc_module>>提供了如下几组API，用来实现process的reset逻辑指定：
@@ -1575,7 +1575,7 @@ inline void sc_process_b::initially_in_reset( bool async )
 * sc_signal内保存了所有的需要reset的process 的一组三元信息
 * process内保存了所有用作reset的sc_reset指针footnote:[从SystemC代码中并没有看到这里保存的m_resets被使用的情况]
 
-==== reset执行流程
+=== reset执行流程
 
 在SystemC中，reset大致可以分为两种：
 
@@ -1868,7 +1868,7 @@ reset event。但这种trigger reset event的事情，会在同步reset期间，
 一遍，直到同步reset结束为止。
 
 
-==== 能够用作reset的类型
+=== 能够用作reset的类型
 
 默认情况下， `sc_signal_in_if<T>` 的 is_reset 会返回一个空指针，这意味着普通的sc_signal
 是无法作为reset的。从逻辑角度考虑这也是符合事实的，只有一根信号的sc_signal才能够作为
@@ -1893,7 +1893,7 @@ sc_signal<bool,POL>::is_reset() const
 `sc_signal<sc_dt::sc_logic>` 不能作为reset信号，猜测是因为 `sc_logic` 是一个四值逻辑，不符合
 作为reset信号的二值逻辑要求。
 
-==== sc_reset_finder
+=== sc_reset_finder
 [[data::sc_reset_finder]]
 
 sc_reset_finder的设计思想和设计目的与sc_event_finder一致，都是在module中，sc_port/sc_export
@@ -1957,7 +1957,7 @@ reset状态了
 设置其为process的reset信号。如果需要设置异步reset，可以使用
 <<api::sc_module::async_reset_signal_is, sc_module的async_reset_signal_is>>。
 
-=== process状态的迁移变化
+== process状态的迁移变化
 
 在sc_process_b中，有一个记录当前线程状态的位掩码 <<data::sc_process_b::m_state, `m_state`>> 。
 sc_process_b可能有如下几种状态：
@@ -2055,7 +2055,7 @@ bool sc_allow_process_control_corners = false;
 sc_core::sc_allow_process_control_corners = true;
 ----
 
-==== disable and enable
+=== disable and enable
 [[concept::process::control::disable_enable]]
 
 sc_process_handle的enable/disable调用，如前所述，调用的其实是内部sc_process_b
@@ -2088,7 +2088,7 @@ inline void sc_process_handle::disable(sc_descendant_inclusion_info descendants)
 enable_process/disable_process是sc_process_b的接口函数，是纯虚函数。对于Thread和Method
 有着不同的实现。
 
-===== Thread/CThread
+==== Thread/CThread
 
 [[concept::process::control::disable::thread]]
 首先我们来看Thread/CThread是如何实现disable的：
@@ -2215,7 +2215,7 @@ next_runnable()为空，即这个process不在runnable列表中，就将这个th
 等待事件。
 * 如果仿真中disable process，之后再enable process，除非之前process已经执行且处于ready to run状态，否则enable_process不会将这个process放入列表中执行。仿真已经开始，说明这个process handle要么可能被静态敏感事件注册为关联线程，要么动态等待在一个事件上，都会有机会被调度重新放入可执行列表的
 
-===== Method
+==== Method
 
 [[concept::process::control::disable::method]]
 Method的disable_process实现如下：
@@ -2319,7 +2319,7 @@ void sc_method_process::enable_process(
 为true。我个人猜测，这应该是因为Method每次都会完整执行一遍，不像Thread那样存在死循环，所以
 disable之后，再enable，调度执行即可，不会是一个corner case.
 
-==== disable-enable例子分析
+=== disable-enable例子分析
 
 现在我们有一个clock period为100ns的sc_clock clock，并且有如下代码：
 
@@ -2437,7 +2437,7 @@ target奖没有任何event能够唤醒，哪怕之后被enable了同样如此。
 机制一般适用于clock驱动的process，这些process天然带有clock的敏感沿作为静态事件。
 
 
-==== suspend and resume
+=== suspend and resume
 [[concept::process::control::suspend_resume]]
 
 suspend操作会挂起一个线程，而resume操作则会继续此线程的执行。这里的suspend/resume
@@ -2475,7 +2475,7 @@ inline void sc_process_handle::suspend(sc_descendant_inclusion_info descendants)
 
 Method和Thread/CThread有着不同的suspend/resume动作。
 
-===== Thread/CThread
+==== Thread/CThread
 
 以下是Thread/CThread的suspend_process的代码：
 [[concept::process::control::suspend::thread]]
@@ -2627,7 +2627,7 @@ suspended之后不会执行，直到resume的时候才会被放入调度队列�
 线程会从上次被打断的地方恢复执行。对于自我suspend的情况，这相当于 suspend_process函数
 中的suspend_me返回了。
 
-===== Method
+==== Method
 
 Method的suspend_process实现如下：
 [[concept::process::control::suspend::method]]
@@ -2766,7 +2766,7 @@ void sc_method_process::resume_process(
 resume一个Method线程的动作和resume一个Thread线程的动作是一模一样的。概念上的区别在于，resume
 一个Method线程，这个线程会从头开始执行，而不像Thread线程那样，从上次suspend的地方开始执行。
 
-==== suspend-resume例子分析
+=== suspend-resume例子分析
 
 例如，我们有calling和target两个Thread，其中 `t` 是target的sc_process_handle:
 
@@ -2837,7 +2837,7 @@ suspend-resume机制不太适合用于clock驱动的process，因为使用clock�
 很难理解这种把suspend期间发生的事件推迟到resume时候的概念。suspend-resume
 一般用来抽象调度器。
 
-==== kill
+=== kill
 [[concept::process::control::kill]]
 
 与disable/enable, suspend/resume相比，kill一个process并没有与之配对的函数，这是因为
@@ -2847,7 +2847,7 @@ suspend-resume机制不太适合用于clock驱动的process，因为使用clock�
 kill一个process主要通过sc_process_b的接口类kill_process实现，Thread和Method有着不同
 的实现方式。
 
-===== Thread/CThread
+==== Thread/CThread
 [[concept::process::control::kill::thread]]
 
 Thread的kill_process实现如下：
@@ -2976,7 +2976,7 @@ thread在runnable列表中，则从中移除。接下来完全结束(abort)当�
 process的<<api::sc_process_b::disconnect_process, disconnect_process>>
 函数即可。
 
-===== Method
+==== Method
 [[concept::process::control::kill::method]]
 
 Method的kill_process相比而言，实现比较简单：
@@ -3062,7 +3062,7 @@ runnable中移除可能的method之后，立即调用<<api::sc_process_b::discon
 的目的。
 
 
-==== prepare_to_simulate中的状态判断
+=== prepare_to_simulate中的状态判断
 [[use::process::control::prepare_to_simulate]]
 
 在<<concept::simulate::initialize, 初始化>>部分，我们介绍过，在仿真开始前的时刻，
@@ -3133,14 +3133,14 @@ simc会将所有没有设定dont_initialize的method/thread都放入runnable列�
 就是仿真开始之前线程已经被suspend了，由于理论上此时线程应该被执行一次，但是却被suspend，按照
 suspend-resume的逻辑，需要标记其为ready to run，这样在resume的时候就可以执行起来了。
 
-=== Dynamic Process
+== Dynamic Process
 
 动态的process，指的是在仿真开始之后（simulation阶段）创建出来的线程，这些线程一般使用
 sc_spawn来实现。sc_spawn也可以用来为那些不符合
 <<api::SC_METHOD, SC_METHOD>>和<<api::SC_THREAD, SC_THREAD>>要求的
 函数原型的成员函数创建method/thread类型的线程。
 
-==== sc_spawn
+=== sc_spawn
 
 
 [[func::sc_spawn]]
@@ -3448,7 +3448,7 @@ sc_clock虽然只是一个sc_signal，但是借助sc_spawn，获得了类似于
 <<data::sc_module, sc_module>>
 这样的能够创建单独线程的能力，这就实现了sc_clock的自激励特性。
 
-==== sc_bind, sc_ref和sc_cref
+=== sc_bind, sc_ref和sc_cref
 [[func::sc_bind]]
 
 为支持动态process功能，SystemC内置了如下3个辅助函数 footnote:[根据SystemC的开发记录，这些应当是从Boost中借鉴过来的]：
@@ -3498,7 +3498,7 @@ auto sc_cref( T&& v )
 sc_bind(可以认为就是std::bind)返回的是一个functor，天然重载了 `operator()` ，无需
 显式重载 `operator()` 。
 
-=== preempt_with
+== preempt_with
 [[api::sc_simcontext::preempt_with]]
 
 preempt_with实现了“抢占”执行的概念，实际上SystemC仍然使用协程调度的方式，所谓的抢占
@@ -3510,7 +3510,7 @@ preempt_with实现了“抢占”执行的概念，实际上SystemC仍然使用�
 * 要抢占执行的是thread
 * 要抢占执行的是method
 
-==== thread重载形式
+=== thread重载形式
 [[api::sc_simcontext::preempt_with::thread]]
 
 当要抢占执行的是一个thread的时候，分三种情况：
@@ -3731,7 +3731,7 @@ runnable中，被抢占的thread process就在要抢占的thread process之后�
 
 这个行为需要确认。
 
-==== method重载形式
+=== method重载形式
 [[api::sc_simcontext::preempt_with::method]]
 
 method重载形式的preempt_with的代码如下：
@@ -3843,7 +3843,7 @@ method的抢占执行相对来说还是比较加单的，因为method不需要�
 这里为了在执行thread的时候，抢占执行一个method，而设计了一个 `m_method_invoker_p`
 的方式。
 
-=== Process小结
+== Process小结
 
 Process是SystemC中非常重要的一个概念，是SystemC执行调度的基础。两种不同类型的Process也分别
 适合建模不同的逻辑：Method适合建模组合逻辑，Thread适合建模时序逻辑，当然这种适合并非意味
