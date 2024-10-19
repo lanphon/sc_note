@@ -181,7 +181,7 @@ callback函数，这样SC在仿真的相应阶段，会调用这些函数：
 * start_of_simulation
 * end_of_simulation
 
-这四个函数在对应的基类中都是虚函数(然而并不是纯虚函数)。派生类如果需要的话，可以overrie这些方法。
+这四个函数在对应的基类中都是虚函数(然而并不是纯虚函数)。派生类如果需要的话，可以override这些方法。
 
 注意，这四个call-back函数并不是sc_object对象拥有的，所以只有sc_module, sc_port, sc_export和
 sc_primitive_channel的派生类才可以override。

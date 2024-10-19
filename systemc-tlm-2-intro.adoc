@@ -2297,11 +2297,14 @@ tlm_global_quantum::compute_local_quantum()
 等内容。这些构成了TLM 2.0部分的互操作性部分。
 
 相比于TLM 1.0，TLM 2.0的设计采取了更加复杂的协议。Interface传递的数据可以被下游修改，从而实现需要的功能。延时时间参数的加入，也使得TLM 2.0
-相比TLM 1.0，更加接近transaction level的概念。延时时间参数的加入，也使得TLM 2.0相比于TLM 1.0，摆脱了对primitive channel的束缚。在TLM 1.0中，
+相比TLM 1.0，更加接近transaction level的概念。同时，这也使得TLM 2.0相比于TLM 1.0，摆脱了对primitive channel的束缚。在TLM 1.0中，
 由于没有延时时间的概念，因此即使是同样基于API的接口，仍然需要依靠tlm_fifo这个primitive channel，保证在一个delta cycle内不会出现race condition。
 在TLM 2.0，所有的API函数都需要携带一个延时参数，最小值是SC_ZERO_TIME，这就使得相应的函数至少在delta cycle之间得到不同的调度，从而保证
 不会出现race condition。所以我们可以看到，TLM 2.0中完全没有实现了接口函数的primitive channel，纯粹依靠注册回调函数就能够完成需要的功能，这
 在TLM 1.0时代是不允许的。
+
+在TLM 2.0中，SystemC仿真所必须的三要素，Thread和Event仍然存在，然而Primitive Channel的概念已经被弱化，甚至可以完全不需要任何Primitive
+channel了。
 
 TLM 2.0的接口函数一共有6个，具体而言，分为四组：
 
@@ -2319,7 +2322,8 @@ TLM 2.0的接口函数一共有6个，具体而言，分为四组：
 
 TLM 2.0比TLM 1.0，更加通用，传输的数据结构默认为 tlm_generic_payload，这就使得非常方便基于TLM 2.0协议，将SystemC与其他语言，例如SystemVerilog，
 联合起来进行仿真。TLM 2.0提出的基于延时时间的blocking/nonblocking API，也使得TLM 2.0可以完全摆脱primitive channel的束缚，做到纯粹基于接口函数
-就能实现一致性的仿真结果，同样极大方便和和其他语言之间的沟通。
+就能实现一致性的仿真结果，同样极大方便和和其他语言之间的沟通。例如，在UVM中同样可以实现TLM，这样C++侧的代码就可以使用TLM 2.0
+协议和SystemVerilog之间相互交换信息，这就是TLM 2.0所强调的互操作性了。
 
 == Reference
 
