@@ -36,6 +36,8 @@ port和export，因此，在正式开始TLM之前，我们又回顾了下SystemC
 关于TLM的介绍。首先是TLM 1.0的介绍，TLM 1.0部分比较简单，一章就足以介绍了。之后，关于TLM 2.0
 分为了入门、simple socket和其他socket，最后同样以一个TLM杂项部分结尾。
 
+本部分的代码剖析以SystemC 2.3.3代码为基准。
+
 :leveloffset: +1
 
 include::{doc_root}/systemc-quickthread.adoc[]

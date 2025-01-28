@@ -128,7 +128,7 @@ tlm_blocking_peek_if的实现和 <<tlm::1::tlm_blocking_get_if, tlm_blocking_get
 
 
 TIP: get和peek的区别在于，get操作需要获取一个元素，当
-数据被get盗之后，数据就等于消费掉了。而peek是一种retrieve操作，或者query操作，是查询元素。peek一个元素，并不会
+数据被get到之后，数据就等于消费掉了。而peek是一种retrieve操作，或者query操作，是查询元素。peek一个元素，并不会
 消费掉这个元素。被peek的元素，必须在未来被get之后，才能消费掉。除此之外，get元素只能按照时间顺序get到put进去的元素，而
 peek一个元素可以乱序查询。
 
@@ -352,7 +352,7 @@ class tlm_blocking_master_if :
 ----
 
 那么，与之相对应的，阻塞的master接口，tlm_blocking_slave_if，组合了blocking的get/peek请求，以及
-blocking地put应答：
+blocking的put应答：
 [[tlm::1::tlm_blocking_slave_if]]
 
 .src/tlm_core/tlm_1/tlm_req_resp/tlm_1_interfaces/tlm_master_slave_ifs.h
@@ -453,7 +453,7 @@ protected:
 
 tlm_fifo首先是一个sc_prim_channel，tlm_fifo的建模和<<data::sc_fifo, sc_core::sc_fifo>>基本一样，这从
 相应的成员函数中就可以看出来。与sc_fifo略有不同的是，tlm_fifo使用了一个circular buffer来作为保存数据的部分，而不是
-想sc_fifo一眼个，使用一个raw buffer加上读写指针来穆尼circular buffer。此外，tlm_fifo支持在运行时调整size，这
+像sc_fifo一样，使用一个raw buffer加上读写指针来模拟circular buffer。此外，tlm_fifo支持在运行时调整size，这
 是sc_fifo不具备的能力。作为一个primitive channel，最重要的两点就是何时调用 
 <<api::sc_prim_channel::request_update, `request_update`>> ，以及如何实现 
 <<api::sc_prim_channel::update, `update`>>
@@ -977,7 +977,7 @@ tlm_req_rsp_channel虽然名字里带一个channel，但实际上并不是一个
 主要是一个双向的channel，主要有四个私有类型的成员变量，分别是：
 
 * 传输REQ的通道request_fifo，默认是tlm_fifo<REQ>类型
-* 船速RSP的通道response_fifo，默认是tlm_fifo<RSP>类型
+* 传输RSP的通道response_fifo，默认是tlm_fifo<RSP>类型
 * <<tlm::1::tlm_master_imp, tlm_master_imp>>类成员变量master
 * <<tlm::1::tlm_slave_imp, tlm_slave_imp>>类型成员变量slave
 
@@ -1307,7 +1307,7 @@ target_export被绑定到tlm_transport_to_master自己身上：
 tranport的实现还是相对比较简单的：将transport的参数put到master_port中，然后从master_port get返回的
 response，并作为transport接口函数的返回值返回。额外的一个 `mutex` 的作用是保证多线程场景下的访问安全。
 
-tlm_transport_to_master，从名字来看，这是讲数据从transport接口实现，转到master接口实现。因为tlm_transport_to_master
+tlm_transport_to_master，从名字来看，这是将数据从transport接口实现，转到master接口实现。因为tlm_transport_to_master
 本身就继承自<<tlm::1::tlm_transport_if, tlm_transport_if>>，所以一个tlm_transport_to_master可以直接作为一个
 tlm_transport_if来使用。同时，内部的公共成员变量master_port可以被绑定到实现了<<tlm::1::tlm_master_if, tlm_master_if>>
 的对象上。这样一来，当调用tlm_transport_if的接口函数transport之后，数据就可以被送到实现了tlm_master_if的对象上了。注意，
