@@ -40,6 +40,8 @@ port和export，因此，在正式开始TLM之前，我们又回顾了下SystemC
 
 :leveloffset: +1
 
+include::{doc_root}/systemc-update.adoc[]
+
 include::{doc_root}/systemc-quickthread.adoc[]
 
 include::{doc_root}/systemc-object-hierarchy.adoc[]

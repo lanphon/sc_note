@@ -1,0 +1,114 @@
+:source-highlighter: coderay
+
+
+= SystemC各版本更新
+[[chap::version_update]]
+:toc: left
+
+== 前言
+
+SystemC的版本在不断变化之中，目前EDA工具常用的版本是2.3.3，这也是我们做code review的主要版本。
+以下是SystemC各个版本的发布时间，来源参考自https://accellera.org/downloads/standards/systemc：
+
+* 1.0.2, 2002-02
+* 2.0, 2002-02
+* 2.0.1, 2002-04
+* 2.1, 2005-09
+* 2.2, 2006-07
+* 2.3, 2012-07
+* 2.3.1, 2016-11
+* 2.3.2, 2017-10
+* 2.3.3, 2018-11
+* 2.3.4, 2022-12，距上次版本更新有4年时间
+* 3.0.0, 2024-03
+* 3.0.1, 2024-10
+
+目前最新的版本是3.0.1，但是之前的版本也可以使用。相比于之前版本，3.0.0，以及后续的3.0.1版本将C++的标准
+提升到了c++17，这意味着如果编译器不支持C++17，那么3.0.0版本的SystemC将无法编译和使用。
+
+本部分我们将主要介绍3.0.1版本相比于2.3.4版本的更新部分，以及相应的实现方式。
+
+== 支持Windows平台下的动态链接方式
+[[update::support_windows_dll]]
+
+在SystemC 2.3.3以及之前的版本中，由于Windows平台下的动态链接库无法支持未决议的符号链接，所以在Windows下
+SystemC无法以动态链接的方式使用，而只能以静态链接的方式。根本原因在于，SystemC将cpp的入口函数main实现在
+SystemC库的内部，然后间接调用sc_main。而sc_main的实现由用户自行决定，因为sc_main函数会作为用户的入口函数，在SystemC
+编译动态库的时候，作为一个未决议的符号存在于动态库中，这种做法在Windows平台是无法得到直接支持的。
+
+在SystemC 2.3.4以及之后的版本中，为了支持Windows平台的动态链接，我们在SystemC库的CMakeLists.txt文件中添加了
+如下部分代码：
+
+.src/CMakeLists.txt
+[source,cmake]
+----
+if (BUILD_SHARED_LIBS AND (WIN32 OR CYGWIN))
+
+# Windows DLLs can't contain unresolved symbols, so we need to spilt library
+# into two:
+#  - ${SYSTEMC_DLL_TARGET}.dll is a shared library without unresolved symbols
+#  - systemc.lib contains main() and unresolved sc_main()
+# Then we merge interface library ${SYSTEMC_DLL_TARGET}.lib into systemc.lib
+
+    set(SYSTEMC_DLL_TARGET systemc-${SystemCLanguage_VERSION})
+
+    add_systemc_library(${SYSTEMC_DLL_TARGET} SC_BUILD SHARED ${SYSTEMC_CORE_SRC} )
+
+    add_systemc_library(systemc SC_BUILD_OFF STATIC ${SYSTEMC_SC_MAIN_SRC} )
+
+    if (MSVC) # lib.exe should be available from MSVC command promt
+
+        add_custom_command(
+                TARGET systemc
+                POST_BUILD
+                COMMAND lib.exe /OUT:$<TARGET_FILE:systemc> $<TARGET_FILE:systemc> $<TARGET_LINKER_FILE:${SYSTEMC_DLL_TARGET}>
+                COMMENT "Combining SystemC libs..."
+        )
+
+    else(MSVC)
+
+        add_custom_command(
+                TARGET systemc
+                POST_BUILD
+                COMMAND ar x $<TARGET_FILE:systemc>
+                COMMAND ar x $<TARGET_LINKER_FILE:${SYSTEMC_DLL_TARGET}>
+                COMMAND del *.a
+                COMMAND ar qc $<TARGET_FILE:systemc>  *.o *.obj
+                COMMAND del *.o *.obj
+                COMMENT "Combining SystemC libs..."
+        )
+
+    endif(MSVC)
+
+    set(SYSTEMC_TARGETS systemc ${SYSTEMC_DLL_TARGET})
+----
+
+其核心在于，将systemC拆分为两部分，一部分是systemc.lib，另一部分是systemc.dll，然后将未决议的sc_main放入静态库systemc.lib中，
+从而避免了systemc.dll中存在未决议的符号问题。
+
+== 不再需要SC_HAS_PROCESS
+[[update:remove_SC_HAS_PROCESS]]
+
+在<<api::SC_METHOD, SC_METHOD>>的介绍部分，我们曾经讲过，SC_HAS_PROCESS的主要作用，就是将
+当前类的名称通过typedef，赋予`SC_CURRENT_USER_MODULE`，方便在后续的SC_THREAD/SC_METHOD中
+指代成员函数指针的时候提供类的名称。
+
+在C++版本提升到C++11之后，我们可以直接使用decltype的方式获取当前类名称。这个重要的改动意味着实际上
+我们无需SC_HAS_PROCESS来做多余的一步了。尽管C++11在2011年就已经出现了，但是在SystemC的开发过程中
+移除SC_HAS_PROCESS的尝试直到3.0.0版本才开始。相应的代码如下所示：
+
+.src/sysc/kernel/sc_module.h
+[source,cpp]
+----
+#if !defined(SC_ALLOW_DEPRECATED_IEEE_API) (1)
+    [[deprecated("SC_HAS_PROCESS(user_module_name) is obsolete in IEEE 1666-2023, define SC_ALLOW_DEPRECATED_IEEE_API to suppress.")]]
+#endif
+    [[maybe_unused]] 
+static inline constexpr bool sc_has_process_used = true;
+#define SC_HAS_PROCESS(user_module_type) \
+    static_assert(sc_core::sc_has_process_used, "no-op to avoid stray ';'")
+
+#define SC_CURRENT_USER_MODULE_TYPE \
+    std::remove_reference<decltype(*this)>::type
+----
+<1> 如果代码仍然使用SC_HAS_PROCESS，那么新版本的SystemC将会提供一个warning，可以使用SC_ALLOW_DEPRECATED_IEEE_API这个宏来屏蔽这个warning
