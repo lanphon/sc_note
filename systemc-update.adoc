@@ -93,8 +93,8 @@ if (BUILD_SHARED_LIBS AND (WIN32 OR CYGWIN))
 当前类的名称通过typedef，赋予`SC_CURRENT_USER_MODULE`，方便在后续的SC_THREAD/SC_METHOD中
 指代成员函数指针的时候提供类的名称。
 
-在C++版本提升到C++11之后，我们可以直接使用decltype的方式获取当前类名称。这个重要的改动意味着实际上
-我们无需SC_HAS_PROCESS来做多余的一步了。尽管C++11在2011年就已经出现了，但是在SystemC的开发过程中
+在C{plus}{plus}版本提升到C{plus}{plus}11之后，我们可以直接使用decltype的方式获取当前类名称。这个重要的改动意味着实际上
+我们无需SC_HAS_PROCESS来做多余的一步了。尽管C{plus}{plus}11在2011年就已经出现了，但是在SystemC的开发过程中
 移除SC_HAS_PROCESS的尝试直到3.0.0版本才开始。相应的代码如下所示：
 
 .src/sysc/kernel/sc_module.h
