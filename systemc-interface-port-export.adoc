@@ -102,8 +102,8 @@ class sc_fifo
 primitive channel提供了primitive通信的能力，同时需要使用interface将这种通信的能力
 抽象出来（例如FIFO的blocking/non-blocking访问，就是同一个FIFO实现的不同interface能力）。
 
-在SystemC建模的过程中，线程之间的通信最好使用primitive channel，避免使用原生的C++数据结构（例如
-queue或者stack等）。这是因为C++原始的数据结构并没有delta cycle之间隔绝，以及在delta cycle之间
+在SystemC建模的过程中，线程之间的通信最好使用primitive channel，避免使用原生的C{plus}{plus}数据结构（例如
+queue或者stack等）。这是因为C{plus}{plus}原始的数据结构并没有delta cycle之间隔绝，以及在delta cycle之间
 进行更新的能力（这是primitive channel设计的初衷）。例如，我们有如下代码：
 
 
@@ -140,7 +140,7 @@ void thread_b {
 和pop操作都会crash掉。其实，在这种应用场景下，只需要简单使用一个 `sc_fifo<data_t>` 在两个thread间进行通信就足够了，
 不必也不应该使用raw数据结构和event来进行通信。
 
-此外，如果不涉及数据的交互，那么可以用interface抽象出来类的基本能力。不过这种用法其实和普通的C++虚函数
+此外，如果不涉及数据的交互，那么可以用interface抽象出来类的基本能力。不过这种用法其实和普通的C{plus}{plus}虚函数
 使用方法就很相似了。(IMG的CMOD代码中大量使用这种方式)
 
 == Port

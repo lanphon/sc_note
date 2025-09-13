@@ -1072,7 +1072,7 @@ post简单将内部计数器加一，然后触发事件m_free，来唤醒可能�
 ((sc_host_semaphore))是一个用来在多个thread之间做同步的信号量。与<<data::sc_semaphore, sc_semaphore>>相比，
 sc_host_semaphore主要突出了host的特点，即可以在systemc的线程和非systemc的host线程之间做同步的能力。
 sc_host_semaphore的实现
-有几种形式，我们这里只考虑基于C++11的标准实现方法。
+有几种形式，我们这里只考虑基于C{plus}{plus}11的标准实现方法。
 
 .src/sysc/communication/sc_host_semaphore.h
 [source,cpp]

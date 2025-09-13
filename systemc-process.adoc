@@ -3492,7 +3492,7 @@ auto sc_cref( T&& v )
 } // namespace sc_core
 ----
 
-从代码实现来看，对于支持C++11的编译器而言，这三个其实就是 `std::bind`， `std::ref`
+从代码实现来看，对于支持C{plus}{plus}11的编译器而言，这三个其实就是 `std::bind`， `std::ref`
 和 `std::cref` 的别名而已。
 
 sc_bind(可以认为就是std::bind)返回的是一个functor，天然重载了 `operator()` ，无需
