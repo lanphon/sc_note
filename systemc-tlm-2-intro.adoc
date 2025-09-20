@@ -424,7 +424,7 @@ tlm_generic_payload::set_auto_extension(unsigned int index,
 
 `insert_in_cache` 是 `tlm_array` 在vector的基础上增加的成员函数，主要在一个 `m_entries`
 内部成员变量中保存了位置信息（这里其实保存的相当于数组下标），并且在 `free_entrie_cache`
-成员阿汉湖中使用这个数组下标，调用所有有效指针的 free成员函数，这样一来就自动释放掉了内部的
+成员函数中使用这个数组下标，调用所有有效指针的 free成员函数，这样一来就自动释放掉了内部的
 对象。在tlm_generic_payload的reset成员函数中，调用了 `m_extensions` 的这个成员函数：
 [[api::tlm_generic_payload::reset]]
 
@@ -534,7 +534,7 @@ tlm_generic_payload::deep_copy_from(const tlm_generic_payload & other)
 <1> 深拷贝，拷贝m_data指针指向的buffer
 <2> 深拷贝，拷贝m_byte_enable指针指向的buffer
 <3> 对于extension部分，深拷贝策略是，对于某个类型的extension，如果拷贝源有，而拷贝目的对象没有，则直接拷贝
-<4> 对于extension部分，深拷贝策略是，对于某个类型的extension，如果拷贝源有，同事拷贝目的对象也有，则调用对象的copy_from
+<4> 对于extension部分，深拷贝策略是，对于某个类型的extension，如果拷贝源有，同时拷贝目的对象也有，则调用对象的copy_from
 
 从这个成员函数的实现可以看出，`deep_copy_from` 主要处理的是两个buffer的深拷贝，以及extension的拷贝策略。
 
@@ -631,7 +631,7 @@ tlm_generic_payload::update_extensions_from(const tlm_generic_payload & other)
 <5> 如果byte_enable是4的倍数，就按照DW来拷贝，之后可以一个DW一个DW来拷贝
 <6> 否则，就只能一个byte一个byte拷贝了
 <7> 如果byte_enable没打开，或者入参指定不需要byte enable，直接拷贝data部分即可
-<8> update_extensions_from中，只有当拷贝源和拷贝目的对象相同类型的extension都有效，才会将extension从源拷贝到墓地中，调用的是
+<8> update_extensions_from中，只有当拷贝源和拷贝目的对象相同类型的extension都有效，才会将extension从源拷贝到目的中，调用的是
 extension自己的copy_from成员函数
 
 
@@ -794,7 +794,7 @@ private:
     BUILTIN_PHASE( END_RESP );
   }
 ----
-<1> 为一个的构造函数是私有函数，因此这个类不能被其他部分create出来，其实这是为了保护这个类的单件实现
+<1> 唯一的构造函数是私有函数，因此这个类不能被其他部分create出来，其实这是为了保护这个类的单件实现
 
 tlm_phase_registry的构造函数往  `names_` 这个string的vector中分别放入了5个tlm_phase_enum的
 字符串表达形式。
@@ -904,7 +904,7 @@ class tlm_dmi
 tlm_dmi中的成员变量包括：
 
 * 一个指针变量m_dmi_ptr，是target用来返回initiator请求结果的部分
-* 一组地址，即DMI区域的其实和结束的地址，m_dmi_start_address和m_dmi_end_address
+* 一组地址，即DMI区域的起始和结束的地址，m_dmi_start_address和m_dmi_end_address
 * DMI访问的权限m_dmi_access
 * 一组表示访问latency的变量 m_dmi_read_latency和m_dmi_write_latency
 
@@ -991,12 +991,14 @@ tlm_sync_enum是个枚举类，定义了TLM_ACCEPTED, TLM_UPDATED, TLM_COMPLETED
 enum tlm_sync_enum { TLM_ACCEPTED, TLM_UPDATED, TLM_COMPLETED };
 ----
 
+这些状态信息的具体含义将在后续解释。
 
 == TLM 2.0 Interfaces
 
 === tlm_fw_transport_if
 [[api::tlm_fw_transport_if]]
 
+tlm_fw_transport_if是一个表达前向通路（forwarding path）的interface，是TLM 2.0的核心接口。
 tlm_fw_transport_if是一个模板类，模板接受一个TYPES类型，默认为tlm_base_protocol_types：
 
 .src/tlm_core/tlm_2/tlm_2_interfaces/tlm_fw_bw_ifs.h
@@ -1102,7 +1104,7 @@ public:
 的方式，来返回特定的信息。
 
 b_transport的含义是blocking地传送数据，所以不需要返回同步状态信息，因为blocking地传送数据返回的时候
-肯定数据已经发送完毕。blocking的API调用也意味着没有反向通路（即tlm_blocking_transport_if不缺分FW和BW）。
+肯定数据已经发送完毕。blocking的API调用也意味着没有反向通路（即tlm_blocking_transport_if不区分FW和BW）。
 如果接收端需要返回信息，则可以通过修改传入参数的方式来达到目的。
 此外这里也不需要PHASE信息。
 
@@ -1222,7 +1224,7 @@ initiator原本的地址（interconnect转发initiator时候对地址做了什�
 [[api::tlm_transport_dbg_if]]
 
 从名字就可以看出，tlm_transport_dbg_if主要实现的是debug功能。这个模板类同样接受一个TRANS
-类型信息，默认类是<<api::tlm_generic_payload, tlm_generic_pyalod>>，定义了一个接口
+类型信息，默认类是<<api::tlm_generic_payload, tlm_generic_payload>>，定义了一个接口
 函数transport_dbg:
 [[api::tlm_transport_dbg_if::transport_dbg]]
 
@@ -1283,6 +1285,7 @@ target需要返回成功传输的数据字节数（即填充到data buffer中的
 === tlm_bw_transport_if
 [[api::tlm_bw_transport_if]]
 
+BW的意思是Backward,也就是从target到initiator的通信，
 与<<api::tlm_fw_transport_if, tlm_fw_transport_if>>定义比较类似，tlm_bw_transport_if
 继承自两个虚基类，分别是<<api::tlm_bw_nonblocking_transport_if, tlm_bw_nonblocking_transport_if>>
 和<<api::tlm_bw_direct_mem_if, tlm_bw_direct_mem_if>>:
@@ -1456,7 +1459,7 @@ enum tlm_socket_category
 * socket的多个发起端，值为0x11
 * socket的多个接收端，值为0x12
 
-注意，socket不允许即作为发起端，也作为接收端。
+注意，不允许socket既作为发起端，又作为接收端。
 
 === tlm_initiator_socket
 
@@ -1590,12 +1593,12 @@ tlm_base_initiator_socket实现了tlm_base_socket_if所定义的接口函数：
 ----
 
 对于tlm_base_initiator_socket来说，get_bus_width和get_socket_category两个接口函数实现都比较简单。
-而get_protocol_types，其实解释得到的结果是<<api::tlm_base_protocol_types, tlm_base_protocol_types>>
-的typeid，这是因为BW_IF::protocol_types的定义默认其实就是<<api::tlm_base_protocol_types, tlm_base_protocol_types>>
+而get_protocol_types，其得到的结果是<<api::tlm_base_protocol_types, tlm_base_protocol_types>>
+的typeid，这是因为BW_IF::protocol_types的定义默认就是<<api::tlm_base_protocol_types, tlm_base_protocol_types>>
 ，参考<<api::tlm_bw_transport_if, tlm_bw_transport_if>>部分。
 
 由于tlm_base_initiator_socket本身继承自sc_port<FW_IF>，所以get_base_port的返回，只需要返回自身即可。
-而get_base_export，则返回成员变量m_export即可。这里需要额外注意的一点是，对于get_base_interface，返回的
+而get_base_export，则返回成员变量m_export。这里需要额外注意的一点是，对于get_base_interface，返回的
 也是m_export。这是因为对于sc_export<BW_IF>，实现了 `operator IF& ()` ，可以转换为对应的sc_interface的引用
 类型，参考<<api::sc_export::operator_IF, sc_export>>部分的说明。
 
@@ -1668,7 +1671,7 @@ tlm_base_initiator_socket作为一个sc_port的派生类，同样实现了TLM语
 
 当一个initiator socket绑定到一个target socket的时候，可以看出此时相当于将
 本initiator socket作为一个sc_port，绑定了target socket的interface。与此同时，将
-taregt socket作为一个sc_port，绑定了本initiator的interface（本initiator socket的
+target socket作为一个sc_port，绑定了本initiator的interface（本initiator socket的
 interface实际上是从m_export这个sc_export转出来的）。这样一来，initiator socket
 作为sc_port绑定了target socket的interface（介绍到target socket的时候我们会看到，target
 socket是一个sc_export，所以interface也是从自己，而不是成员变量，转出来的），而target socket
@@ -1696,7 +1699,7 @@ sc_export（派生自sc_export），所以这个bind实际上override了sc_port_
 ----
 
 这是因为sc_export提供了到对应的 `IF&` 的默认转换函数。注意sc_port_b的 `void operator()(IF&)`
-并不是一个虚函数，所以 tlm_base_initiator_socket 的 `void operator() (bse_target_socket_type&)`
+并不是一个虚函数，所以 tlm_base_initiator_socket 的 `void operator() (base_target_socket_type&)`
 也不是虚函数。
 
 当initiator socket绑定到另一个initiator socket的时候，绑定实现如下：
@@ -1726,7 +1729,9 @@ sc_export（派生自sc_export），所以这个bind实际上override了sc_port_
 socket作为一个sc_port，绑定到了第二个initiator socket上（第二个initiator socket也作为
 一个sc_port）。此外，第二个socket的m_export成员变量，绑定到本initiator socket上的export上。
 但由于一个sc_export绑定到另一个sc_export上的时候，被绑定对象会默认转为interface类型，所以这相当于
-第二个initiator socket的m_export绑定到了本m_export内部的interface上。
+第二个initiator socket的m_export绑定到了本m_export内部的interface上。注意这里的绑定方向，当
+本initiator socket绑定到第二个initiator socket的时候，本initiator socket作为sc_port，需要
+从本socket绑定到第二个socket上。而绑定export的时候，需要从第二个socket绑定到本socket上。
 
 .initiator socket绑定到另一个initiator socket
 image::binding_initiator_to_initiator.png[]
@@ -1770,7 +1775,9 @@ image::binding_initiator_to_initiator.png[]
 ----
 
 实际上绑定发生的结果是，本initiator socket的m_export绑定到了interface上。注意，这种绑定发生
-的时候，本initiator socket作为一个sc_port，并没有参与到绑定过程中。
+的时候，本initiator socket作为一个sc_port，并没有参与到绑定过程中。在使用过程中，后续需要将initiator
+socket作为一个sc_port绑定上，否则会出现悬空的port。这是因为这里的initiator socket作为一个
+继承自sc_port的派生类，使用的策略默认值是至少绑定一个。
 
 .initiator socket绑定到BW_IF上
 image::binding_initiator_to_BW.png[]
@@ -2147,7 +2154,7 @@ public:
 ----
 
 tlm_target_socket和<<api::tlm_initiator_socket, tlm_initiator_socket>>
-一样，和其基类相比，并没有实现更多的功能，设计的初衷主要是为了修改模板类型。tlm_target_socket
+一样，与其基类相比，并没有实现更多的功能，设计的初衷主要是为了修改模板类型。tlm_target_socket
 和tlm_initiator_socket都是完全的模板类，其模板参数都提供了默认值，因而在使用的时候，可以
 无需指定任何模板参数，而直接使用 `tlm_target_socket<>` 和 `tlm_initiator_socket<>`
 这种类型。
@@ -2289,14 +2296,14 @@ tlm_global_quantum::compute_local_quantum()
 基本上就是使用sc_time_stamp，先获取当前的时间信息，然后用本地保存的时间片信息，减去模的结果。例如，时间片信息被设置为9ns，如果当前
 全局时间走到了21ns，那么这里就算出来的local quantum将会是 `9 - (21 % 9)`，即还有 6ns。所以这里计算返回的是，当前的执行单元
 剩余可用的时间片。initiator可以使用不超过6ns的local quantum，这样在下一个整数倍时间片，也就是 `21 + 6`, 27ns的时候，initiator
-就可以参与同步了。
+就需要参与同步了。这样设置的效果是，所有的socket以一个设置的固定的间隔同步，比如这里的9ns。
 
 == 总结
 
 本部分介绍了TLM 2.0核心的interface定义，以及initiator socket和target socket。此外，还介绍了tlm_generic_payload，tlm_global_quantum
 等内容。这些构成了TLM 2.0部分的互操作性部分。
 
-相比于TLM 1.0，TLM 2.0的设计采取了更加复杂的协议。Interface传递的数据可以被下游修改，从而实现需要的功能。延时时间参数的加入，也使得TLM 2.0
+相比于TLM 1.0，TLM 2.0的设计采取了更加复杂的协议。Interface传递的数据可以被下游修改，从而实现数据传递需要的功能。延时时间参数的加入，也使得TLM 2.0
 相比TLM 1.0，更加接近transaction level的概念。同时，这也使得TLM 2.0相比于TLM 1.0，摆脱了对primitive channel的束缚。在TLM 1.0中，
 由于没有延时时间的概念，因此即使是同样基于API的接口，仍然需要依靠tlm_fifo这个primitive channel，保证在一个delta cycle内不会出现race condition。
 在TLM 2.0，所有的API函数都需要携带一个延时参数，最小值是SC_ZERO_TIME，这就使得相应的函数至少在delta cycle之间得到不同的调度，从而保证
@@ -2312,7 +2319,7 @@ TLM 2.0的接口函数一共有6个，具体而言，分为四组：
 和<<api::tlm_bw_nonblocking_transport_if, tlm_bw_nonblocking_transport_if>>，这构成了nonblocking语义下，一对前向和后向的通路
 2. <<api::tlm_blocking_transport_if, tlm_blocking_transport_if>>，这是blocking的语义下，一个前向通路，注意因为是blocking，没有后向通路
 3. <<api::tlm_fw_direct_mem_if, tlm_fw_direct_mem_if>>和<<api::tlm_bw_direct_mem_if, tlm_bw_direct_mem_if>>，这是DMI语义下的
-一对前向和后向通路，前向获取DMI数据，后向则invalidate DMI数据
+一对前向和后向通路，前向获取DMI数据，后向则invalidate DMI所返回的信息
 4. <<api::tlm_transport_dbg_if, tlm_transport_dbg_if>>，这是用来debug的interface，因为不允许阻塞，所以实际上也不需要后向通路，调用后立即返回
 
 其中，nonblocking的双向通路通信中，TLM 2.0使用<<api::tlm_phase, tlm_phase>>和返回值<<api::tlm_sync_enum, tlm_sync_enum>>

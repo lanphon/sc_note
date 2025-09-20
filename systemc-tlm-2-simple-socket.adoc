@@ -10,14 +10,15 @@
 在<<chap::tlm_intro, SystemC中的TLM 2.0介绍>>部分，我们简单介绍了TLM 2.0中常用的
 一些数据结构，包括initiator socket和target socket的定义，但这些仍然不足以支持
 我们建立一个可运行的仿真环境。这些数据仍然只是框架性质的定义，还缺少具体的实现细节。
-为此，TLM 2.0种设计了三种类型
+为此，TLM 2.0设计了三种类型
 的socket，来方便使用者直接使用。这三种类型的socket分别是
 
 * simple socket
 * passthrough socket
 * multi socket
 
-而在本部分，我们将从simple socket入手，socket的实现细节，并且从这些实现细节，也尝试去掌握如何理解TLM 2.0协议的内在约束。
+而在本部分，我们将从simple socket入手，来了解socket的实现细节，并且从这些实现细节触发，来尝试去掌握如何理解TLM 2.0协议的内在约束。
+
 本章首先介绍了三种socket所使用的基类，convenience_socket_base的定义。然后，我们将深入探索simple socket的具体实现。
 一些simple socket实现过程中，需要用到的tlm utils的类也在这里得到详细介绍。最后，我们将尝试汇总一下TLM 2.0协议
 的实现细节，将其对应到simple socket的具体实施中。
@@ -291,7 +292,7 @@ done之前发生。
 所有的simple_initiator_socket，实际上都继承自<<api::tlm_initiator_socket, tlm_initiator_socket>>，
 并且内部实现了一个继承自<<api::tlm_bw_transport_if, tlm_bw_transport_if>>，且
 实现了两个接口函数 `nb_transport_bw` 和 `invalidate_direct_mem_ptr`
-方法的类，这两个接口函数实际调用了注册的回调函数。同时，simple initiator socket作为一个
+方法的类process，这两个接口函数实际调用了注册的回调函数。同时，simple initiator socket作为一个
 tlm_initiator_socket，其内部的 `sc_export<BW_IF>` 直接绑定到这个process上。这样一来，
 sc_export<BW_IF>就获得了实际的实现。simple_initiator_socket的实现大致如下图所示：
 
@@ -339,7 +340,7 @@ simple_initiator_socket_b::process是定义在simple_initiator_socket_b模板类
 ----
 
 为方便起见，process内部定义了两个成员函数指针类型，分别是 `TransportPtr`
-和 `InvalidateDirectMempTR`。注意，这两个成员函数指针的类都是MODULE，这实际上是
+和 `InvalidateDirectMemPtr`。注意，这两个成员函数指针的类都是MODULE，这实际上是
 simple_initiator_socket_b的模板参数。 构造函数中，会将传入的simple_socket_base指针
 保存到convenience_socket_cb_holder父类中。构造的时候，3个成员变量都是0，即指向
 MODULE的指针，以及两个成员函数指针均为空。这三个成员变量需要使用额外的
@@ -401,7 +402,7 @@ MODULE的指针，以及两个成员函数指针均为空。这三个成员变�
 ----
 <1> 调用的display_error实际调用的是基类convenience_socket_cb_holder的display_error，在实现中转发给了
 持有的simple_socket_base对象的display_error函数
-<2> 这里返回TLM_COMPLETED是不会走到的，如果走到就意味着系统出现错误
+<2> 这里不会走到返回TLM_COMPLETED，如果走到就意味着系统出现错误
 
 总结一下，simple_initiator_socket_b::process，就是一个使用回调函数机制，实现了
 <<api::tlm_bw_transport_if, tlm_bw_transport_if>>的模板类。
@@ -865,7 +866,7 @@ hierarchy binding的终点（对于BW_IF而言）
 
 但与simple_initiator_socket不同，simple_target_socket的实现更为复杂。这个原因主要在于，对于simple initiator socket
 而言，其内部需要实现BW_IF的功能。BW_IF只有两个接口函数需要实现，因而simple initiator socket实现比较简单。但对于simple
-target socker而言，其内部需要实现BW_IF的功能。BW_IF有4个接口函数需要实现，同时，还需要考虑到，其中两个接口函数 `nb_transport_fw`
+target socker而言，其内部需要实现FW_IF的功能。FW_IF有4个接口函数需要实现，同时，还需要考虑到，其中两个接口函数 `nb_transport_fw`
 和 `b_transport` 之间的相互实现，即如果回调函数注册了nonblocking版本，如何使用nonblocking版本实现blocking版本，以及反过来，
 回调函数只注册了blocking版本，如何实现nonblocking版本。
 
@@ -2092,7 +2093,7 @@ process_handle_list的get_handle操作，会优先寻找那些已经suspend的th
 但b_transport有一个额外的延时参数t，t的最小值是SC_ZERO_TIME。对于TLM 1.0，仍然需要依靠
 <<tlm::1::tlm_fifo, 派生自primitive channel的tlm_fifo>>作为底层的绑定对象来实现，否则就会出现
 条件竞争（即调度顺序的不同导致在同一个delta cycle内，立即就能读到数据，不符合我们的要求）。而TLM 2.0
-中，b_transport的额外延时参数t保证了发起读和返回一定不再同一个delta cycle内（因为至少需要延时
+中，b_transport的额外延时参数t保证了发起读和返回一定不在同一个delta cycle内（因为至少需要延时
 SC_ZERO_TIME）。这个额外延时参数的引入，也是TLM 2.0摆脱了需要寄生于primitive channel机制的重要
 因素了。
 
