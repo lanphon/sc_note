@@ -2327,6 +2327,11 @@ TLM 2.0的接口函数一共有6个，具体而言，分为四组：
 协议之间的转换就成为一个非常棘手的问题。关于这部分的讨论，我们留到了下一部分，在simple socket的时候，TLM 2.0已经提供了两种协议之间相互
 转换的一个框架方案。
 
+需要强调的是，nonblocking的两个标准API，即tlm_fw_nonblocking_transport_if和tlm_bw_nonblocking_transport_if
+的接口函数，nb_transport_fw和nb_transport_bw必须是无阻塞的。这意味着通信的发起方或者接收方调用这两个接口函数的时候，
+必须立即返回，而不能在函数的执行过程中显式或者隐式地引入可能的阻塞。例如，在这两个接口函数中，调用sc_fifo的read/write都是不允许的，因为sc_fifo的
+read/write操作是可能阻塞的。
+
 TLM 2.0比TLM 1.0，更加通用，传输的数据结构默认为 tlm_generic_payload，这就使得非常方便基于TLM 2.0协议，将SystemC与其他语言，例如SystemVerilog，
 联合起来进行仿真。TLM 2.0提出的基于延时时间的blocking/nonblocking API，也使得TLM 2.0可以完全摆脱primitive channel的束缚，做到纯粹基于接口函数
 就能实现一致性的仿真结果，同样极大方便和其他语言之间的沟通。例如，在UVM中同样可以实现TLM，这样C{plus}{plus}侧的代码就可以使用TLM 2.0

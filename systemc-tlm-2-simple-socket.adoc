@@ -2232,10 +2232,15 @@ transaction了。
 
 NOTE: 对于一个socket而言，最多只能有一个outstanding的transaction。这意味着一个socket在处理完毕
 一个transaction之前，不能开启下一个transaction。footnote:[systemc/docs/tlm/released/TLM_2_0_presentation.pdf, page 86]
+准确来说，只能有一个transaction可以处于req发起阶段。当initiator socket发起BEGIN_REQ请求之后，
+target回TLM_ACCPETED或者TLM_UPDATED之前，initiator socket不可以发起下一笔transaction。
+但在target socket返回任何信息之前，initiator socket都是未阻塞状态，可以执行其他操作，例如为下一笔
+transaction做准备。
 
 TLM_COMPLETED约束为，只能在以下场景可能返回：
 
 * 一个target socket从forward path接受到BEGIN_REQ phase
+** 这意味着本次传输全部结束，不再需要END_REQ/BEGIN_RESP/END_RESP阶段
 * 一个target socket从forward path接收到END_RESP phase，这意味着一个完整的4 phase的结束
 * 一个initiator socket从backward path接收到BEGIN_RESP phase
 
@@ -2281,7 +2286,7 @@ END_RESP阶段。
 的阶段，这也暗示了真个transaction阶段的结束。
 
 如果initiator socket返回TLM_COMPLETED，则显式表明整个transaction阶段的结束。此时
-无需无需检查phase参数的修改了。
+无需检查phase参数的修改了。
 
 ---
 
@@ -2289,3 +2294,5 @@ END_RESP阶段。
 无论target socket返回TLM_ACCEPTED，还是TLM_COMPLETED，都表明transaction的结束。
 
 == References
+
+https://zhuanlan.zhihu.com/p/1900536457220843492
