@@ -5,7 +5,7 @@
 Xinzhao Zhu <xinzhao_zhu@163.com>
 :description: Comprehensive SystemC Library Code Review and Documentation
 :keywords: SystemC, TLM, process, channel, port
-:imagesdir: /images
+:imagesdir: /assets/images
 :toc:
 :toclevels: 3
 :sectnums:
