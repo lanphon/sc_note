@@ -12,4 +12,3 @@ platforms :mingw, :x64_mingw, :jruby do
 end
 
 gem "webrick", "~> 1.8"
-gem "rake", ">= 13.3.1"
