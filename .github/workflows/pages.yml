@@ -36,14 +36,14 @@ jobs:
       - name: Bundle install
         run: bundle install
 
+      - name: Build site
+        run: |
+          bundle exec jekyll build
+
       - name: Copy images to site
         run: |
           mkdir -p _site/images
           cp *.png _site/images/ 2>/dev/null || true
-
-      - name: Build site
-        run: |
-          bundle exec jekyll build
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
