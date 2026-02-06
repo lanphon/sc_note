@@ -5,6 +5,38 @@ markdown: kramdown
 highlighter: rouge
 plugins:
   - jekyll-asciidoc
+  - jekyll-sass-converter
 timezone: Asia/Shanghai
 url: ""
 baseurl: ""
+
+sass:
+  sass_dir: assets/css
+  style: compressed
+
+asciidoctor:
+  attributes:
+    source-highlighter: rouge
+    icons: font
+    sectanchors: ''
+    sectnums: ''
+    idprefix: '-'
+    idseparator: '-'
+    toc: left
+    toclevels: 3
+    imagesdir: /images
+
+defaults:
+  -
+    scope:
+      path: ""
+      type: "pages"
+    values:
+      layout: "page"
+
+author: Xinzhao Zhu
+email: xinzhao_zhu@163.com
+
+social:
+  links:
+    - https://github.com/lanphon
