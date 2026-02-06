@@ -1,6 +1,5 @@
 title: SystemC Code Review
 description: SystemC library code review and documentation
-theme: minima
 markdown: kramdown
 highlighter: rouge
 plugins:
@@ -9,10 +8,6 @@ plugins:
 timezone: Asia/Shanghai
 url: ""
 baseurl: ""
-
-sass:
-  sass_dir: _sass
-  style: compressed
 
 asciidoctor:
   attributes:
@@ -32,7 +27,7 @@ defaults:
       path: ""
       type: "pages"
     values:
-      layout: "page"
+      layout: "default"
 
 author: Xinzhao Zhu
 email: xinzhao_zhu@163.com

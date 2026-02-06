@@ -1,11 +1,9 @@
 source "https://rubygems.org"
 
 gem "jekyll", "~> 4.2"
-gem "minima", "~> 2.5"
 
 group :jekyll_plugins do
   gem "jekyll-asciidoc", "~> 3.0"
-  gem "jekyll-sass-converter"
 end
 
 platforms :mingw, :x64_mingw, :jruby do
