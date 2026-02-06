@@ -6,8 +6,8 @@ plugins:
   - jekyll-asciidoc
   - jekyll-sass-converter
 timezone: Asia/Shanghai
-url: ""
-baseurl: ""
+url: "https://lanphon.github.io"
+baseurl: "/sc_note"
 
 asciidoctor:
   attributes:
