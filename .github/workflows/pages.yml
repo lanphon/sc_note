@@ -42,8 +42,8 @@ jobs:
 
       - name: Copy images to site
         run: |
-          mkdir -p _site/images
-          cp *.png _site/images/ 2>/dev/null || true
+          mkdir -p _site/assets/images
+          cp assets/images/*.png _site/assets/images/ 2>/dev/null || true
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
