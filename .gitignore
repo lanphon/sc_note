@@ -3,7 +3,11 @@
 *~
 *.swp
 *.swo
+
+# Ignore generated HTML files but keep layouts
 *.html
+!layouts/*.html
+!_layouts/*.html
 *.pdf
 
 # Jekyll
