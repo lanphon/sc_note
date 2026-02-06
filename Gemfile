@@ -14,4 +14,4 @@ end
 gem "webrick", "~> 1.8"
 gem "ffi", "~> 1.15"
 gem "rake", "~> 13.0.6"
-gem "bigdecimal", "~> 3.1.3"
+gem "bigdecimal", ">= 3.1.9"
