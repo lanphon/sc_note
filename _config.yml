@@ -1,0 +1,10 @@
+title: SystemC Code Review
+description: SystemC library code review and documentation
+theme: minima
+markdown: kramdown
+highlighter: rouge
+plugins:
+  - jekyll-asciidoc
+timezone: Asia/Shanghai
+url: ""
+baseurl: ""

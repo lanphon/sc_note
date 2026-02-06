@@ -5,3 +5,14 @@
 *.swo
 *.html
 *.pdf
+
+# Jekyll
+Gemfile.lock
+_site/
+.sass-cache/
+.jekyll-cache/
+.jekyll-metadata
+_vendor/
+
+# Asciidoctor build artifacts
+*.bak

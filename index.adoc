@@ -1,0 +1,75 @@
+= SystemC Code Review
+XinzhaoZhu <xinzhao_zhu@163.com>
+:doctype: book
+:toc: left
+:toclevels: 3
+:source-highlighter: coderay
+:imagesdir: .
+
+[abstract]
+== 关于本书
+
+本书是关于SystemC的代码review做的一个汇总，也可以根据本书的内容，入门学习并掌握
+Systemc库。
+
+全书按照如下的方式组织。首先，我们介绍了协程的概念，以及SystemC中所使用的QuickThread
+库的实现，这是了解后续SystemC线程调度原理的基础。接下来，我们介绍SystemC的内核调度
+模型，包括EVALUTE, UPDATE和NOTIFICATION三阶段组成的delta cycle的概念。对内核调度
+有一个大概印象之后，我们接下来用三章，分别介绍了事件，SystemC线程以及Primitive Channel
+的概念，这三个概念是需要参与到内核调度的三个主要组成部分。之后，我们介绍了SystemC
+层次化组织必须的组件，Port，并专门介绍了如何设置敏感源。这之后是关于SystemC杂项
+的章节，介绍了Systemc中一些无法归入到前边部分的一些小组件。然后，我们讨论了Trace，以及
+可综合部分。至此，SystemC的介绍基本结束，我们专门花了一个章节，用来重新思考SystemC
+的设计哲学，尝试去汇总其中的设计理念。由于后续要开始关于TLM的介绍，而TLM大部分都是关于interface, port和export，因此，在正式开始TLM之前，我们又回顾了下SystemC中的interface, port和export，理解其中的设计思想。之后，本书的第二部分是关于TLM的介绍。首先是TLM 1.0的介绍，TLM 1.0部分比较简单，一章就足以介绍了。之后，关于TLM 2.0分为了入门、simple socket和其他socket，最后同样以一个TLM杂项部分结尾。
+
+本部分的代码剖析以SystemC 2.3.3代码为基准。
+
+toc::[]
+
+:leveloffset: +1
+
+include::systemc-update.adoc[]
+
+include::systemc-quickthread.adoc[]
+
+include::systemc-object-hierarchy.adoc[]
+
+include::systemc-schedule-model.adoc[]
+
+include::systemc-coroutine.adoc[]
+
+include::systemc-event.adoc[]
+
+include::systemc-process.adoc[]
+
+include::systemc-primitive-channel.adoc[]
+
+include::systemc-port.adoc[]
+
+include::systemc-sensitive.adoc[]
+
+include::systemc-misc.adoc[]
+
+include::systemc-trace.adoc[]
+
+include::systemc-synthesis.adoc[]
+
+include::systemc-datatype.adoc[]
+
+include::systemc-rethink.adoc[]
+
+include::systemc-interface-port-export.adoc[]
+
+include::systemc-tlm-1.adoc[]
+
+include::systemc-tlm-2-intro.adoc[]
+
+include::systemc-tlm-2-simple-socket.adoc[]
+
+include::systemc-tlm-2-other-sockets.adoc[]
+
+include::systemc-tlm-2-misc.adoc[]
+
+appendix::C++ Features
+[appendix]
+include::systemc-cpp-features.adoc[]

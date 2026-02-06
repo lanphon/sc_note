@@ -1,28 +1,50 @@
-# Introduction
+# SystemC Code Review
 
-# CJK Support
+This repository contains SystemC library code review and documentation written in AsciiDoc.
 
-当导出本文档为pdf的时候，可能出现乱码。参考 https://github.com/epsilonant/asciidoctor-pdf-for-chinese
-部分的解决方案，使用如下命令来编译pdf:
+## Building Locally
 
-    asciidoctor-pdf \
--a scripts=cjk \
--d book \
--a pdf-theme=pdf-theme.yml \
--a pdf-fontsdir="fonts;GEM_FONTS_DIR" \
-systemc-code-review.adoc
+### Prerequisites
 
-其中，pdf-theme.yml在本仓库内已经提供，这里仍然需要一个fonts目录来存放 pdf-theme.yml
-中所指定的中文字体。这些字体可以从
-https://github.com/bruinspaw/asciidoctor-pdf-for-chinese/releases/download/0.1.0/themes-and-fonts-0.1.0.zip
-下载之后，解压，并将解压得到的 fonts 目录软链接到本目录来实现中文支持。
+1. Install Ruby
+2. Install bundler: `gem install bundler`
+3. Install Jekyll and dependencies: `bundler install`
 
-# Validation
+### Build
 
-本文档用到了大量的交叉引用。为了避免交叉引用的拼写错误，请使用如下命令行检查：
+To build the site locally:
 
-    asciidoctor -d book -v systemc-code-review.adoc
+```bash
+bundle exec jekyll serve
+```
 
-并根据生成的warning信息，修正文档中的交叉引用拼写错误。
+Then open `http://localhost:4000` in your browser.
 
-此外，根据经验，交叉引用的定义不能连着放在一起，否则asciidoctor会丢失这部分的定义。
+### Build PDF
+
+To build the PDF version (requires CJK font support):
+
+```bash
+./build.sh
+```
+
+Note: This requires the fonts directory with Chinese fonts for proper rendering.
+
+## GitHub Pages
+
+This repository is configured to automatically build and deploy to GitHub Pages. The site will be published to:
+`https://<username>.github.io/<repository>/`
+
+## Content
+
+The documentation covers:
+- SystemC QuickThread and coroutine implementation
+- SystemC kernel scheduling model
+- Events, processes, and primitive channels
+- Port, sensitive, and hierarchy
+- SystemC trace and synthesis
+- TLM 1.0 and TLM 2.0
+
+## License
+
+See LICENSE file for details.
